@@ -1,4 +1,5 @@
-import { Reader, Writer } from "./stream";
+import { BufferCtrlWriter } from "./bufferctrlwriter";
+import { Reader, Writer, KeyValuePair } from "./stream";
 
 // Logger for control message operations
 const logger = {
@@ -39,7 +40,10 @@ export type Subscriber = Subscribe | Unsubscribe | AnnounceOk | AnnounceError;
 
 export function isSubscriber(m: Message): m is Subscriber {
   return (
-    m.kind == Msg.Subscribe || m.kind == Msg.Unsubscribe || m.kind == Msg.AnnounceOk || m.kind == Msg.AnnounceError
+    m.kind === Msg.Subscribe ||
+    m.kind === Msg.Unsubscribe ||
+    m.kind === Msg.AnnounceOk ||
+    m.kind === Msg.AnnounceError
   );
 }
 
@@ -48,11 +52,11 @@ export type Publisher = SubscribeOk | SubscribeError | SubscribeDone | Announce 
 
 export function isPublisher(m: Message): m is Publisher {
   return (
-    m.kind == Msg.SubscribeOk ||
-    m.kind == Msg.SubscribeError ||
-    m.kind == Msg.SubscribeDone ||
-    m.kind == Msg.Announce ||
-    m.kind == Msg.Unannounce
+    m.kind === Msg.SubscribeOk ||
+    m.kind === Msg.SubscribeError ||
+    m.kind === Msg.SubscribeDone ||
+    m.kind === Msg.Announce ||
+    m.kind === Msg.Unannounce
   );
 }
 
@@ -60,6 +64,7 @@ export enum Msg {
   Subscribe = "subscribe",
   SubscribeOk = "subscribe_ok",
   SubscribeError = "subscribe_error",
+  SubscribeUpdate = "subscribe_update",
   SubscribeDone = "subscribe_done",
   Unsubscribe = "unsubscribe",
   Announce = "announce",
@@ -72,6 +77,7 @@ enum Id {
   Subscribe = 0x3,
   SubscribeOk = 0x4,
   SubscribeError = 0x5,
+  SubscribeUpdate = 0x2,
   SubscribeDone = 0xb,
   Unsubscribe = 0xa,
   Announce = 0x6,
@@ -82,91 +88,97 @@ enum Id {
 
 export interface Subscribe {
   kind: Msg.Subscribe;
-  id: bigint;
-  trackId: bigint;
+  requestId: bigint;
+  trackAlias: bigint;
   namespace: string[];
   name: string;
   subscriber_priority: number;
   group_order: GroupOrder;
-  location: Location;
-  params?: Parameters;
+  forward: boolean;
+  filterType: FilterType;
+  startLocation?: Location;
+  endGroup?: bigint;
+  params : KeyValuePair[];
 }
 
 export enum GroupOrder {
-  Publisher = 0x0,
+  Publisher = 0x0, // Original publisher's order should be used
   Ascending = 0x1,
   Descending = 0x2,
 }
 
-export type Location = LatestGroup | LatestObject | AbsoluteStart | AbsoluteRange;
-
-export interface LatestGroup {
-  mode: "latest_group";
+export enum FilterType {
+  None = 0x0,
+  NextGroupStart =0x1,
+  LatestObject = 0x2,
+  AbsoluteStart = 0x3,
+  AbsoluteRange = 0x4,
 }
 
-export interface LatestObject {
-  mode: "latest_object";
+export interface Location {
+  group: bigint;
+  object: bigint;
 }
 
-export interface AbsoluteStart {
-  mode: "absolute_start";
-  start_group: number;
-  start_object: number;
-}
-
-export interface AbsoluteRange {
-  mode: "absolute_range";
-  start_group: number;
-  start_object: number;
-  end_group: number;
-  end_object: number;
-}
-
-export type Parameters = Map<bigint, Uint8Array>;
+export type Parameters = Map<bigint, Uint8Array | bigint>;
 
 export interface SubscribeOk {
   kind: Msg.SubscribeOk;
-  id: bigint;
+  requestId: bigint;
   expires: bigint;
   group_order: GroupOrder;
-  latest?: [number, number];
-  params?: Parameters;
-}
-
-export interface SubscribeDone {
-  kind: Msg.SubscribeDone;
-  id: bigint;
-  code: bigint;
-  reason: string;
-  final?: [number, number];
+  content_exists: boolean;
+  largest?: Location;
+  params: KeyValuePair[];
 }
 
 export interface SubscribeError {
   kind: Msg.SubscribeError;
-  id: bigint;
+  requestId: bigint;
   code: bigint;
   reason: string;
+  trackAlias: bigint;
+}
+
+export interface SubscribeUpdate {
+  kind: Msg.SubscribeUpdate;
+  requestId: bigint;
+  startLocation: Location;
+  endGroup: bigint;
+  subscriberPriority: number;
+  forward: boolean;
+  params: KeyValuePair[];
 }
 
 export interface Unsubscribe {
   kind: Msg.Unsubscribe;
-  id: bigint;
+  requestId: bigint;
+}
+
+export interface SubscribeDone {
+  kind: Msg.SubscribeDone;
+  requestId: bigint;
+  code: bigint;
+  streamCount: number;
+  reason: string;
 }
 
 export interface Announce {
   kind: Msg.Announce;
+  requestId: bigint;
   namespace: string[];
-  params?: Parameters;
+  params: KeyValuePair[];
 }
 
 export interface AnnounceOk {
   kind: Msg.AnnounceOk;
+  requestId: bigint;
   namespace: string[];
 }
 
 export interface AnnounceError {
   kind: Msg.AnnounceError;
-  namespace: string[];
+  requestId: bigint;
   code: bigint;
   reason: string;
 }
@@ -176,7 +188,7 @@ export interface Unannounce {
   namespace: string[];
 }
 
-export class Stream {
+export class CtrlStream {
   private decoder: Decoder;
   private encoder: Encoder;
 
@@ -195,7 +207,7 @@ export class Stream {
     return msg;
   }
 
-  async send(msg: Message) {
+  async send(msg: Message): Promise<void> {
     const unlock = await this.#lock();
     try {
       logger.log("Sending control message:", msg);
@@ -205,20 +217,20 @@ export class Stream {
     }
   }
 
-  async #lock() {
+  async #lock(): Promise<() => void> {
     // Make a new promise that we can resolve later.
     let done: () => void;
     const p = new Promise<void>((resolve) => {
       done = () => resolve();
     });
-
-    // Wait until the previous lock is done, then resolve our our lock.
+  
+    // Wait until the previous lock is done, then resolve our lock.
     const lock = this.#mutex.then(() => done);
-
-    // Save our lock as the next lock.
-    this.#mutex = p;
-
-    // Return the lock.
+    
+    // Update the mutex
+    this.#mutex = lock.then(() => p);
+    
+    // Return the unlock function
     return lock;
   }
 }
@@ -233,18 +245,13 @@ export class Decoder {
   private async msg(): Promise<Msg> {
     logger.log("Reading message type...");
     const t = await this.r.u53();
-    logger.log(`Raw message type: ${t}`);
+    logger.log(`Raw message type: 0x${t.toString(16)}`);
 
-    const advertisedLength = await this.r.u53();
-    logger.log(`Advertised message length: ${advertisedLength}, actual length: ${this.r.getByteLength()}`);
+    // Read the 16-bit MSB length field
+    const lengthBytes = await this.r.read(2);
+    const messageLength = (lengthBytes[0] << 8) | lengthBytes[1]; // MSB format
+    logger.log(`Message length (16-bit MSB): ${messageLength} bytes, actual length: ${this.r.getByteLength()}`);
     
-    if (advertisedLength !== this.r.getByteLength()) {
-      const errorMsg = `Message length mismatch: advertised ${advertisedLength} != ${this.r.getByteLength()} received`;
-      logger.error(errorMsg);
-      // "If the length does not match the length of the message content, the receiver MUST close the session."
-      throw new Error(errorMsg);
-    }
-
     let msgType: Msg;
     switch (t as Id) {
       case Id.Subscribe:
@@ -275,12 +282,12 @@ export class Decoder {
         msgType = Msg.Unannounce;
         break;
       default:
-        const errorMsg = `Unknown message type: ${t}`;
+        const errorMsg = `Unknown message type: 0x${t.toString(16)}`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
     }
-    
-    logger.log(`Parsed message type: ${msgType}`);
+
+    logger.log(`Parsed message type: ${msgType} (0x${t.toString(16)})`);
     return msgType;
   }
 
@@ -318,7 +325,7 @@ export class Decoder {
         result = await this.unannounce();
         break;
       default:
-        const errorMsg = `Unsupported message type: ${t}`;
+        const errorMsg = `Unsupported message type: ${(t as any).kind}`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
     }
@@ -329,11 +336,11 @@ export class Decoder {
 
   private async subscribe(): Promise<Subscribe> {
     logger.log("Parsing Subscribe message...");
-    const id = await this.r.u62();
-    logger.log(`Subscribe ID: ${id}`);
+    const requestId = await this.r.u62();
+    logger.log(`RequestID: ${requestId}`);
     
-    const trackId = await this.r.u62();
-    logger.log(`Track ID: ${trackId}`);
+    const trackAlias = await this.r.u62();
+    logger.log(`TrackAlias: ${trackAlias}`);
     
     const namespace = await this.r.tuple();
     logger.log(`Namespace: ${namespace.join('/')}`);
@@ -346,22 +353,40 @@ export class Decoder {
     
     const group_order = await this.decodeGroupOrder();
     logger.log(`Group order: ${group_order}`);
+
+    const forward = await this.r.u8Bool();
+    logger.log(`Forward: ${forward}`);
+
+    const filterType = await this.r.u8();
+    logger.log(`Filter type: ${filterType}`);
     
-    const location = await this.location();
-    logger.log(`Location: ${JSON.stringify(location)}`);
-    
-    const params = await this.parameters();
-    logger.log(`Parameters: ${params ? `${params.size} parameters` : 'none'}`);
+    let startLocation: Location | undefined;
+    if (filterType === FilterType.AbsoluteStart || filterType === FilterType.AbsoluteRange) {
+      startLocation = await this.location();
+      logger.log(`Start Location: ${JSON.stringify(startLocation)}`);
+    }
+
+    let endGroup: bigint | undefined;
+    if (filterType === FilterType.AbsoluteRange) {
+      endGroup = await this.r.u62();
+      logger.log(`End group: ${endGroup}`);
+    }
+
+    const params = await this.r.keyValuePairs();
+    logger.log(`Parameters: ${params.length}`);
     
     return {
       kind: Msg.Subscribe,
-      id,
-      trackId,
+      requestId,
+      trackAlias,
       namespace,
       name,
       subscriber_priority,
       group_order,
-      location,
+      forward,
+      filterType,
+      startLocation,
+      endGroup,
       params,
     };
   }
@@ -385,130 +410,82 @@ export class Decoder {
   }
 
   private async location(): Promise<Location> {
-    const mode = await this.r.u62();
-    logger.log(`Location mode: ${mode}`);
-    
-    if (mode == 1n) {
-      return {
-        mode: "latest_group",
-      };
-    } else if (mode == 2n) {
-      return {
-        mode: "latest_object",
-      };
-    } else if (mode == 3n) {
-      const start_group = await this.r.u53();
-      const start_object = await this.r.u53();
-      logger.log(`Absolute start location: group ${start_group}, object ${start_object}`);
-      
-      return {
-        mode: "absolute_start",
-        start_group,
-        start_object,
-      };
-    } else if (mode == 4n) {
-      const start_group = await this.r.u53();
-      const start_object = await this.r.u53();
-      const end_group = await this.r.u53();
-      const end_object = await this.r.u53();
-      logger.log(`Absolute range location: from group ${start_group}, object ${start_object} to group ${end_group}, object ${end_object}`);
-      
-      return {
-        mode: "absolute_range",
-        start_group,
-        start_object,
-        end_group,
-        end_object,
-      };
-    } else {
-      const errorMsg = `Invalid location mode: ${mode}`;
-      logger.error(errorMsg);
-      throw new Error(errorMsg);
-    }
+    return {
+      group: await this.r.u62(),
+      object: await this.r.u62(),
+    };
   }
 
-  private async parameters(): Promise<Parameters | undefined> {
-    const count = await this.r.u53();
-    logger.log(`Parameter count: ${count}`);
-    
-    if (count == 0) return undefined;
-
-    const params = new Map<bigint, Uint8Array>();
-
-    for (let i = 0; i < count; i++) {
-      const id = await this.r.u62();
-      const size = await this.r.u53();
-      const value = await this.r.read(size);
-      logger.log(`Parameter ${i+1}/${count}: ID ${id}, size ${size} bytes`);
-
-      if (params.has(id)) {
-        const errorMsg = `Duplicate parameter ID: ${id}`;
-        logger.error(errorMsg);
-        throw new Error(errorMsg);
+  private async parameters(numParams: number): Promise<KeyValuePair[]> {
+    const params: KeyValuePair[] = [];
+    for (let i = 0; i < numParams; i++) {
+      const key = await this.r.u62();
+      const isEven = (key % 2n) === 0n;
+      if (isEven) {
+        const value = await this.r.u62();
+        params.push({ 'type': key, 'value': value });
+      } else {
+        const length = await this.r.u53();  
+        const value = await this.r.read(length);
+        params.push({ 'type': key, 'value': value });
       }
-
-      params.set(id, value);
     }
-
     return params;
+  }
+  
+  private formatBytes(bytes: Uint8Array): string {
+    if (bytes.length <= 16) {
+      return Array.from(bytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join(' ');
+    } else {
+      const start = Array.from(bytes.slice(0, 8))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join(' ');
+      const end = Array.from(bytes.slice(-8))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join(' ');
+      return `${start} ... ${end} (${bytes.length} bytes total)`;
+    }
   }
 
   private async subscribe_ok(): Promise<SubscribeOk> {
     logger.log("Parsing SubscribeOk message...");
-    const id = await this.r.u62();
-    logger.log(`Subscribe ID: ${id}`);
+    const requestId = await this.r.u62();
+    logger.log(`Request ID: ${requestId}`);
     
     const expires = await this.r.u62();
     logger.log(`Expires: ${expires}`);
     
     const group_order = await this.decodeGroupOrder();
     logger.log(`Group order: ${group_order}`);
-    
-    // Check if we have latest group/object info
-    let latest: [number, number] | undefined;
-    if (this.r.getByteLength() > 0) {
-      const group = await this.r.u53();
-      const object = await this.r.u53();
-      latest = [group, object];
-      logger.log(`Latest: group ${group}, object ${object}`);
+
+    const content_exists = await this.r.u8Bool();
+    logger.log(`Content exists: ${content_exists}`);
+
+    let largest: Location | undefined;
+    if (content_exists) {
+      largest = await this.location();
+      logger.log(`Largest: group ${largest.group}, object ${largest.object}`);
     }
     
-    const params = await this.parameters();
-    logger.log(`Parameters: ${params ? `${params.size} parameters` : 'none'}`);
+    const params = await this.r.keyValuePairs();
     
     return {
       kind: Msg.SubscribeOk,
-      id,
+      requestId,
       expires,
       group_order,
-      latest,
+      content_exists,
+      largest,
       params,
     };
   }
 
   private async subscribe_error(): Promise<SubscribeError> {
     logger.log("Parsing SubscribeError message...");
-    const id = await this.r.u62();
-    logger.log(`Subscribe ID: ${id}`);
-    
-    const code = await this.r.u62();
-    logger.log(`Error code: ${code}`);
-    
-    const reason = await this.r.string();
-    logger.log(`Error reason: ${reason}`);
-    
-    return {
-      kind: Msg.SubscribeError,
-      id,
-      code,
-      reason,
-    };
-  }
-
-  private async subscribe_done(): Promise<SubscribeDone> {
-    logger.log("Parsing SubscribeDone message...");
-    const id = await this.r.u62();
-    logger.log(`Subscribe ID: ${id}`);
+    const requestId = await this.r.u62();
+    logger.log(`Subscribe ID: ${requestId}`);
     
     const code = await this.r.u62();
     logger.log(`Code: ${code}`);
@@ -516,45 +493,67 @@ export class Decoder {
     const reason = await this.r.string();
     logger.log(`Reason: ${reason}`);
     
-    // Check if we have final group/object info
-    let final: [number, number] | undefined;
-    if (this.r.getByteLength() > 0) {
-      const group = await this.r.u53();
-      const object = await this.r.u53();
-      final = [group, object];
-      logger.log(`Final: group ${group}, object ${object}`);
-    }
+    const trackAlias = await this.r.u62();
+    logger.log(`Track Alias: ${trackAlias}`);
+    
+    return {
+      kind: Msg.SubscribeError,
+      requestId,
+      code,
+      reason,
+      trackAlias,
+    };
+  }
+
+  private async subscribe_done(): Promise<SubscribeDone> {
+    logger.log("Parsing SubscribeDone message...");
+    const requestId = await this.r.u62();
+    logger.log(`Subscribe ID: ${requestId}`);
+    
+    const code = await this.r.u62();
+    logger.log(`Code: ${code}`);
+    
+    const reason = await this.r.string();
+    logger.log(`Reason: ${reason}`);
+    
+    // Read the stream count
+    const streamCount = await this.r.u53();
+    logger.log(`Stream count: ${streamCount}`);
     
     return {
       kind: Msg.SubscribeDone,
-      id,
+      requestId,
       code,
-      reason,
-      final,
+      streamCount,
+      reason
     };
   }
 
   private async unsubscribe(): Promise<Unsubscribe> {
     logger.log("Parsing Unsubscribe message...");
-    const id = await this.r.u62();
-    logger.log(`Subscribe ID: ${id}`);
+    const requestId = await this.r.u62();
+    logger.log(`Subscribe ID: ${requestId}`);
     
     return {
       kind: Msg.Unsubscribe,
-      id,
+      requestId,
     };
   }
 
   private async announce(): Promise<Announce> {
     logger.log("Parsing Announce message...");
+    const requestId = await this.r.u62();
+    logger.log(`Request ID: ${requestId}`);
+    
     const namespace = await this.r.tuple();
     logger.log(`Namespace: ${namespace.join('/')}`);
     
-    const params = await this.parameters();
-    logger.log(`Parameters: ${params ? `${params.size} parameters` : 'none'}`);
+    const params = await this.r.keyValuePairs();
+    logger.log(`Parameters: ${params.length}`);
     
     return {
       kind: Msg.Announce,
+      requestId,
       namespace,
       params,
     };
@@ -562,19 +561,23 @@ export class Decoder {
 
   private async announce_ok(): Promise<AnnounceOk> {
     logger.log("Parsing AnnounceOk message...");
+    const requestId = await this.r.u62();
+    logger.log(`Request ID: ${requestId}`);
+    
     const namespace = await this.r.tuple();
     logger.log(`Namespace: ${namespace.join('/')}`);
     
     return {
       kind: Msg.AnnounceOk,
+      requestId,
       namespace,
     };
   }
 
   private async announce_error(): Promise<AnnounceError> {
     logger.log("Parsing AnnounceError message...");
-    const namespace = await this.r.tuple();
-    logger.log(`Namespace: ${namespace.join('/')}`);
+    const requestId = await this.r.u62();
+    logger.log(`Request ID: ${requestId}`);
     
     const code = await this.r.u62();
     logger.log(`Error code: ${code}`);
@@ -584,7 +587,7 @@ export class Decoder {
     
     return {
       kind: Msg.AnnounceError,
-      namespace,
+      requestId,
       code,
       reason,
     };
@@ -608,91 +611,56 @@ export class Encoder {
   constructor(w: Writer) {
     this.w = w;
   }
-
-  async message(msg: Message) {
+  
+  
+  async message(msg: Message): Promise<void> {
     logger.log(`Encoding message of type: ${msg.kind}`);
     
+    // Create a BufferCtrlWriter to marshal the message
+    const writer = new BufferCtrlWriter();
+    
+    // Marshal the message based on its type
     switch (msg.kind) {
       case Msg.Subscribe:
-        await this.subscribe(msg);
+        writer.marshalSubscribe(msg as Subscribe);
         break;
       case Msg.SubscribeOk:
-        await this.subscribe_ok(msg);
+        writer.marshalSubscribeOk(msg as SubscribeOk);
         break;
       case Msg.SubscribeError:
-        await this.subscribe_error(msg);
+        writer.marshalSubscribeError(msg as SubscribeError);
         break;
       case Msg.SubscribeDone:
-        await this.subscribe_done(msg);
+        writer.marshalSubscribeDone(msg as SubscribeDone);
         break;
       case Msg.Unsubscribe:
-        await this.unsubscribe(msg);
+        writer.marshalUnsubscribe(msg as Unsubscribe);
         break;
       case Msg.Announce:
-        await this.announce(msg);
+        writer.marshalAnnounce(msg as Announce);
         break;
       case Msg.AnnounceOk:
-        await this.announce_ok(msg);
+        writer.marshalAnnounceOk(msg as AnnounceOk);
         break;
       case Msg.AnnounceError:
-        await this.announce_error(msg);
+        writer.marshalAnnounceError(msg as AnnounceError);
         break;
       case Msg.Unannounce:
-        await this.unannounce(msg);
+        writer.marshalUnannounce(msg as Unannounce);
         break;
       default:
         const errorMsg = `Unsupported message type for encoding: ${(msg as any).kind}`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
     }
+    
+    // Get the marshaled bytes and write them to the output stream
+    const bytes = writer.getBytes();
+    logger.log(`Marshaled ${bytes.length} bytes for message type: ${msg.kind}`);
+    
+    // Write the bytes directly to the output stream
+    await this.w.write(bytes);
   }
 
-  // Implementation of encoding methods would go here
-  // For brevity, I'm not including all the encoding methods
-  // since they're not immediately needed for the logging task
-
-  private async subscribe(msg: Subscribe) {
-    logger.log("Not implemented: encoding Subscribe message");
-    throw new Error("Not implemented: encoding Subscribe message");
-  }
-
-  private async subscribe_ok(msg: SubscribeOk) {
-    logger.log("Not implemented: encoding SubscribeOk message");
-    throw new Error("Not implemented: encoding SubscribeOk message");
-  }
-
-  private async subscribe_error(msg: SubscribeError) {
-    logger.log("Not implemented: encoding SubscribeError message");
-    throw new Error("Not implemented: encoding SubscribeError message");
-  }
-
-  private async subscribe_done(msg: SubscribeDone) {
-    logger.log("Not implemented: encoding SubscribeDone message");
-    throw new Error("Not implemented: encoding SubscribeDone message");
-  }
-
-  private async unsubscribe(msg: Unsubscribe) {
-    logger.log("Not implemented: encoding Unsubscribe message");
-    throw new Error("Not implemented: encoding Unsubscribe message");
-  }
-
-  private async announce(msg: Announce) {
-    logger.log("Not implemented: encoding Announce message");
-    throw new Error("Not implemented: encoding Announce message");
-  }
-
-  private async announce_ok(msg: AnnounceOk) {
-    logger.log("Not implemented: encoding AnnounceOk message");
-    throw new Error("Not implemented: encoding AnnounceOk message");
-  }
-
-  private async announce_error(msg: AnnounceError) {
-    logger.log("Not implemented: encoding AnnounceError message");
-    throw new Error("Not implemented: encoding AnnounceError message");
-  }
-
-  private async unannounce(msg: Unannounce) {
-    logger.log("Not implemented: encoding Unannounce message");
-    throw new Error("Not implemented: encoding Unannounce message");
-  }
+  // All encoding is now handled by the BufferCtrlWriter class
 }

@@ -1,4 +1,5 @@
-import { Reader, Writer } from "./stream";
+import { BufferCtrlWriter } from "./bufferctrlwriter";
+import { KeyValuePair, Reader, Writer } from "./stream";
 
 // Custom console logger for browser environment
 const logger = {
@@ -35,12 +36,12 @@ const logger = {
 export type Message = Client | Server;
 
 export enum Version {
-  DRAFT_08 = 0xff000008,
+  DRAFT_11 = 0xff00000b,
 }
 
 enum SetupType {
-  Client = 0x40,
-  Server = 0x41,
+  Client = 0x20,
+  Server = 0x21,
 }
 
 export interface Client {
@@ -63,7 +64,7 @@ export class Stream {
   }
 }
 
-export type Parameters = Map<bigint, Uint8Array>;
+export type Parameters = KeyValuePair[];
 
 export class Decoder {
   r: Reader;
@@ -76,14 +77,18 @@ export class Decoder {
     logger.log("Decoding client setup message...");
     
     const type: SetupType = await this.r.u53();
-    logger.log(`Setup message type: ${type} (expected ${SetupType.Client})`);
+    logger.log(`Setup message type: 0x${type.toString(16)} (expected 0x${SetupType.Client.toString(16)})`);
     
     if (type !== SetupType.Client) {
       const errorMsg = `Client SETUP type must be ${SetupType.Client}, got ${type}`;
       logger.error(errorMsg);
       throw new Error(errorMsg);
     }
-
+    // Read the 16-bit MSB length field
+    const lengthBytes = await this.r.read(2);
+    const messageLength = (lengthBytes[0] << 8) | lengthBytes[1]; // MSB format
+    logger.log(`Message length (16-bit MSB): ${messageLength} bytes`);
+    
     const count = await this.r.u53();
     logger.log(`Number of supported versions: ${count}`);
 
@@ -95,7 +100,18 @@ export class Decoder {
     }
 
     const params = await this.parameters();
-    logger.log(`Parameters: ${params ? `${params.size} parameters` : 'none'}`);
+    logger.log(`Parameters: ${params ? `${params.length} parameters` : 'none'}`);
+
+    // Log each parameter in detail
+    if (params && params.length > 0) {
+      params.forEach(param => {
+        if (typeof param.value === 'bigint') {
+          logger.log(`Parameter ID: ${param.type}, value: ${param.value} (bigint)`);
+        } else {
+          logger.log(`Parameter ID: ${param.type}, length: ${param.value.byteLength} bytes, value: ${this.formatBytes(param.value)}`);
+        }
+      });
+    }
 
     const result = {
       versions,
@@ -110,7 +126,7 @@ export class Decoder {
     logger.log("Decoding server setup message...");
     
     const type: SetupType = await this.r.u53();
-    logger.log(`Setup message type: ${type} (expected ${SetupType.Server})`);
+    logger.log(`Setup message type: 0x${type.toString(16)} (expected 0x${SetupType.Server.toString(16)})`);
     
     if (type !== SetupType.Server) {
       const errorMsg = `Server SETUP type must be ${SetupType.Server}, got ${type}`;
@@ -118,27 +134,39 @@ export class Decoder {
       throw new Error(errorMsg);
     }
 
-    const advertisedLength = await this.r.u53();
-    const actualLength = this.r.getByteLength();
-    logger.log(`Advertised message length: ${advertisedLength}, actual length: ${actualLength}`);
+    // Read the 16-bit MSB length field
+    const lengthBytes = await this.r.read(2);
+    const messageLength = (lengthBytes[0] << 8) | lengthBytes[1]; // MSB format
+    logger.log(`Message length (16-bit MSB): ${messageLength} bytes`);
     
-    if (advertisedLength !== actualLength) {
-      const errorMsg = `Server SETUP message length mismatch: ${advertisedLength} != ${actualLength}`;
-      logger.error(errorMsg);
-      throw new Error(errorMsg);
-    }
+    // Store the current position to validate length later
+    const startPosition = this.r.getByteLength();
 
     const version = await this.r.u53();
     logger.log(`Server selected version: 0x${version.toString(16)}`);
     
     const params = await this.parameters();
-    logger.log(`Parameters: ${params ? `${params.size} parameters` : 'none'}`);
+    logger.log(`Parameters: ${params ? `${params.length} parameters` : 'none'}`);
     
     // Log each parameter in detail
-    if (params && params.size > 0) {
-      params.forEach((value, key) => {
-        logger.log(`Parameter ID: ${key}, length: ${value.length} bytes, value: ${this.formatBytes(value)}`);
+    if (params && params.length > 0) {
+      params.forEach(param => {
+        if (typeof param.value === 'bigint') {
+          logger.log(`Parameter ID: ${param.type}, value: ${param.value} (bigint)`);
+        } else {
+          logger.log(`Parameter ID: ${param.type}, length: ${param.value.byteLength} bytes, value: ${this.formatBytes(param.value)}`);
+        }
       });
+    }
+
+    // Validate that we read the expected number of bytes
+    const endPosition = this.r.getByteLength();
+    const bytesRead = startPosition - endPosition;
+    
+    if (bytesRead !== messageLength) {
+      const warningMsg = `Message length mismatch: expected ${messageLength} bytes, read ${bytesRead} bytes`;
+      logger.warn(warningMsg);
+      // Not throwing an error here as we've already read the data
     }
 
     const result = {
@@ -167,27 +195,65 @@ export class Decoder {
   }
 
   private async parameters(): Promise<Parameters | undefined> {
-    const count = await this.r.u53();
-    logger.log(`Parameter count: ${count}`);
+    const countResult = await this.r.u53WithSize();
+    const count = countResult.value;
     
-    if (count == 0) return undefined;
+    logger.log(`Parameter count: ${count}, count field: ${countResult.bytesRead} bytes`);
+    
+    if (count === 0) {
+      return undefined;
+    }
 
-    const params = new Map<bigint, Uint8Array>();
+    const params: Parameters = [];
 
     for (let i = 0; i < count; i++) {
-      const id = await this.r.u62();
-      const size = await this.r.u53();
-      logger.log(`Parameter ${i+1}/${count}: ID ${id}, size ${size} bytes`);
+      // Read parameter type (key)
+      const typeResult = await this.r.u62WithSize();
+      const paramType = typeResult.value;
       
-      const value = await this.r.read(size);
-
-      if (params.has(id)) {
-        const errorMsg = `Duplicate parameter ID: ${id}`;
-        logger.error(errorMsg);
-        throw new Error(errorMsg);
+      // Check if the type is even or odd
+      const isEven = (paramType % 2n) === 0n;
+      
+      if (isEven) {
+        // Even type: value is a single varint
+        const valueResult = await this.r.u62WithSize();
+        const value = valueResult.value;
+        logger.log(`Parameter ${i+1}/${count}: Type ${paramType} (even), Value: ${value} (${valueResult.bytesRead} bytes)`);
+        
+        // Check for duplicates
+        const existingIndex = params.findIndex(p => p.type === paramType);
+        if (existingIndex !== -1) {
+          logger.warn(`Duplicate parameter type: ${paramType}, overwriting previous value`);
+          params.splice(existingIndex, 1);
+        }
+        
+        params.push({ type: paramType, value });
+      } else {
+        // Odd type: value is a byte sequence with length
+        const lengthResult = await this.r.u53WithSize();
+        const length = lengthResult.value;
+        
+        // Check maximum length (2^16-1)
+        if (length > 65535) {
+          const errorMsg = `Parameter value length exceeds maximum: ${length} > 65535`;
+          logger.error(errorMsg);
+          throw new Error(errorMsg);
+        }
+        
+        // Read the value bytes
+        const value = await this.r.read(length);
+        // At this point, value should always be a Uint8Array
+        logger.log(`Parameter ${i+1}/${count}: Type ${paramType} (odd), Length: ${length}, Value: ${this.formatBytes(value)}`);
+        
+        // Check for duplicates
+        const existingIndex = params.findIndex(p => p.type === paramType);
+        if (existingIndex !== -1) {
+          logger.warn(`Duplicate parameter type: ${paramType}, overwriting previous value`);
+          params.splice(existingIndex, 1);
+        }
+        
+        params.push({ type: paramType, value });
       }
-
-      params.set(id, value);
     }
 
     return params;
@@ -201,59 +267,46 @@ export class Encoder {
     this.w = w;
   }
 
-  async client(c: Client) {
+  async client(c: Client): Promise<void> {
     logger.log("Encoding client setup message:", c);
     
-    let len = 0;
-    const msg: Uint8Array[] = [];
-
-    const { versionBytes, versionPayload } = this.buildVersions(c.versions);
-    len += versionBytes;
-    msg.push(...versionPayload);
-    logger.log(`Added ${c.versions.length} versions, ${versionBytes} bytes`);
-
-    // Note: We're not adding role parameter as per requirements
-    const params = c.params ?? new Map();
-    const { paramData, totalBytes } = this.buildParameters(params);
-    len += totalBytes;
-    msg.push(...paramData);
-    logger.log(`Added ${params.size} parameters, ${totalBytes} bytes`);
-
-    const messageType = this.w.setVint53(new Uint8Array(8), SetupType.Client);
-    const messageLength = this.w.setVint53(new Uint8Array(8), len);
-    logger.log(`Total message length: ${len} bytes`);
-
-    for (const elem of [messageType, messageLength, ...msg]) {
-      await this.w.write(elem);
-    }
+    // Create a BufferCtrlWriter instance
+    const writer = new BufferCtrlWriter();
+    
+    // Marshal the client setup message
+    writer.marshalClientSetup({
+      versions: c.versions,
+      params: c.params
+    });
+    
+    // Get the bytes from the writer
+    const bytes = writer.getBytes();
+    logger.log(`Client setup message created: ${bytes.length} bytes`);
+    
+    // Write the entire message in a single operation
+    await this.w.write(bytes);
     
     logger.log("Client setup message sent successfully");
   }
 
-  async server(s: Server) {
+  async server(s: Server): Promise<void> {
     logger.log("Encoding server setup message:", s);
     
-    let len = 0;
-    const msg: Uint8Array[] = [];
-
-    const version = this.w.setVint53(new Uint8Array(8), s.version);
-    len += version.length;
-    msg.push(version);
-    logger.log(`Added version: 0x${s.version.toString(16)}, ${version.length} bytes`);
-
-    const params = s.params ?? new Map();
-    const { paramData, totalBytes } = this.buildParameters(params);
-    len += totalBytes;
-    msg.push(...paramData);
-    logger.log(`Added ${params.size} parameters, ${totalBytes} bytes`);
-
-    const messageType = this.w.setVint53(new Uint8Array(8), SetupType.Server);
-    const messageLength = this.w.setVint53(new Uint8Array(8), len);
-    logger.log(`Total message length: ${len} bytes`);
-
-    for (const elem of [messageType, messageLength, ...msg]) {
-      await this.w.write(elem);
-    }
+    // Create a BufferCtrlWriter instance
+    const writer = new BufferCtrlWriter();
+    
+    // Marshal the server setup message
+    writer.marshalServerSetup({
+      version: s.version,
+      params: s.params
+    });
+    
+    // Get the bytes from the writer
+    const bytes = writer.getBytes();
+    logger.log(`Server setup message created: ${bytes.length} bytes`);
+    
+    // Write the entire message in a single operation
+    await this.w.write(bytes);
     
     logger.log("Server setup message sent successfully");
   }
@@ -276,24 +329,96 @@ export class Encoder {
     return { versionBytes, versionPayload };
   }
 
-  private buildParameters(p: Parameters | undefined): { paramData: Uint8Array[]; totalBytes: number } {
-    if (!p) {
-      const paramCount = this.w.setUint8(new Uint8Array(8), 0);
-      logger.log("No parameters to encode");
-      return { paramData: [paramCount], totalBytes: 1 };
+  private async buildParameters(params?: Parameters): Promise<Uint8Array> {
+    // Create a temporary stream to collect the bytes
+    const chunks: Uint8Array[] = [];
+    const tempStream = new WritableStream<Uint8Array>({
+      write(chunk) {
+        chunks.push(chunk);
+      }
+    });
+    
+    const w = new Writer(tempStream);
+    
+    if (!params || params.length === 0) {
+      await w.u53(0);
+      logger.log("No parameters to encode, setting parameter count to 0");
+      // Release the writer and combine the chunks
+      w.release();
+      return this.combineChunks(chunks);
+    }
+
+    await w.u53(params.length);
+    logger.log(`Parameter count: ${params.length}`);
+
+    for (const param of params) {
+      // Write parameter type (key)
+      await w.u62(param.type);
+      
+      // Check if the type is even or odd
+      const isEven = (param.type % 2n) === 0n;
+      
+      if (isEven) {
+        // Even type: value is a single varint
+        if (typeof param.value !== 'bigint') {
+          throw new Error(`Even parameter type ${param.type} requires a bigint value`);
+        }
+        await w.u62(param.value);
+        logger.log(`Encoded parameter: Type ${param.type} (even), Value: ${param.value}`);
+      } else {
+        // Odd type: value is a byte sequence with length
+        if (!(param.value instanceof Uint8Array)) {
+          throw new Error(`Odd parameter type ${param.type} requires a Uint8Array value`);
+        }
+        
+        // Check maximum length (2^16-1)
+        if (param.value.byteLength > 65535) {
+          throw new Error(`Parameter value length exceeds maximum: ${param.value.byteLength} > 65535`);
+        }
+        
+        // Write length and value
+        await w.u53(param.value.byteLength);
+        await w.write(param.value);
+        logger.log(`Encoded parameter: Type ${param.type} (odd), Length: ${param.value.byteLength}, Value: ${this.formatBytes(param.value)}`);
+      }
+    }
+
+    // Release the writer and combine the chunks
+    w.release();
+    return this.combineChunks(chunks);
+  }
+  
+  private combineChunks(chunks: Uint8Array[]): Uint8Array {
+    // Calculate total length
+    let totalLength = 0;
+    for (const chunk of chunks) {
+      totalLength += chunk.length;
     }
     
-    const paramBytes = [this.w.setVint53(new Uint8Array(8), p.size)];
-    let totalBytes = paramBytes[0].length;
-    logger.log(`Parameter count: ${p.size}, ${paramBytes[0].length} bytes`);
-
-    for (const [id, value] of p) {
-      const idBytes = this.w.setVint62(new Uint8Array(8), id);
-      const sizeBytes = this.w.setVint53(new Uint8Array(8), value.length);
-      paramBytes.push(idBytes, sizeBytes, value);
-      totalBytes += idBytes.length + sizeBytes.length + value.length;
-      logger.log(`Parameter ID: ${id}, size: ${value.length} bytes, total: ${idBytes.length + sizeBytes.length + value.length} bytes`);
+    // Combine all chunks into a single Uint8Array
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
     }
-    return { paramData: paramBytes, totalBytes };
+    
+    return result;
+  }
+
+  private formatBytes(bytes: Uint8Array): string {
+    if (bytes.length <= 16) {
+      return Array.from(bytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join(' ');
+    } else {
+      const start = Array.from(bytes.slice(0, 8))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join(' ');
+      const end = Array.from(bytes.slice(-8))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join(' ');
+      return `${start} ... ${end} (${bytes.length} bytes total)`;
+    }
   }
 }

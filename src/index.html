@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MoQ Player 2</title>
+  <title>Warp Player</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
@@ -74,6 +74,51 @@
     .log-entry.error {
       color: #f44336;
     }
+    
+    /* Styles for announcements */
+    .announcements-container {
+      margin-top: 20px;
+      border: 1px solid #2196F3;
+      border-radius: 4px;
+      padding: 10px;
+      max-height: 200px;
+      overflow-y: auto;
+      background-color: #e3f2fd;
+    }
+    
+    .announcement {
+      margin: 5px 0;
+      padding: 12px;
+      border: 1px solid #bbdefb;
+      background-color: #ffffff;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    
+    .announcement-container {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    
+    .announcement-title {
+      margin: 0;
+      font-weight: bold;
+      color: #0066cc;
+      font-size: 14px;
+    }
+    
+    .announcement-namespace {
+      margin: 0;
+      padding: 4px 8px;
+      background-color: #f1f8e9;
+      border-left: 4px solid #4CAF50;
+      font-family: monospace;
+      font-size: 14px;
+      word-break: break-all;
+      flex-grow: 1;
+    }
     .status {
       margin-top: 10px;
       padding: 10px;
@@ -87,11 +132,167 @@
       background-color: #f2dede;
       color: #a94442;
     }
+    
+    /* Styles for tracks display */
+    .tracks-section {
+      margin-top: 20px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 15px;
+      background-color: #f9f9f9;
+    }
+    
+    .tracks-section h3 {
+      margin-top: 0;
+      color: #333;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+    }
+    
+    /* Styles for select dropdown */
+    .selector-container {
+      display: flex;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    
+    .selector-container label {
+      margin-right: 10px;
+      margin-bottom: 0;
+      font-weight: bold;
+      min-width: 120px;
+    }
+    
+    .track-select {
+      flex-grow: 1;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background-color: white;
+      font-size: 14px;
+      max-width: 400px;
+    }
+    
+    .track-select:focus {
+      outline: none;
+      border-color: #2196F3;
+      box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+    }
+    
+    /* Track details container */
+    .track-details-container {
+      padding: 10px;
+      margin-bottom: 15px;
+      background-color: #f5f5f5;
+      border-radius: 4px;
+      border-left: 3px solid #2196F3;
+      font-size: 14px;
+      color: #666;
+      max-width: 530px;
+    }
+    
+    /* Legacy styles for backward compatibility */
+    .tracks-list {
+      display: none; /* Hide the old radio buttons list */
+    }
+    
+    .track-item {
+      padding: 10px;
+      margin-bottom: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background-color: white;
+      position: relative;
+      transition: all 0.3s ease;
+    }
+    
+    .radio-container {
+      display: flex;
+      align-items: center;
+      margin-bottom: 5px;
+    }
+    
+    .radio-container input[type="radio"] {
+      margin-right: 8px;
+    }
+    
+    .radio-container label {
+      font-weight: bold;
+      color: #2196F3;
+      cursor: pointer;
+    }
+    
+    /* Hide track details by default */
+    .track-details {
+      font-size: 14px;
+      color: #666;
+      padding: 8px;
+      margin-top: 8px;
+      background-color: #f5f5f5;
+      border-radius: 4px;
+      display: none;
+      border-left: 3px solid #2196F3;
+    }
+    
+    /* Start button styles */
+    .start-btn {
+      display: block;
+      margin: 20px auto 0;
+      padding: 10px 30px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    
+    .start-btn:hover {
+      background-color: #45a049;
+    }
+    
+    .start-btn:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+
+    /* Video player styles */
+    #videoPlayer {
+      display: block;
+      width: 100%;
+      max-width: 720px;
+      height: 400px;
+      margin: 30px auto 20px auto;
+      background: #222;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      outline: none;
+    }
   </style>
 </head>
 <body>
-  <h1>MoQ Player 2</h1>
-  
+  <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin: 20px 0;">
+    <img src="eyevinn-technology-250px.png" alt="Eyevinn Technology" style="width: 150px; height: auto;">
+    <div>
+      <h1 style="margin-top: 0;">WARP Player</h1>
+      <p style="color: #666; margin-top: 5px; margin-bottom: 0;">
+        A Media Player for WARP content over MoQ protocol with MSE playback
+      </p>
+    </div>
+  </div>
+  <video id="videoPlayer" controls muted></video>
+
+  <div style="display: flex; justify-content: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
+    <button id="startBtn" class="start-btn">Start</button>
+    <button id="stopBtn" class="start-btn" style="background-color: #f44336;">Stop</button>
+    <div style="display: flex; align-items: center; margin-left: 20px;">
+      <label for="bufferDuration" style="margin-right: 8px; font-size: 14px;">Target Buffer (ms):</label>
+      <input type="number" id="bufferDuration" min="0" max="5000" step="50" value="200" style="width: 70px; padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+    </div>
+  </div>
+
   <div class="container">
     <div class="form-group">
       <label for="serverUrl">MoQ Server URL:</label>
@@ -101,14 +302,14 @@
     <div class="form-group">
       <button id="connectBtn">Connect</button>
       <button id="disconnectBtn" disabled>Disconnect</button>
-    </div>
+    </div> <!-- Start/Stop buttons moved above video -->
     
     <div id="status" class="status disconnected">
       Status: Disconnected
     </div>
     
-    <h3>Log</h3>
-    <div id="log" class="log-container"></div>
+    <h3>Available Tracks</h3>
+    <div id="tracks-container"></div>    
   </div>
 </body>
 </html>

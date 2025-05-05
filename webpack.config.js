@@ -1,5 +1,6 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   mode: 'development',
@@ -11,6 +12,10 @@ module.exports = {
         test: /\.tsx?$/,
         use: 'ts-loader',
         exclude: /node_modules/,
+      },
+      {
+        test: /\.(png|jpg|gif|svg)$/i,
+        type: 'asset/resource',
       },
     ],
   },
@@ -27,7 +32,12 @@ module.exports = {
   plugins: [
     new HtmlWebpackPlugin({
       template: './src/index.html',
-      title: 'MoQ Player 2',
+      title: 'WARP Player',
+    }),
+    new CopyWebpackPlugin({
+      patterns: [
+        { from: 'src/eyevinn-technology-250px.png', to: 'eyevinn-technology-250px.png' }
+      ],
     }),
   ],
   devServer: {

@@ -1,15 +1,21 @@
-import { Client } from './transport/client';
+/**
+ * Warp Player - Browser Entry Point
+ * 
+ * Handles the browser UI interactions and connects to the Player component
+ * for MoQ/WARP streaming and MSE playback.
+ */
+import { Player } from './player';
 
 // DOM Elements
 let serverUrlInput: HTMLInputElement;
 let connectBtn: HTMLButtonElement;
 let disconnectBtn: HTMLButtonElement;
 let statusEl: HTMLDivElement;
-let logEl: HTMLDivElement;
+let tracksContainerEl: HTMLDivElement;
+let bufferDurationInput: HTMLInputElement;
 
-// Client instance
-let client: Client | null = null;
-let connection: any = null;
+// Player instance
+let player: Player | null = null;
 
 // Initialize the application when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
@@ -18,65 +24,72 @@ document.addEventListener('DOMContentLoaded', () => {
   connectBtn = document.getElementById('connectBtn') as HTMLButtonElement;
   disconnectBtn = document.getElementById('disconnectBtn') as HTMLButtonElement;
   statusEl = document.getElementById('status') as HTMLDivElement;
-  logEl = document.getElementById('log') as HTMLDivElement;
+  tracksContainerEl = document.getElementById('tracks-container') as HTMLDivElement;
+  bufferDurationInput = document.getElementById('bufferDuration') as HTMLInputElement;
 
   // Add event listeners
   connectBtn.addEventListener('click', connect);
   disconnectBtn.addEventListener('click', disconnect);
-
-  // Listen for custom log events from the MoQ modules
-  window.addEventListener('moq-log', ((event: CustomEvent) => {
-    const { type, message } = event.detail;
-    logMessage(message, type);
-  }) as EventListener);
-
-  // Log WebTransport support
-  if (typeof WebTransport !== 'undefined') {
-    logMessage('WebTransport is supported in this browser.', 'info');
-  } else {
-    logMessage('WebTransport is NOT supported in this browser. Please use Chrome or Edge.', 'error');
+  // UI logging disabled for performance
+  
+  // Check WebTransport support without logging
+  if (typeof WebTransport === 'undefined') {
+    // Only disable the connect button if WebTransport is not supported
+    // No UI logging
+    console.error('[Player] WebTransport is NOT supported in this browser. Please use Chrome or Edge.');
     connectBtn.disabled = true;
   }
+  
+  // Create the Player instance with the default server URL
+  player = new Player(
+    serverUrlInput.value,
+    tracksContainerEl,
+    statusEl,
+    logMessage
+  );
+  
+  // Set initial buffer duration from input field
+  const initialBufferDuration = parseInt(bufferDurationInput.value) || 200;
+  player.setTargetBufferDuration(initialBufferDuration);
+  
+  // Add event listener for buffer duration changes
+  bufferDurationInput.addEventListener('change', () => {
+    if (player) {
+      const newDuration = parseInt(bufferDurationInput.value) || 200;
+      player.setTargetBufferDuration(newDuration);
+    }
+  });
 });
 
 // Connect to the MoQ server
 async function connect() {
-  const serverUrl = serverUrlInput.value.trim();
-  
-  if (!serverUrl) {
-    logMessage('Please enter a server URL', 'error');
+  if (!player) {
+    logMessage('Player not initialized', 'error');
     return;
   }
-
+  
+  // Update the server URL from the input field
+  player = new Player(
+    serverUrlInput.value,
+    tracksContainerEl,
+    statusEl,
+    logMessage
+  );
+  
+  // Set buffer duration from input field
+  const bufferDuration = parseInt(bufferDurationInput.value) || 200;
+  player.setTargetBufferDuration(bufferDuration);
+  
+  // Disable connect button and enable disconnect button
+  connectBtn.disabled = true;
+  disconnectBtn.disabled = false;
+  
+  // Clear previous tracks display
+  tracksContainerEl.innerHTML = '';
+  
   try {
-    // Disable connect button and enable disconnect button
-    connectBtn.disabled = true;
-    
-    logMessage(`Connecting to ${serverUrl}...`, 'info');
-    
-    // Create and connect the client
-    client = new Client({
-      url: serverUrl,
-    });
-    
-    connection = await client.connect();
-    
-    // Update UI
-    disconnectBtn.disabled = false;
-    statusEl.className = 'status connected';
-    statusEl.textContent = 'Status: Connected';
-    
-    logMessage('Connected to MoQ server successfully!', 'success');
-    
-    // Handle connection closure
-    connection.closed().then((error: Error) => {
-      logMessage(`Connection closed: ${error.message}`, 'info');
-      resetUI();
-    }).catch((error: Error) => {
-      logMessage(`Connection error: ${error.message}`, 'error');
-      resetUI();
-    });
-    
+    // Connect to the server
+    await player.connect();
   } catch (error) {
     logMessage(`Error: ${error instanceof Error ? error.message : String(error)}`, 'error');
     resetUI();
@@ -85,11 +98,8 @@ async function connect() {
 
 // Disconnect from the MoQ server
 function disconnect() {
-  if (connection) {
-    logMessage('Disconnecting from server...', 'info');
-    connection.close();
-    connection = null;
-    client = null;
+  if (player) {
+    player.disconnect();
     resetUI();
   }
 }
@@ -98,21 +108,21 @@ function disconnect() {
 function resetUI() {
   connectBtn.disabled = false;
   disconnectBtn.disabled = true;
-  statusEl.className = 'status disconnected';
-  statusEl.textContent = 'Status: Disconnected';
 }
 
-// Log a message to the UI
+// Logger function for debugging and UI feedback
 function logMessage(message: string, type: 'info' | 'success' | 'error' | 'warn' = 'info') {
-  console.log(`[${type.toUpperCase()}] ${message}`);
-  
-  const entry = document.createElement('div');
-  entry.className = `log-entry ${type === 'warn' ? 'error' : type}`; // Map 'warn' to 'error' class for styling
-  
-  // Add timestamp
-  const timestamp = new Date().toLocaleTimeString();
-  entry.textContent = `${timestamp} - ${message}`;
-  
-  logEl.appendChild(entry);
-  logEl.scrollTop = logEl.scrollHeight;
+  switch (type) {
+    case 'error':
+      console.error(`[Player] ${message}`);
+      break;
+    case 'warn':
+      console.warn(`[Player] ${message}`);
+      break;
+    case 'success':
+      console.log(`[Player][SUCCESS] ${message}`);
+      break;
+    default:
+      console.log(`[Player] ${message}`);
+  }
 }

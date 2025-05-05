@@ -1,36 +1,36 @@
-import * as Stream from "./stream";
+import {
+  Msg,
+  FilterType,
+  Subscribe,
+  CtrlStream,
+  Message,
+} from "./control";
 import * as Setup from "./setup";
-import * as Control from "./control";
+import * as Stream from "./stream";
+import { TracksManager, ObjectCallback } from "./tracks";
 
-// Custom console logger for browser environment
+
+// Silent logger that doesn't log to UI at all
 const logger = {
-  log: (message: string, ...args: any[]) => {
-    console.log(`[MoQ] ${message}`, ...args);
-    // Dispatch a custom event that our UI can listen to
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'info', message }
-      });
-      window.dispatchEvent(event);
-    }
+  log: (_message: string, ..._args: any[]) => {
+    // Console logging disabled for performance
+    // Uncomment for debugging if needed
+    // console.log(`[MoQ] ${_message}`, ..._args);
+    
+    // UI logging completely disabled
   },
-  warn: (message: string, ...args: any[]) => {
-    console.warn(`[MoQ] ${message}`, ...args);
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'warn', message }
-      });
-      window.dispatchEvent(event);
-    }
+  warn: (_message: string, ..._args: any[]) => {
+    // Console logging disabled for performance
+    // Uncomment for debugging if needed
+    // console.warn(`[MoQ] ${_message}`, ..._args);
+    
+    // UI logging completely disabled
   },
   error: (message: string, ...args: any[]) => {
+    // Keep error logging to console for critical issues
     console.error(`[MoQ] ${message}`, ...args);
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'error', message }
-      });
-      window.dispatchEvent(event);
-    }
+    
+    // UI logging completely disabled
   }
 };
 
@@ -42,9 +42,22 @@ export interface ClientConfig {
   fingerprint?: string;
 }
 
+// Type for message handlers based on message kind and request ID
+type MessageHandler = (message: Message) => void;
+
 export class Client {
   #fingerprint: Promise<WebTransportHash | undefined>;
   readonly config: ClientConfig;
+  // Track the next request ID to use (client IDs are even, starting at 0)
+  #nextRequestId: bigint = 0n;
+  // Store the trackAlias used for catalog subscription
+  #catalogTrackAlias: bigint | null = null;
+  // Reference to the tracks manager
+  #tracksManager: TracksManager | null = null;
+  
+  // Message handling system
+  // Maps message kind to a map of request IDs to handlers
+  #messageHandlers: Map<Msg, Map<bigint, MessageHandler>> = new Map();
 
   constructor(config: ClientConfig) {
     this.config = config;
@@ -55,19 +68,24 @@ export class Client {
     });
   }
 
+  // Store announce callbacks
+  #announceCallbacks: Set<(namespace: string[]) => void> = new Set();
+
   async connect(): Promise<Connection> {
     // Create WebTransport options
     const options: WebTransportOptions = {};
 
     const fingerprint = await this.#fingerprint;
-    if (fingerprint) options.serverCertificateHashes = [fingerprint];
+    if (fingerprint) {
+      options.serverCertificateHashes = [fingerprint];
+    }
 
     logger.log(`Connecting to ${this.config.url}...`);
-    const quic = new WebTransport(this.config.url, options);
-    await quic.ready;
+    const wt = new WebTransport(this.config.url, options);
+    await wt.ready;
     logger.log("WebTransport connection established");
 
-    const stream = await quic.createBidirectionalStream();
+    const stream = await wt.createBidirectionalStream();
     logger.log("Bidirectional stream created");
 
     const writer = new Stream.Writer(stream.writable);
@@ -78,7 +96,7 @@ export class Client {
     // Send the client setup message
     logger.log("Sending client setup message");
     await setup.send.client({
-      versions: [Setup.Version.DRAFT_08],
+      versions: [Setup.Version.DRAFT_11],
     });
 
     // Receive the server setup message
@@ -86,22 +104,43 @@ export class Client {
     const server = await setup.recv.server();
     logger.log("Received server setup:", server);
 
-    if (server.version != Setup.Version.DRAFT_08) {
+    if (server.version !== Setup.Version.DRAFT_11) {
       throw new Error(`Unsupported server version: ${server.version}`);
     }
 
     // Create control stream for handling control messages
-    const control = new Control.Stream(reader, writer);
+    const control = new CtrlStream(reader, writer);
     logger.log("Control stream established");
+
+    // Create tracks manager for handling data streams
+    this.#tracksManager = new TracksManager(wt, control, this);
+    logger.log("Tracks manager created with control stream and client reference");
+
+    // Create a Connection object with the client instance to access request ID management
+    const connection = new Connection(wt, control, this);
 
     // Start listening for control messages
     this.#listenForControlMessages(control);
 
-    return new Connection(quic, control);
+    return connection;
+  }
+
+  /**
+   * Get the next available request ID and increment for future use
+   * According to the MoQ Transport spec, client request IDs are even numbers starting at 0
+   * and increment by 2 for each new request
+   */
+  getNextRequestId(): bigint {
+    const requestId = this.#nextRequestId;
+    this.#nextRequestId += 2n;
+    logger.log(`Generated new request ID: ${requestId}`);
+    return requestId;
   }
 
   async #fetchFingerprint(url?: string): Promise<WebTransportHash | undefined> {
-    if (!url) return;
+    if (!url) {
+      return;
+    }
 
     logger.log(`Fetching server certificate fingerprint from ${url}`);
     const response = await fetch(url);
@@ -118,48 +157,282 @@ export class Client {
     };
   }
 
-  async #listenForControlMessages(control: Control.Stream) {
-    logger.log("Starting to listen for control messages");
+  /**
+   * Register a handler for a specific message kind and request ID
+   * @param kind The message kind to handle
+   * @param requestId The request ID to match
+   * @param handler The handler function to call when a matching message is received
+   * @returns A function to unregister the handler
+   */
+  registerMessageHandler(kind: Msg, requestId: bigint, handler: MessageHandler): () => void {
+    logger.log(`Registering handler for message kind ${kind} with requestId ${requestId}`);
     
+    // Initialize the map for this message kind if it doesn't exist
+    if (!this.#messageHandlers.has(kind)) {
+      this.#messageHandlers.set(kind, new Map());
+    }
+    
+    // Get the map for this message kind
+    const handlersForKind = this.#messageHandlers.get(kind);
+    
+    // This should never be null since we just initialized it if needed
+    if (!handlersForKind) {
+      throw new Error(`Handler map for message kind ${kind} not found`);
+    }
+    
+    // Register the handler for this request ID
+    handlersForKind.set(requestId, handler);
+    
+    // Return a function to unregister the handler
+    return () => {
+      logger.log(`Unregistering handler for message kind ${kind} with requestId ${requestId}`);
+      const handlersMap = this.#messageHandlers.get(kind);
+      if (handlersMap) {
+        handlersMap.delete(requestId);
+      }
+    };
+  }
+  
+  /**
+   * Listen for control messages and dispatch them to registered handlers
+   */
+  async #listenForControlMessages(control: CtrlStream) {
+    logger.log("Starting to listen for control messages");
     try {
-      // Keep listening for control messages
       while (true) {
-        logger.log("Waiting for next control message...");
         const msg = await control.recv();
-        logger.log("Received control message:", msg);
         
-        // Here you would handle different types of control messages
-        if (Control.isPublisher(msg)) {
-          logger.log("Received publisher message:", msg.kind);
-          // Handle publisher messages
+        if (msg.kind === Msg.Announce) {
+          logger.log(`Received announce message with namespace: ${msg.namespace.join('/')}`);
+          
+          // Notify all registered announce callbacks
+          this.#announceCallbacks.forEach(callback => {
+            try {
+              callback(msg.namespace);
+            } catch (error) {
+              logger.error(`Error in announce callback: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          });
+        } else if ('requestId' in msg) {
+          // For messages with request IDs, check if we have a handler registered
+          const requestId = msg.requestId as bigint;
+          const handlersForKind = this.#messageHandlers.get(msg.kind);
+          
+          if (handlersForKind && handlersForKind.has(requestId)) {
+            logger.log(`Found handler for message kind ${msg.kind} with requestId ${requestId}`);
+            try {
+              // Call the handler with the message
+              const handler = handlersForKind.get(requestId);
+              if (handler) {
+                handler(msg);
+              } else {
+                logger.warn(`Handler for message kind ${msg.kind} with requestId ${requestId} was null`);
+              }
+              
+              // Remove the handler after it's been called (one-time use)
+              handlersForKind.delete(requestId);
+            } catch (error) {
+              logger.error(`Error in message handler for kind ${msg.kind} with requestId ${requestId}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          } else {
+            logger.log(`No handler found for message kind ${msg.kind} with requestId ${requestId}`);
+          }
         } else {
-          logger.log("Received subscriber message:", msg.kind);
-          // Handle subscriber messages
+          logger.log(`Received message of kind ${msg.kind} without a request ID`);
         }
       }
     } catch (error) {
       logger.error("Error while listening for control messages:", error);
     }
   }
+
+  /**
+   * Subscribe to a track
+   * @param subscribeParams Parameters for the subscribe message
+   * @returns The track alias assigned to the subscription
+   */
+  async subscribe(subscribeParams: {
+    track_namespace: string,
+    track_name: string,
+    group_order: number,
+    forward: boolean,
+    filterType: FilterType,
+    startLocation?: any,
+    endGroup?: bigint,
+    params?: Stream.KeyValuePair[]
+  }): Promise<bigint> {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot subscribe: Tracks manager not initialized");
+    }
+    
+    // Get a connection to send the subscribe message
+    const connection = await this.connect();
+    const control = connection.control;
+    
+    // Create a subscribe message
+    const requestId = connection.getNextRequestId();
+    
+    // In the MoQ Transport protocol, the client assigns the track alias
+    // We'll use the requestId as the track alias for simplicity
+    const trackAlias = requestId;
+    
+    const subscribeMsg: Subscribe = {
+      kind: Msg.Subscribe,
+      requestId,
+      trackAlias, // Client assigns the track alias
+      namespace: [subscribeParams.track_namespace], // Namespace is an array of strings
+      name: subscribeParams.track_name,
+      subscriber_priority: 0, // Default priority
+      group_order: subscribeParams.group_order,
+      forward: subscribeParams.forward,
+      filterType: subscribeParams.filterType,
+      startLocation: subscribeParams.startLocation,
+      endGroup: subscribeParams.endGroup,
+      params: subscribeParams.params || []
+    };
+    
+    logger.log(`Subscribing to track: ${subscribeParams.track_namespace}/${subscribeParams.track_name}`);
+    
+    // Send the subscribe message
+    await control.send(subscribeMsg);
+    
+    // Wait for the subscribe response
+    const response = await control.recv();
+    
+    if (response.kind !== Msg.SubscribeOk) {
+      throw new Error(`Subscribe failed: ${JSON.stringify(response)}`);
+    }
+    
+    logger.log(`Subscribed to track with alias: ${trackAlias}`);
+    
+    return trackAlias;
+  }
+  
+  /**
+   * Register a callback for objects on a specific track
+   * @param trackAlias The track alias to register the callback for
+   * @param callback The callback function to call when objects are received
+   */
+  registerObjectCallback(trackAlias: bigint, callback: ObjectCallback): void {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot register object callback: Tracks manager not initialized");
+    }
+    
+    logger.log(`Registering object callback for track ${trackAlias}`);
+    this.#tracksManager.registerObjectCallback(trackAlias, callback);
+  }
+  
+  /**
+   * Unregister a callback for objects on a specific track
+   * @param trackAlias The track alias to unregister the callback for
+   * @param callback The callback function to unregister
+   */
+  unregisterObjectCallback(trackAlias: bigint, callback: ObjectCallback): void {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot unregister object callback: Tracks manager not initialized");
+    }
+    
+    logger.log(`Unregistering object callback for track ${trackAlias}`);
+    this.#tracksManager.unregisterObjectCallback(trackAlias, callback);
+  }
+  
+  /**
+   * Subscribe to a track by namespace and track name
+   * @param namespace The namespace of the track
+   * @param trackName The name of the track
+   * @param callback The callback function to call when objects are received
+   * @returns The track alias assigned to the subscription
+   */
+  async subscribeTrack(namespace: string, trackName: string, callback: ObjectCallback): Promise<bigint> {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot subscribe: Tracks manager not initialized");
+    }
+    
+    logger.log(`Client subscribing to track ${namespace}:${trackName}`);
+    return this.#tracksManager.subscribeTrack(namespace, trackName, callback);
+  }
+  
+  /**
+   * Unsubscribe from a track by track alias
+   * @param trackAlias The track alias to unsubscribe from
+   * @returns A promise that resolves when the unsubscribe message has been sent
+   */
+  async unsubscribeTrack(trackAlias: bigint): Promise<void> {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot unsubscribe: Tracks manager not initialized");
+    }
+    
+    logger.log(`Client unsubscribing from track with alias ${trackAlias}`);
+    await this.#tracksManager.unsubscribeTrack(trackAlias);
+  }
+  
+  /**
+   * Close the client connection
+   */
+  /**
+   * Register a callback to be notified when an announce message is received
+   * @param callback Function that will be called with the namespace when an announce message is received
+   * @returns A function to unregister the callback
+   */
+  registerAnnounceCallback(callback: (namespace: string[]) => void): () => void {
+    logger.log('Registering announce callback');
+    this.#announceCallbacks.add(callback);
+    
+    // Return a function to unregister the callback
+    return () => {
+      logger.log('Unregistering announce callback');
+      this.#announceCallbacks.delete(callback);
+    };
+  }
+  
+  /**
+   * Close the client connection
+   */
+  close(): void {
+    logger.log('Closing client connection');
+    // Clear all callbacks
+    this.#announceCallbacks.clear();
+    
+    if (this.#tracksManager) {
+      this.#tracksManager.close();
+      this.#tracksManager = null;
+    }
+  }
 }
 
 export class Connection {
   // The established WebTransport session
-  #quic: WebTransport;
-  #control: Control.Stream;
+  #wt: WebTransport;
+  #control: CtrlStream;
+  #client: Client;
 
-  constructor(quic: WebTransport, control: Control.Stream) {
-    this.#quic = quic;
+  constructor(wt: WebTransport, control: CtrlStream, client: Client) {
+    this.#wt = wt;
     this.#control = control;
+    this.#client = client;
   }
 
-  close(code = 0, reason = "") {
-    this.#quic.close({ closeCode: code, reason });
+  /**
+   * Get the control stream for sending messages
+   */
+  get control(): CtrlStream {
+    return this.#control;
+  }
+
+  /**
+   * Get the next request ID from the client
+   */
+  getNextRequestId(): bigint {
+    return this.#client.getNextRequestId();
+  }
+
+  close(code = 0, reason = ""): void {
+    this.#wt.close({ closeCode: code, reason });
   }
 
   async closed(): Promise<Error> {
     try {
-      await this.#quic.closed;
+      await this.#wt.closed;
       return new Error("Connection closed");
     } catch (e) {
       return e instanceof Error ? e : new Error(String(e));
