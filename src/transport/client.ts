@@ -1,3 +1,5 @@
+import { ILogger, LoggerFactory } from "../logger";
+
 import {
   Msg,
   FilterType,
@@ -8,31 +10,6 @@ import {
 import * as Setup from "./setup";
 import * as Stream from "./stream";
 import { TracksManager, ObjectCallback } from "./tracks";
-
-
-// Silent logger that doesn't log to UI at all
-const logger = {
-  log: (_message: string, ..._args: any[]) => {
-    // Console logging disabled for performance
-    // Uncomment for debugging if needed
-    // console.log(`[MoQ] ${_message}`, ..._args);
-    
-    // UI logging completely disabled
-  },
-  warn: (_message: string, ..._args: any[]) => {
-    // Console logging disabled for performance
-    // Uncomment for debugging if needed
-    // console.warn(`[MoQ] ${_message}`, ..._args);
-    
-    // UI logging completely disabled
-  },
-  error: (message: string, ...args: any[]) => {
-    // Keep error logging to console for critical issues
-    console.error(`[MoQ] ${message}`, ...args);
-    
-    // UI logging completely disabled
-  }
-};
 
 export interface ClientConfig {
   url: string;
@@ -54,6 +31,8 @@ export class Client {
   #catalogTrackAlias: bigint | null = null;
   // Reference to the tracks manager
   #tracksManager: TracksManager | null = null;
+  // Logger instance
+  private logger: ILogger;
   
   // Message handling system
   // Maps message kind to a map of request IDs to handlers
@@ -61,9 +40,10 @@ export class Client {
 
   constructor(config: ClientConfig) {
     this.config = config;
+    this.logger = LoggerFactory.getInstance().getLogger('Client');
 
     this.#fingerprint = this.#fetchFingerprint(config.fingerprint).catch((e) => {
-      logger.warn("Failed to fetch fingerprint: ", e);
+      this.logger.warn(`Failed to fetch fingerprint: ${e}`);
       return undefined;
     });
   }
@@ -80,13 +60,13 @@ export class Client {
       options.serverCertificateHashes = [fingerprint];
     }
 
-    logger.log(`Connecting to ${this.config.url}...`);
+    this.logger.info(`Connecting to ${this.config.url}...`);
     const wt = new WebTransport(this.config.url, options);
     await wt.ready;
-    logger.log("WebTransport connection established");
+    this.logger.info("WebTransport connection established");
 
     const stream = await wt.createBidirectionalStream();
-    logger.log("Bidirectional stream created");
+    this.logger.info("Bidirectional stream created");
 
     const writer = new Stream.Writer(stream.writable);
     const reader = new Stream.Reader(new Uint8Array(), stream.readable);
@@ -94,15 +74,15 @@ export class Client {
     const setup = new Setup.Stream(reader, writer);
 
     // Send the client setup message
-    logger.log("Sending client setup message");
+    this.logger.info("Sending client setup message");
     await setup.send.client({
       versions: [Setup.Version.DRAFT_11],
     });
 
     // Receive the server setup message
-    logger.log("Waiting for server setup message");
+    this.logger.info("Waiting for server setup message");
     const server = await setup.recv.server();
-    logger.log("Received server setup:", server);
+    this.logger.info("Received server setup:", server);
 
     if (server.version !== Setup.Version.DRAFT_11) {
       throw new Error(`Unsupported server version: ${server.version}`);
@@ -110,11 +90,11 @@ export class Client {
 
     // Create control stream for handling control messages
     const control = new CtrlStream(reader, writer);
-    logger.log("Control stream established");
+    this.logger.info("Control stream established");
 
     // Create tracks manager for handling data streams
     this.#tracksManager = new TracksManager(wt, control, this);
-    logger.log("Tracks manager created with control stream and client reference");
+    this.logger.info("Tracks manager created with control stream and client reference");
 
     // Create a Connection object with the client instance to access request ID management
     const connection = new Connection(wt, control, this);
@@ -133,7 +113,7 @@ export class Client {
   getNextRequestId(): bigint {
     const requestId = this.#nextRequestId;
     this.#nextRequestId += 2n;
-    logger.log(`Generated new request ID: ${requestId}`);
+    this.logger.debug(`Generated new request ID: ${requestId}`);
     return requestId;
   }
 
@@ -142,7 +122,7 @@ export class Client {
       return;
     }
 
-    logger.log(`Fetching server certificate fingerprint from ${url}`);
+    this.logger.info(`Fetching server certificate fingerprint from ${url}`);
     const response = await fetch(url);
     const hexString = await response.text();
 
@@ -165,7 +145,7 @@ export class Client {
    * @returns A function to unregister the handler
    */
   registerMessageHandler(kind: Msg, requestId: bigint, handler: MessageHandler): () => void {
-    logger.log(`Registering handler for message kind ${kind} with requestId ${requestId}`);
+    this.logger.debug(`Registering handler for message kind ${kind} with requestId ${requestId}`);
     
     // Initialize the map for this message kind if it doesn't exist
     if (!this.#messageHandlers.has(kind)) {
@@ -185,7 +165,7 @@ export class Client {
     
     // Return a function to unregister the handler
     return () => {
-      logger.log(`Unregistering handler for message kind ${kind} with requestId ${requestId}`);
+      this.logger.debug(`Unregistering handler for message kind ${kind} with requestId ${requestId}`);
       const handlersMap = this.#messageHandlers.get(kind);
       if (handlersMap) {
         handlersMap.delete(requestId);
@@ -197,20 +177,20 @@ export class Client {
    * Listen for control messages and dispatch them to registered handlers
    */
   async #listenForControlMessages(control: CtrlStream) {
-    logger.log("Starting to listen for control messages");
+    this.logger.info("Starting to listen for control messages");
     try {
       while (true) {
         const msg = await control.recv();
         
         if (msg.kind === Msg.Announce) {
-          logger.log(`Received announce message with namespace: ${msg.namespace.join('/')}`);
+          this.logger.info(`Received announce message with namespace: ${msg.namespace.join('/')}`);
           
           // Notify all registered announce callbacks
           this.#announceCallbacks.forEach(callback => {
             try {
               callback(msg.namespace);
             } catch (error) {
-              logger.error(`Error in announce callback: ${error instanceof Error ? error.message : String(error)}`);
+              this.logger.error(`Error in announce callback: ${error instanceof Error ? error.message : String(error)}`);
             }
           });
         } else if ('requestId' in msg) {
@@ -219,30 +199,30 @@ export class Client {
           const handlersForKind = this.#messageHandlers.get(msg.kind);
           
           if (handlersForKind && handlersForKind.has(requestId)) {
-            logger.log(`Found handler for message kind ${msg.kind} with requestId ${requestId}`);
+            this.logger.debug(`Found handler for message kind ${msg.kind} with requestId ${requestId}`);
             try {
               // Call the handler with the message
               const handler = handlersForKind.get(requestId);
               if (handler) {
                 handler(msg);
               } else {
-                logger.warn(`Handler for message kind ${msg.kind} with requestId ${requestId} was null`);
+                this.logger.warn(`Handler for message kind ${msg.kind} with requestId ${requestId} was null`);
               }
               
               // Remove the handler after it's been called (one-time use)
               handlersForKind.delete(requestId);
             } catch (error) {
-              logger.error(`Error in message handler for kind ${msg.kind} with requestId ${requestId}: ${error instanceof Error ? error.message : String(error)}`);
+              this.logger.error(`Error in message handler for kind ${msg.kind} with requestId ${requestId}: ${error instanceof Error ? error.message : String(error)}`);
             }
           } else {
-            logger.log(`No handler found for message kind ${msg.kind} with requestId ${requestId}`);
+            this.logger.debug(`No handler found for message kind ${msg.kind} with requestId ${requestId}`);
           }
         } else {
-          logger.log(`Received message of kind ${msg.kind} without a request ID`);
+          this.logger.debug(`Received message of kind ${msg.kind} without a request ID`);
         }
       }
     } catch (error) {
-      logger.error("Error while listening for control messages:", error);
+      this.logger.error("Error while listening for control messages:", error);
     }
   }
 
@@ -291,7 +271,7 @@ export class Client {
       params: subscribeParams.params || []
     };
     
-    logger.log(`Subscribing to track: ${subscribeParams.track_namespace}/${subscribeParams.track_name}`);
+    this.logger.info(`Subscribing to track: ${subscribeParams.track_namespace}/${subscribeParams.track_name}`);
     
     // Send the subscribe message
     await control.send(subscribeMsg);
@@ -303,7 +283,7 @@ export class Client {
       throw new Error(`Subscribe failed: ${JSON.stringify(response)}`);
     }
     
-    logger.log(`Subscribed to track with alias: ${trackAlias}`);
+    this.logger.info(`Subscribed to track with alias: ${trackAlias}`);
     
     return trackAlias;
   }
@@ -318,7 +298,7 @@ export class Client {
       throw new Error("Cannot register object callback: Tracks manager not initialized");
     }
     
-    logger.log(`Registering object callback for track ${trackAlias}`);
+    this.logger.info(`Registering object callback for track ${trackAlias}`);
     this.#tracksManager.registerObjectCallback(trackAlias, callback);
   }
   
@@ -332,7 +312,7 @@ export class Client {
       throw new Error("Cannot unregister object callback: Tracks manager not initialized");
     }
     
-    logger.log(`Unregistering object callback for track ${trackAlias}`);
+    this.logger.info(`Unregistering object callback for track ${trackAlias}`);
     this.#tracksManager.unregisterObjectCallback(trackAlias, callback);
   }
   
@@ -348,7 +328,7 @@ export class Client {
       throw new Error("Cannot subscribe: Tracks manager not initialized");
     }
     
-    logger.log(`Client subscribing to track ${namespace}:${trackName}`);
+    this.logger.info(`Client subscribing to track ${namespace}:${trackName}`);
     return this.#tracksManager.subscribeTrack(namespace, trackName, callback);
   }
   
@@ -362,25 +342,22 @@ export class Client {
       throw new Error("Cannot unsubscribe: Tracks manager not initialized");
     }
     
-    logger.log(`Client unsubscribing from track with alias ${trackAlias}`);
+    this.logger.info(`Client unsubscribing from track with alias ${trackAlias}`);
     await this.#tracksManager.unsubscribeTrack(trackAlias);
   }
   
-  /**
-   * Close the client connection
-   */
   /**
    * Register a callback to be notified when an announce message is received
    * @param callback Function that will be called with the namespace when an announce message is received
    * @returns A function to unregister the callback
    */
   registerAnnounceCallback(callback: (namespace: string[]) => void): () => void {
-    logger.log('Registering announce callback');
+    this.logger.info('Registering announce callback');
     this.#announceCallbacks.add(callback);
     
     // Return a function to unregister the callback
     return () => {
-      logger.log('Unregistering announce callback');
+      this.logger.info('Unregistering announce callback');
       this.#announceCallbacks.delete(callback);
     };
   }
@@ -389,7 +366,7 @@ export class Client {
    * Close the client connection
    */
   close(): void {
-    logger.log('Closing client connection');
+    this.logger.info('Closing client connection');
     // Clear all callbacks
     this.#announceCallbacks.clear();
     
@@ -405,11 +382,13 @@ export class Connection {
   #wt: WebTransport;
   #control: CtrlStream;
   #client: Client;
+  private logger: ILogger;
 
   constructor(wt: WebTransport, control: CtrlStream, client: Client) {
     this.#wt = wt;
     this.#control = control;
     this.#client = client;
+    this.logger = LoggerFactory.getInstance().getLogger('Connection');
   }
 
   /**
@@ -427,6 +406,7 @@ export class Connection {
   }
 
   close(code = 0, reason = ""): void {
+    this.logger.info(`Closing connection with code ${code}: ${reason}`);
     this.#wt.close({ closeCode: code, reason });
   }
 

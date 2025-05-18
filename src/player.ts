@@ -1,9 +1,7 @@
 import { MediaBuffer, MediaSegmentBuffer } from './buffer';
+import { ILogger, LoggerFactory } from './logger';
 import { Client } from './transport/client';
 import { WarpCatalog, WarpTrack, WarpCatalogManager } from './warpcatalog';
-
-// Logger function type
-type LoggerFunction = (message: string, type?: 'info' | 'success' | 'error' | 'warn') => void;
 
 /**
  * Player class for handling MoQ transport connections, track subscriptions, and UI updates
@@ -19,7 +17,7 @@ export class Player {
   private tracksContainerEl: HTMLElement;
   private statusEl: HTMLElement;
   private announcementsEl: HTMLElement | null = null;
-  private logger: LoggerFunction;
+  private logger: ILogger;
   private trackSubscriptions: Map<string, bigint> = new Map(); // Track name -> trackAlias
   
   // Shared media elements for synchronized playback
@@ -58,23 +56,26 @@ export class Player {
    * @param serverUrl The URL of the MoQ server
    * @param tracksContainerEl The HTML element to display tracks in
    * @param statusEl The HTML element to display connection status
-   * @param logger Function to log messages
+   * @param uiLogger Optional function to log messages to the UI
    */
   constructor(
     serverUrl: string,
     tracksContainerEl: HTMLElement,
     statusEl: HTMLElement,
-    logger: LoggerFunction
+    _uiLogger?: (message: string, type?: 'info' | 'success' | 'error' | 'warn') => void
   ) {
     this.serverUrl = serverUrl;
     this.tracksContainerEl = tracksContainerEl;
     this.statusEl = statusEl;
 
-    // Use the provided logger function
-    this.logger = logger;
+    // Get logger for Player component
+    this.logger = LoggerFactory.getInstance().getLogger('Player');
     
-    // Initialize the catalog manager
-    this.catalogManager = new WarpCatalogManager(logger);
+    // Log initialization
+    this.logger.info('Player initialized');
+    
+    // Initialize the catalog manager with its own logger
+    this.catalogManager = new WarpCatalogManager();
     
     // Set up catalog callback to process tracks when catalog is received
     this.catalogManager.setCatalogCallback((catalog) => this.processWarpCatalog(catalog));
@@ -90,7 +91,7 @@ export class Player {
   public setTargetBufferDuration(durationMs: number): void {
     const oldValue = this.targetBufferDurationMs;
     this.targetBufferDurationMs = durationMs;
-    this.logger(`Target buffer duration changed from ${oldValue}ms to ${durationMs}ms`, 'info');
+    this.logger.info(`Target buffer duration changed from ${oldValue}ms to ${durationMs}ms`);
   }
 
   /**
@@ -98,7 +99,7 @@ export class Player {
    */
   async connect(): Promise<void> {
     if (!this.serverUrl) {
-      this.logger('Please enter a server URL', 'error');
+      this.logger.error('Please enter a server URL');
       return;
     }
 
@@ -114,7 +115,7 @@ export class Player {
       this.statusEl.className = 'status connected';
       this.statusEl.textContent = 'Status: Connected';
       
-      this.logger('Connected to MoQ server successfully!', 'success');
+      this.logger.info('Connected to MoQ server successfully!');
       
       // Create the announcements section
       this.createAnnouncementsSection();
@@ -122,19 +123,19 @@ export class Player {
       // Listen for announcements - catalog subscription will happen after announcement is received
       this.listenForAnnouncements();
       
-      this.logger('Waiting for announcements...', 'info');
+      this.logger.info('Waiting for announcements...');
       
       // Handle connection closure
       this.connection.closed().then((error: Error) => {
-        this.logger(`Connection closed: ${error.message}`, 'info');
+        this.logger.info(`Connection closed: ${error.message}`);
         this.disconnect();
       }).catch((error: Error) => {
-        this.logger(`Connection error: ${error.message}`, 'error');
+        this.logger.error(`Connection error: ${error.message}`);
         this.disconnect();
       });
       
     } catch (error) {
-      this.logger(`Error: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      this.logger.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       this.disconnect();
     }
   }
@@ -158,14 +159,14 @@ export class Player {
     // Unsubscribe from all tracks
     this.trackSubscriptions.forEach((trackAlias, trackName) => {
       if (this.client) {
-        this.logger(`Unsubscribing from track: ${trackName}`, 'info');
+        this.logger.info(`Unsubscribing from track: ${trackName}`);
         // No explicit unsubscribe needed as the connection will be closed
       }
     });
     this.trackSubscriptions.clear();
     
     if (this.connection) {
-      this.logger('Disconnecting from server...', 'info');
+      this.logger.info('Disconnecting from server...');
       this.connection.close();
       this.connection = null;
       this.client = null;
@@ -193,12 +194,12 @@ export class Player {
    */
   private async listenForAnnouncements(): Promise<void> {
     if (!this.client) {
-      this.logger('Cannot listen for announcements: Not connected', 'error');
+      this.logger.error('Cannot listen for announcements: Not connected');
       return;
     }
 
     try {
-      this.logger('Listening for announcements...', 'info');
+      this.logger.info('Listening for announcements...');
       
       // Make sure the announcements section exists
       if (!this.announcementsEl) {
@@ -208,12 +209,12 @@ export class Player {
       // Subscribe to announcements
       const unregister = this.client.registerAnnounceCallback((namespace: string[]) => {
         // Log that we received an announcement for debugging
-        this.logger(`Received announcement callback with namespace: ${namespace.join('/')}`, 'info');
+        this.logger.info(`Received announcement callback with namespace: ${namespace.join('/')}`);
         
         // Check if we've already seen this namespace
         const namespaceStr = namespace.join('/');
         if (this.announceNamespaces.some(ns => ns.join('/') === namespaceStr)) {
-          this.logger(`Already processed namespace: ${namespaceStr}`, 'info');
+          this.logger.info(`Already processed namespace: ${namespaceStr}`);
           return;
         }
         
@@ -225,7 +226,7 @@ export class Player {
         
         // Subscribe to the catalog in this namespace
         this.subscribeToCatalog(namespace).catch(error => {
-          this.logger(`Error subscribing to catalog: ${error instanceof Error ? error.message : String(error)}`, 'error');
+          this.logger.error(`Error subscribing to catalog: ${error instanceof Error ? error.message : String(error)}`);
         });
       });
       
@@ -233,9 +234,9 @@ export class Player {
       this.unregisterAnnounceCallback = unregister;
       
       // Log that we've registered the callback
-      this.logger('Announcement listener registered successfully', 'info');
+      this.logger.info('Announcement listener registered successfully');
     } catch (error) {
-      this.logger(`Error listening for announcements: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      this.logger.error(`Error listening for announcements: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -245,13 +246,13 @@ export class Player {
    */
   private async subscribeToCatalog(namespace: string[]): Promise<void> {
     if (!this.client) {
-      this.logger('Cannot subscribe to catalog: Not connected', 'error');
+      this.logger.error('Cannot subscribe to catalog: Not connected');
       return;
     }
 
     try {
       const namespaceStr = namespace.join('/');
-      this.logger(`Subscribing to catalog in namespace: ${namespaceStr}`, 'info');
+      this.logger.info(`Subscribing to catalog in namespace: ${namespaceStr}`);
 
       // Subscribe to the "catalog" track in the given namespace
       const unregisterCallback = await this.client.subscribeTrack(
@@ -264,7 +265,7 @@ export class Player {
             // Use the catalog manager to handle the catalog data
             this.catalogManager.handleCatalogData(catalog);
           } catch (e) {
-            this.logger(`Failed to decode catalog data: ${e instanceof Error ? e.message : String(e)}`, 'error');
+            this.logger.error(`Failed to decode catalog data: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
       );
@@ -272,16 +273,16 @@ export class Player {
       // Store the unregister function if provided
       if (typeof unregisterCallback === 'function') {
         if (this.unregisterCatalogCallback) {
-          this.logger('Unregistering previous catalog callback', 'info');
+          this.logger.info('Unregistering previous catalog callback');
           this.unregisterCatalogCallback();
         }
         this.unregisterCatalogCallback = unregisterCallback;
-        this.logger(`Successfully subscribed to catalog in namespace: ${namespaceStr}`, 'success');
+        this.logger.info(`Successfully subscribed to catalog in namespace: ${namespaceStr}`);
       } else {
-        this.logger(`Failed to subscribe to catalog in namespace: ${namespaceStr}`, 'error');
+        this.logger.error(`Failed to subscribe to catalog in namespace: ${namespaceStr}`);
       }
     } catch (error) {
-      this.logger(`Error subscribing to catalog: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      this.logger.error(`Error subscribing to catalog: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -293,8 +294,8 @@ export class Player {
     // Clear previous tracks display
     this.tracksContainerEl.innerHTML = '';
     
-    this.logger(`Processing WARP catalog version ${catalog.version}`, 'info');
-    this.logger(`Found ${catalog.tracks.length} tracks in catalog`, 'info');
+    this.logger.info(`Processing WARP catalog version ${catalog.version}`);
+    this.logger.info(`Found ${catalog.tracks.length} tracks in catalog`);
     
     // Get video and audio tracks using the catalog manager
     const videoTracks = this.catalogManager.getTracksByType(catalog, 'video');
@@ -302,15 +303,15 @@ export class Player {
     
     // Log found tracks
     videoTracks.forEach(track => {
-      this.logger(`Found video track: ${track.name}`, 'info');
+      this.logger.info(`Found video track: ${track.name}`);
     });
     
     audioTracks.forEach(track => {
-      this.logger(`Found audio track: ${track.name}`, 'info');
+      this.logger.info(`Found audio track: ${track.name}`);
     });
     
     // Log summary of found tracks
-    this.logger(`Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`, 'success');
+    this.logger.info(`Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`);
     
     // Display tracks in the UI
     this.displayTracks('Video Tracks', videoTracks);
@@ -327,17 +328,16 @@ export class Player {
       return;
     }
     
-    // Find the container element
-    const container = document.querySelector('.container');
-    if (!container) {
-      this.logger('Could not find container element', 'error');
+    // Find the tracks container element - this is our insertion point reference
+    if (!this.tracksContainerEl) {
+      this.logger.error('Tracks container element is not initialized');
       return;
     }
     
-    // Find the tracks heading
-    const tracksHeading = document.querySelector('.container h3:nth-of-type(1)');
-    if (!tracksHeading) {
-      this.logger('Could not find tracks heading', 'error');
+    // Get the parent container
+    const container = this.tracksContainerEl.parentElement;
+    if (!container) {
+      this.logger.error('Could not find parent container for tracks');
       return;
     }
     
@@ -350,9 +350,27 @@ export class Player {
     this.announcementsEl.id = 'announcements';
     this.announcementsEl.className = 'announcements-container';
     
-    // Insert announcements section before the tracks heading
-    container.insertBefore(heading, tracksHeading);
-    container.insertBefore(this.announcementsEl, tracksHeading);
+    // Find the "Available Tracks" heading that is the sibling of tracksContainerEl
+    let tracksHeading = null;
+    for (let i = 0; i < container.children.length; i++) {
+      const child = container.children[i];
+      if (child.tagName === 'H3' && child.textContent === 'Available Tracks') {
+        tracksHeading = child;
+        break;
+      }
+    }
+    
+    if (tracksHeading) {
+      // Insert before the "Available Tracks" heading
+      this.logger.debug('Found "Available Tracks" heading, inserting announcements before it');
+      container.insertBefore(heading, tracksHeading);
+      container.insertBefore(this.announcementsEl, tracksHeading);
+    } else {
+      // If we can't find the heading, insert before the tracks container itself
+      this.logger.debug('Using tracks container as reference for insertion');
+      container.insertBefore(heading, this.tracksContainerEl);
+      container.insertBefore(this.announcementsEl, this.tracksContainerEl);
+    }
   }
   
   /**
@@ -378,14 +396,14 @@ export class Player {
    */
   private displayAnnouncement(namespace: string[]): void {
     // Log that we're trying to display an announcement
-    this.logger(`Attempting to display announcement for namespace: ${namespace.join('/')}`, 'info');
+    this.logger.info(`Attempting to display announcement for namespace: ${namespace.join('/')}`);
     
     if (!this.announcementsEl) {
-      this.logger('Announcements element not found, creating it now', 'error');
+      this.logger.warn('Announcements element not found, creating it now');
       this.createAnnouncementsSection();
       
       if (!this.announcementsEl) {
-        this.logger('Failed to create announcements element', 'error');
+        this.logger.error('Failed to create announcements element');
         return;
       }
     }
@@ -410,7 +428,7 @@ export class Player {
     this.announcementsEl.appendChild(announcementEl);
     
     // Log the announcement
-    this.logger(`Successfully displayed announcement for namespace: ${namespaceStr}`, 'success');
+    this.logger.info(`Successfully displayed announcement for namespace: ${namespaceStr}`);
   }
 
   /**
@@ -537,12 +555,12 @@ export class Player {
       stopBtn.onclick = async () => {
         // Disable the button while stopping to prevent multiple clicks
         stopBtn.disabled = true;
-        this.logger('Stopping playback and unsubscribing from tracks...', 'info');
+        this.logger.info('Stopping playback and unsubscribing from tracks...');
         
         try {
           await this.stopPlayback();
         } catch (error) {
-          this.logger(`Error stopping playback: ${error instanceof Error ? error.message : String(error)}`, 'error');
+          this.logger.info(`Error stopping playback: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
           // Re-enable the button in case there was an error
           stopBtn.disabled = false;
@@ -558,17 +576,17 @@ export class Player {
    * Stop playback and unsubscribe from tracks
    */
   private async stopPlayback(): Promise<void> {
-    this.logger('stopPlayback called', 'info');
+    this.logger.info('stopPlayback called');
     
     // Log the current state of trackSubscriptions
-    this.logger(`Current trackSubscriptions size: ${this.trackSubscriptions.size}`, 'info');
+    this.logger.info(`Current trackSubscriptions size: ${this.trackSubscriptions.size}`);
     if (this.trackSubscriptions.size > 0) {
-      this.logger('Current track subscriptions:', 'info');
+      this.logger.info('Current track subscriptions:');
       this.trackSubscriptions.forEach((alias, key) => {
-        this.logger(`  - ${key}: ${alias}`, 'info');
+        this.logger.info(`  - ${key}: ${alias}`);
       });
     } else {
-      this.logger('No active track subscriptions found!', 'warn');
+      this.logger.warn('No active track subscriptions found!');
     }
     
     // Stop synchronized playback first
@@ -576,37 +594,37 @@ export class Player {
     
     // Unsubscribe from all active track subscriptions
     if (this.client && this.trackSubscriptions.size > 0) {
-      this.logger(`Unsubscribing from ${this.trackSubscriptions.size} active track(s)`, 'info');
+      this.logger.info(`Unsubscribing from ${this.trackSubscriptions.size} active track(s)`);
       
       // Create an array of promises for each unsubscribe operation
       const unsubscribePromises = [];
       
       for (const [trackName, trackAlias] of this.trackSubscriptions.entries()) {
-        this.logger(`Sending unsubscribe message for track: ${trackName} (alias: ${trackAlias})`, 'info');
+        this.logger.info(`Sending unsubscribe message for track: ${trackName} (alias: ${trackAlias})`);
         try {
           // Add the unsubscribe promise to our array
           unsubscribePromises.push(this.client.unsubscribeTrack(trackAlias));
         } catch (error) {
-          this.logger(`Error unsubscribing from track ${trackName}: ${error instanceof Error ? error.message : String(error)}`, 'error');
+          this.logger.info(`Error unsubscribing from track ${trackName}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       
       // Wait for all unsubscribe operations to complete
       try {
         await Promise.all(unsubscribePromises);
-        this.logger('Successfully unsubscribed from all tracks', 'success');
+        this.logger.info('Successfully unsubscribed from all tracks');
       } catch (error) {
-        this.logger(`Error during track unsubscription: ${error instanceof Error ? error.message : String(error)}`, 'error');
+        this.logger.info(`Error during track unsubscription: ${error instanceof Error ? error.message : String(error)}`);
       }
       
       // Clear the track subscriptions map
       this.trackSubscriptions.clear();
-      this.logger('Cleared track subscriptions map', 'info');
+      this.logger.info('Cleared track subscriptions map');
     } else {
       if (!this.client) {
-        this.logger('Client is not initialized, cannot unsubscribe from tracks', 'warn');
+        this.logger.warn('Client is not initialized, cannot unsubscribe from tracks');
       } else {
-        this.logger('No active track subscriptions to unsubscribe from', 'warn');
+        this.logger.warn('No active track subscriptions to unsubscribe from');
       }
     }
     
@@ -621,7 +639,7 @@ export class Player {
     // Reset state
     this.resetPlaybackState();
     
-    this.logger('Playback stopped', 'success');
+    this.logger.info('Playback stopped');
   }
   
   /**
@@ -639,7 +657,7 @@ export class Player {
       // Reset playback rate to normal
       videoEl.playbackRate = 1.0;
       
-      this.logger('[Sync] Synchronized playback stopped and event listeners removed', 'info');
+      this.logger.info('[Sync] Synchronized playback stopped and event listeners removed');
     }
   }
   
@@ -677,7 +695,7 @@ export class Player {
     this.recoveryAttempts = 0;
     this.lastErrorTime = 0;
     
-    this.logger('Playback state reset', 'info');
+    this.logger.info('Playback state reset');
   }
   
   /**
@@ -687,43 +705,43 @@ export class Player {
   private handleVideoElementError(_event: Event): void {
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     if (!videoEl) {
-      this.logger('[ErrorHandler] Video element not found when handling error', 'error');
+      this.logger.error('[ErrorHandler] Video element not found when handling error');
       return;
     }
     
     const error = videoEl.error;
     if (!error) {
-      this.logger('[ErrorHandler] No error information available', 'error');
+      this.logger.error('[ErrorHandler] No error information available');
       return;
     }
     
     // Log the error details
-    this.logger(`[ErrorHandler] Video element error: ${error.message || 'Unknown error'}`, 'error');
-    this.logger(`[ErrorHandler] Error code: ${error.code}, Message: ${error.message}`, 'error');
+    this.logger.error(`[ErrorHandler] Video element error: ${error.message || 'Unknown error'}`);
+    this.logger.error(`[ErrorHandler] Error code: ${error.code}, Message: ${error.message}`);
     
     // Handle different error types
     switch (error.code) {
       case MediaError.MEDIA_ERR_ABORTED:
-        this.logger('[ErrorHandler] Playback aborted by the user', 'error');
+        this.logger.error('[ErrorHandler] Playback aborted by the user');
         break;
         
       case MediaError.MEDIA_ERR_NETWORK:
-        this.logger('[ErrorHandler] Network error occurred during playback', 'error');
+        this.logger.error('[ErrorHandler] Network error occurred during playback');
         this.attemptNetworkRecovery();
         break;
         
       case MediaError.MEDIA_ERR_DECODE:
-        this.logger('[ErrorHandler] Decoding error occurred during playback', 'error');
+        this.logger.error('[ErrorHandler] Decoding error occurred during playback');
         this.attemptDecodeRecovery();
         break;
         
       case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-        this.logger('[ErrorHandler] Format or codec not supported', 'error');
+        this.logger.error('[ErrorHandler] Format or codec not supported');
         this.handleUnsupportedFormat();
         break;
         
       default:
-        this.logger('[ErrorHandler] Unknown error occurred', 'error');
+        this.logger.error('[ErrorHandler] Unknown error occurred');
         this.attemptGenericRecovery();
         break;
     }
@@ -742,12 +760,12 @@ export class Player {
     
     // Don't try to recover too many times
     if (this.recoveryAttempts > this.maxRecoveryAttempts) {
-      this.logger('[ErrorHandler] Maximum recovery attempts reached, giving up', 'error');
+      this.logger.error('Maximum recovery attempts reached, giving up');
       this.recoveryInProgress = false;
       return;
     }
     
-    this.logger(`[ErrorHandler] Attempting network recovery (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`, 'info');
+    this.logger.info(`[ErrorHandler] Attempting network recovery (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`);
     
     // Attempt to find a stable playback position
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
@@ -760,15 +778,15 @@ export class Player {
         // If we have more than 1 second of buffer, seek to 200ms after the start
         if (end - start > 1.0) {
           const safePosition = start + 0.2; // 200ms into the buffer
-          this.logger(`[ErrorHandler] Found stable buffer range [${start.toFixed(2)}-${end.toFixed(2)}], seeking to ${safePosition.toFixed(2)}`, 'info');
+          this.logger.info(`[ErrorHandler] Found stable buffer range [${start.toFixed(2)}-${end.toFixed(2)}], seeking to ${safePosition.toFixed(2)}`);
           
           // Seek to the safe position and try to resume playback
           videoEl.currentTime = safePosition;
           videoEl.play().then(() => {
-            this.logger('[ErrorHandler] Network recovery successful, playback resumed', 'success');
+            this.logger.info('Network recovery successful, playback resumed');
             this.recoveryInProgress = false;
           }).catch(e => {
-            this.logger(`[ErrorHandler] Failed to resume playback after network recovery: ${e}`, 'error');
+            this.logger.error(`Failed to resume playback after network recovery: ${e}`);
             this.recoveryInProgress = false;
           });
           
@@ -779,7 +797,7 @@ export class Player {
     
     // If we couldn't find a stable position, wait a bit and try again
     setTimeout(() => {
-      this.logger('[ErrorHandler] No stable buffer position found, trying again later', 'info');
+      this.logger.info('No stable buffer position found, trying again later');
       this.recoveryInProgress = false;
       this.attemptNetworkRecovery();
     }, 2000); // Wait 2 seconds before trying again
@@ -798,12 +816,12 @@ export class Player {
     
     // Don't try to recover too many times
     if (this.recoveryAttempts > this.maxRecoveryAttempts) {
-      this.logger('[ErrorHandler] Maximum recovery attempts reached, giving up', 'error');
+      this.logger.error('Maximum recovery attempts reached, giving up');
       this.recoveryInProgress = false;
       return;
     }
     
-    this.logger(`[ErrorHandler] Attempting decode recovery (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`, 'info');
+    this.logger.info(`[ErrorHandler] Attempting decode recovery (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`);
     
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     
@@ -825,15 +843,15 @@ export class Player {
       }
       
       if (canSkip) {
-        this.logger(`[ErrorHandler] Skipping ahead from ${currentTime.toFixed(2)} to ${newPosition.toFixed(2)} to bypass decode error`, 'info');
+        this.logger.info(`[ErrorHandler] Skipping ahead from ${currentTime.toFixed(2)} to ${newPosition.toFixed(2)} to bypass decode error`);
         
         // Seek ahead and try to resume playback
         videoEl.currentTime = newPosition;
         videoEl.play().then(() => {
-          this.logger('[ErrorHandler] Decode recovery successful, playback resumed', 'success');
+          this.logger.error('Decode recovery successful, playback resumed');
           this.recoveryInProgress = false;
         }).catch(e => {
-          this.logger(`[ErrorHandler] Failed to resume playback after decode recovery: ${e}`, 'error');
+          this.logger.error(`[ErrorHandler] Failed to resume playback after decode recovery: ${e}`);
           this.recoveryInProgress = false;
         });
         
@@ -842,7 +860,7 @@ export class Player {
     }
     
     // If we can't skip ahead, try general recovery
-    this.logger('[ErrorHandler] Could not skip ahead, attempting generic recovery', 'info');
+    this.logger.error('Could not skip ahead, attempting generic recovery');
     this.recoveryInProgress = false;
     this.attemptGenericRecovery();
   }
@@ -851,30 +869,30 @@ export class Player {
    * Handle unsupported format errors by falling back to available tracks
    */
   private handleUnsupportedFormat(): void {
-    this.logger('[ErrorHandler] Format or codec not supported, checking for fallback options', 'warn');
+    this.logger.warn('Format or codec not supported, checking for fallback options');
     
     if (this.audioSourceBuffer && this.videoSourceBuffer) {
       // Both audio and video are present
       if (this.audioErrorCount > this.videoErrorCount) {
         // Audio seems to be the problem, try to fall back to video only
-        this.logger('[ErrorHandler] Audio codec seems problematic, attempting to fall back to video only', 'info');
+        this.logger.warn('Audio codec seems problematic, attempting to fall back to video only');
         this.fallbackToVideoOnly();
       } else if (this.videoErrorCount > this.audioErrorCount) {
         // Video seems to be the problem, try to fall back to audio only
-        this.logger('[ErrorHandler] Video codec seems problematic, attempting to fall back to audio only', 'info');
+        this.logger.warn('Video codec seems problematic, attempting to fall back to audio only');
         this.fallbackToAudioOnly();
       } else {
         // Both seem problematic
-        this.logger('[ErrorHandler] Both audio and video codecs seem problematic, cannot continue', 'error');
+        this.logger.error('Both audio and video codecs seem problematic, cannot continue');
       }
     } else if (this.videoSourceBuffer) {
       // Only video is present
-      this.logger('[ErrorHandler] Video codec not supported and no audio fallback available', 'error');
+      this.logger.error('Video codec not supported and no audio fallback available');
     } else if (this.audioSourceBuffer) {
       // Only audio is present
-      this.logger('[ErrorHandler] Audio codec not supported and no video fallback available', 'error');
+      this.logger.error('Audio codec not supported and no video fallback available');
     } else {
-      this.logger('[ErrorHandler] No supported tracks available', 'error');
+      this.logger.error('No supported tracks available');
     }
   }
   
@@ -891,16 +909,16 @@ export class Player {
     
     // Don't try to recover too many times
     if (this.recoveryAttempts > this.maxRecoveryAttempts) {
-      this.logger('[ErrorHandler] Maximum recovery attempts reached, giving up', 'error');
+      this.logger.error('Maximum recovery attempts reached, giving up');
       this.recoveryInProgress = false;
       return;
     }
     
-    this.logger(`[ErrorHandler] Attempting generic recovery (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`, 'info');
+    this.logger.info(`[ErrorHandler] Attempting generic recovery (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`);
     
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     if (!videoEl) {
-      this.logger('[ErrorHandler] Video element not found during recovery', 'error');
+      this.logger.error('Video element not found during recovery');
       this.recoveryInProgress = false;
       return;
     }
@@ -926,7 +944,7 @@ export class Player {
         const end = videoEl.buffered.end(rangeIndex);
         const middle = start + (end - start) / 2;
         
-        this.logger(`[ErrorHandler] Seeking to middle of buffer range [${start.toFixed(2)}-${end.toFixed(2)}] at ${middle.toFixed(2)}`, 'info');
+        this.logger.info(`[ErrorHandler] Seeking to middle of buffer range [${start.toFixed(2)}-${end.toFixed(2)}] at ${middle.toFixed(2)}`);
         
         // Seek to the middle and try to resume playback
         videoEl.currentTime = middle;
@@ -934,10 +952,10 @@ export class Player {
         // Wait a bit then try to play
         setTimeout(() => {
           videoEl.play().then(() => {
-            this.logger('[ErrorHandler] Generic recovery successful, playback resumed', 'success');
+            this.logger.error('Generic recovery successful, playback resumed');
             this.recoveryInProgress = false;
           }).catch(e => {
-            this.logger(`[ErrorHandler] Failed to resume playback after generic recovery: ${e}`, 'error');
+            this.logger.error(`[ErrorHandler] Failed to resume playback after generic recovery: ${e}`);
             this.recoveryInProgress = false;
           });
         }, 500);
@@ -945,26 +963,26 @@ export class Player {
         // No suitable range found, try to start from the beginning of any range
         if (videoEl.buffered.length > 0) {
           const start = videoEl.buffered.start(0);
-          this.logger(`[ErrorHandler] No suitable buffer range found, seeking to start of first range at ${start.toFixed(2)}`, 'info');
+          this.logger.info(`[ErrorHandler] No suitable buffer range found, seeking to start of first range at ${start.toFixed(2)}`);
           videoEl.currentTime = start;
           
           // Wait a bit then try to play
           setTimeout(() => {
             videoEl.play().then(() => {
-              this.logger('[ErrorHandler] Generic recovery successful, playback resumed from start', 'success');
+              this.logger.info('Generic recovery successful, playback resumed from start');
               this.recoveryInProgress = false;
             }).catch(e => {
-              this.logger(`[ErrorHandler] Failed to resume playback from start: ${e}`, 'error');
+              this.logger.error(`[ErrorHandler] Failed to resume playback from start: ${e}`);
               this.recoveryInProgress = false;
             });
           }, 500);
         } else {
-          this.logger('[ErrorHandler] No buffered data available for recovery', 'error');
+          this.logger.error('No buffered data available for recovery');
           this.recoveryInProgress = false;
         }
       }
     } else {
-      this.logger('[ErrorHandler] No buffered data available for recovery', 'error');
+      this.logger.error('No buffered data available for recovery');
       this.recoveryInProgress = false;
     }
   }
@@ -974,11 +992,11 @@ export class Player {
    */
   private fallbackToVideoOnly(): void {
     if (!this.videoSourceBuffer || !this.videoTrack) {
-      this.logger('[ErrorHandler] Cannot fall back to video-only, no video track available', 'error');
+      this.logger.error('Cannot fall back to video-only, no video track available');
       return;
     }
     
-    this.logger('[ErrorHandler] Falling back to video-only playback', 'info');
+    this.logger.error('Falling back to video-only playback');
     
     // Clear audio state
     this.audioSourceBuffer = null;
@@ -1003,11 +1021,11 @@ export class Player {
    */
   private fallbackToAudioOnly(): void {
     if (!this.audioSourceBuffer || !this.audioTrack) {
-      this.logger('[ErrorHandler] Cannot fall back to audio-only, no audio track available', 'error');
+      this.logger.error('Cannot fall back to audio-only, no audio track available');
       return;
     }
     
-    this.logger('[ErrorHandler] Falling back to audio-only playback', 'info');
+    this.logger.error('Falling back to audio-only playback');
     
     // Clear video state
     this.videoSourceBuffer = null;
@@ -1047,12 +1065,12 @@ export class Player {
     const audioBelowTarget = this.audioSourceBuffer && audioBufferAhead < targetBufferSec;
     
     if ((videoCritical || audioCritical) && !this.playbackStalled && !this.recoveryInProgress) {
-      this.logger(`[BufferHealth] Buffer critically low - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s, Target: ${targetBufferSec.toFixed(2)}s`, 'warn');
+      this.logger.info(`[BufferHealth] Buffer critically low - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s, Target: ${targetBufferSec.toFixed(2)}s`);
       
       // Check if we're stalled or about to stall
       if (videoEl.paused || videoEl.readyState < 3) {
         this.playbackStalled = true;
-        this.logger('[BufferHealth] Playback stalled due to buffer underrun', 'warn');
+        this.logger.warn('[BufferHealth] Playback stalled due to buffer underrun');
         
         // Attempt to recover
         this.recoverFromBufferUnderrun();
@@ -1063,13 +1081,13 @@ export class Player {
           // Reduce playback rate to 70% to allow buffer to build up faster
           const originalRate = videoEl.playbackRate;
           videoEl.playbackRate = 0.7;
-          this.logger(`[BufferHealth] Reduced playback rate from ${originalRate.toFixed(2)}x to ${videoEl.playbackRate.toFixed(2)}x to prevent stall`, 'info');
+          this.logger.info(`[BufferHealth] Reduced playback rate from ${originalRate.toFixed(2)}x to ${videoEl.playbackRate.toFixed(2)}x to prevent stall`);
         }
       }
     } else if (this.playbackStalled && videoBufferAhead > targetBufferSec && audioBufferAhead > targetBufferSec) {
       // We have recovered from stalled state and reached target buffer levels
       this.playbackStalled = false;
-      this.logger(`[BufferHealth] Playback recovered from stall, buffer levels at target (${targetBufferSec.toFixed(2)}s)`, 'info');
+      this.logger.info(`[BufferHealth] Playback recovered from stall, buffer levels at target (${targetBufferSec.toFixed(2)}s)`);
       
       // Reset playback rate to normal
       videoEl.playbackRate = 1.0;
@@ -1084,20 +1102,20 @@ export class Player {
         if (videoEl.playbackRate > newRate) {
           const originalRate = videoEl.playbackRate;
           videoEl.playbackRate = newRate;
-          this.logger(`[BufferHealth] Reduced playback rate from ${originalRate.toFixed(2)}x to ${newRate.toFixed(2)}x (buffer at ${(bufferRatio * 100).toFixed(0)}% of target)`, 'info');
+          this.logger.info(`[BufferHealth] Reduced playback rate from ${originalRate.toFixed(2)}x to ${newRate.toFixed(2)}x (buffer at ${(bufferRatio * 100).toFixed(0)}% of target)`);
         }
       }
     } else if (!this.playbackStalled && videoBufferAhead > targetBufferSec * 1.5 && audioBufferAhead > targetBufferSec * 1.5) {
       // Buffer exceeds target by 50% - reset to normal speed if needed
       if (videoEl.playbackRate !== 1.0) {
         videoEl.playbackRate = 1.0;
-        this.logger(`[BufferHealth] Restored normal playback rate, buffers exceed target by >50%`, 'info');
+        this.logger.info(`[BufferHealth] Restored normal playback rate, buffers exceed target by >50%`);
       }
     } else if (this.videoSourceBuffer && this.audioSourceBuffer && 
               videoBufferAhead < this.bufferLowThreshold && 
               audioBufferAhead < this.bufferLowThreshold) {
       // Both buffers are low but not yet critical
-      this.logger(`[BufferHealth] Buffer levels low - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s, Target: ${targetBufferSec.toFixed(2)}s`, 'warn');
+      this.logger.info(`[BufferHealth] Buffer levels low - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s, Target: ${targetBufferSec.toFixed(2)}s`);
     }
   }
   
@@ -1108,18 +1126,20 @@ export class Player {
     if (this.recoveryInProgress) {
       return;
     }
+
+    const targetBufferSec = this.targetBufferDurationMs / 1000;
     
     this.recoveryInProgress = true;
     this.recoveryAttempts++;
     
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     if (!videoEl) {
-      this.logger('[BufferHealth] Video element not found during buffer recovery', 'error');
+      this.logger.error('[BufferHealth] Video element not found during buffer recovery');
       this.recoveryInProgress = false;
       return;
     }
     
-    this.logger(`[BufferHealth] Attempting to recover from buffer underrun (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`, 'info');
+    this.logger.info(`[BufferHealth] Attempting to recover from buffer underrun (attempt ${this.recoveryAttempts}/${this.maxRecoveryAttempts})`);
     
     // If we have any buffered data ahead, skip to it
     if (videoEl.buffered.length > 0) {
@@ -1136,24 +1156,24 @@ export class Player {
       
       if (furthestBufferStart !== -1) {
         // We found a range ahead, seek to it
-        const newPosition = furthestBufferStart + 0.1; // Start 100ms into the range
-        this.logger(`[BufferHealth] Found buffered range starting at ${furthestBufferStart.toFixed(2)}, seeking to ${newPosition.toFixed(2)}`, 'info');
+        const newPosition = furthestBufferStart + targetBufferSec; // Start target buffer from buffered end
+        this.logger.info(`[BufferHealth] Found buffered range starting at ${furthestBufferStart.toFixed(2)}, seeking to ${newPosition.toFixed(2)}`);
         
         videoEl.currentTime = newPosition;
         
         // Try to resume playback
         setTimeout(() => {
           videoEl.play().then(() => {
-            this.logger('[BufferHealth] Buffer recovery successful, playback resumed', 'success');
+            this.logger.info('[BufferHealth] Buffer recovery successful, playback resumed');
             this.recoveryInProgress = false;
           }).catch(e => {
-            this.logger(`[BufferHealth] Failed to resume playback after buffer recovery: ${e}`, 'error');
+            this.logger.error(`[BufferHealth] Failed to resume playback after buffer recovery: ${e}`);
             this.recoveryInProgress = false;
           });
         }, 500);
       } else {
         // No range ahead, wait for buffer to build up
-        this.logger('[BufferHealth] No buffered data ahead, waiting for buffer to build up', 'info');
+        this.logger.info('No buffered data ahead, waiting for buffer to build up');
         
         // Check again in 1 second
         setTimeout(() => {
@@ -1186,25 +1206,25 @@ export class Player {
             
             if (hasBufferAhead) {
               videoEl.play().then(() => {
-                this.logger(`[BufferHealth] Buffer recovery successful after wait, playback resumed with ${bufferAheadSec.toFixed(2)}s ahead (${bufferPercent.toFixed(0)}% of target)`, 'success');
+                this.logger.info(`[BufferHealth] Buffer recovery successful after wait, playback resumed with ${bufferAheadSec.toFixed(2)}s ahead (${bufferPercent.toFixed(0)}% of target)`);
                 this.recoveryInProgress = false;
               }).catch(e => {
-                this.logger(`[BufferHealth] Failed to resume playback after wait: ${e}`, 'error');
+                this.logger.error(`[BufferHealth] Failed to resume playback after wait: ${e}`);
                 this.recoveryInProgress = false;
               });
             } else {
-              this.logger(`[BufferHealth] Still insufficient buffer after wait (${bufferAheadSec.toFixed(2)}s, target: ${targetBufferSec.toFixed(2)}s)`, 'warn');
+              this.logger.warn(`[BufferHealth] Still insufficient buffer after wait (${bufferAheadSec.toFixed(2)}s, target: ${targetBufferSec.toFixed(2)}s)`);
               this.recoveryInProgress = false;
             }
           } else {
-            this.logger('[BufferHealth] No buffered data available after wait', 'error');
+            this.logger.debug('No buffered data available after wait');
             this.recoveryInProgress = false;
           }
         }, 1000);
       }
     } else {
       // No buffered data at all, nothing we can do but wait
-      this.logger('[BufferHealth] No buffered data available, waiting for data', 'error');
+      this.logger.debug('No buffered data available, waiting for data');
       
       // Check again in 2 seconds
       setTimeout(() => {
@@ -1244,7 +1264,7 @@ export class Player {
     const hasAudioTrack = audioSelect && audioSelect.options.length > 0;
 
     if (!hasVideoTrack && !hasAudioTrack) {
-      this.logger('No tracks available to play', 'error');
+      this.logger.error('No tracks available to play');
       return;
     }
 
@@ -1254,12 +1274,12 @@ export class Player {
       const videoTrackName = selectedOption.dataset.trackName || '';
       const videoNamespace = selectedOption.dataset.namespace || '';
       
-      this.logger(`Selected video track: ${videoNamespace}/${videoTrackName}`, 'info');
+      this.logger.info(`Selected video track: ${videoNamespace}/${videoTrackName}`);
       
       // Find the video track object from the catalog
       const videoTrack = this.getTrackFromCatalog(videoNamespace, videoTrackName, 'video');
       if (!videoTrack) {
-        this.logger('Could not find selected video track in catalog', 'error');
+        this.logger.error('Could not find selected video track in catalog');
         return;
       }
       
@@ -1273,16 +1293,16 @@ export class Player {
       const audioTrackName = selectedOption.dataset.trackName || '';
       const audioNamespace = selectedOption.dataset.namespace || '';
       
-      this.logger(`Selected audio track: ${audioNamespace}/${audioTrackName}`, 'info');
+      this.logger.info(`Selected audio track: ${audioNamespace}/${audioTrackName}`);
       
       // Find the audio track object from the catalog
       const audioTrack = this.getTrackFromCatalog(audioNamespace, audioTrackName, 'audio');
       if (!audioTrack) {
-        this.logger('Could not find selected audio track in catalog', 'error');
+        this.logger.error('Could not find selected audio track in catalog');
         return;
       }
       
-      this.logger('Audio track found in catalog, preparing for setup', 'info');
+      this.logger.info('Audio track found in catalog, preparing for setup');
       
       // Setup MediaSource and SourceBuffer for audio
       this.setupAudioPlayback(audioTrack);
@@ -1301,15 +1321,14 @@ export class Player {
    * This will initialize shared resources for both audio and video
    */
   private setupVideoPlayback(track: WarpTrack): void {
-    console.log('setupVideoPlayback called');
-    this.logger('setupVideoPlayback called', 'info');
+    this.logger.info('setupVideoPlayback called');
     
     // Store the video track reference
     this.videoTrack = track;
     
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     if (!videoEl) {
-      this.logger('Video element not found', 'error');
+      this.logger.error('Video element not found');
       return;
     }
     
@@ -1325,7 +1344,7 @@ export class Player {
     // Create and store media segment buffers for video
     this.videoMediaSegmentBuffer = new MediaSegmentBuffer({
       onSegmentReady: (segment) => {
-        this.logger(`[VideoMediaSegmentBuffer] Segment ready with baseMediaDecodeTime: ${segment.trackInfo.baseMediaDecodeTime}, timescale: ${segment.trackInfo.timescale}`, 'info');
+        this.logger.debug(`[VideoMediaSegmentBuffer] Segment ready with baseMediaDecodeTime: ${segment.trackInfo.baseMediaDecodeTime}, timescale: ${segment.trackInfo.timescale}`);
       }
     });
     
@@ -1334,32 +1353,32 @@ export class Player {
     
     // Setup MediaSource open event
     this.sharedMediaSource.addEventListener('sourceopen', () => {
-      this.logger(`[SharedMediaSource] sourceopen - readyState: ${this.sharedMediaSource?.readyState}`, 'info');
+      this.logger.info(`[SharedMediaSource] sourceopen - readyState: ${this.sharedMediaSource?.readyState}`);
       
       // Create video source buffer
       const videoMimeType = `video/mp4; codecs="${track.codec || 'avc3.640028'}"`;
-      this.logger(`[SharedMediaSource] Using video mimeType: ${videoMimeType}`, 'info');
+      this.logger.debug(`[SharedMediaSource] Using video mimeType: ${videoMimeType}`);
       
       try {
         if (!this.sharedMediaSource) {
-          this.logger('SharedMediaSource is null', 'error');
+          this.logger.error('SharedMediaSource is null');
           return;
         }
         
         this.videoSourceBuffer = this.sharedMediaSource.addSourceBuffer(videoMimeType);
-        this.logger('[VideoSourceBuffer] Created successfully', 'info');
+        this.logger.info('[VideoSourceBuffer] Created successfully');
       } catch (e) {
-        this.logger('Could not add VideoSourceBuffer: ' + e, 'error');
+        this.logger.error('Could not add VideoSourceBuffer: ' + e);
         return;
       }
       
       // Setup video source buffer event listeners
       this.videoSourceBuffer?.addEventListener('error', (e) => {
-        this.logger(`[VideoSourceBuffer] ERROR: ${e}`, 'error');
+        this.logger.error(`[VideoSourceBuffer] ERROR: ${e}`);
       });
       
       this.videoSourceBuffer?.addEventListener('abort', () => {
-        this.logger('[VideoSourceBuffer] ABORT event', 'error');
+        this.logger.error('[VideoSourceBuffer] ABORT event');
       });
       
       this.videoSourceBuffer?.addEventListener('update', () => {
@@ -1372,9 +1391,9 @@ export class Player {
           for (let i = 0; i < (this.videoSourceBuffer?.buffered.length || 0); i++) {
             ranges.push(`[${this.videoSourceBuffer?.buffered.start(i).toFixed(2) || '?'} - ${this.videoSourceBuffer?.buffered.end(i).toFixed(2) || '?'}]`);
           }
-          // this.logger(`[VideoSourceBuffer] Buffered ranges: ${ranges.join(', ')}`, 'info');
+          this.logger.debug(`[VideoSourceBuffer] Buffered ranges: ${ranges.join(', ')}`);
         } catch (e) {
-          this.logger(`[VideoSourceBuffer] Error reading buffered ranges: ${e}`, 'error');
+          this.logger.error(`[VideoSourceBuffer] Error reading buffered ranges: ${e}`);
         }
       });
       
@@ -1383,22 +1402,22 @@ export class Player {
       
       // Append CMAF init segment for video (base64-decoded)
       if (!track.initData) {
-        this.logger('No initData found for video track', 'error');
+        this.logger.error('No initData found for video track');
         return;
       }
       
       const videoInitSegment = this.base64ToArrayBuffer(track.initData);
-      this.logger(`[VideoInitSegment] Decoded init segment: ${videoInitSegment.byteLength} bytes`, 'info');
+      this.logger.info(`[VideoInitSegment] Decoded init segment: ${videoInitSegment.byteLength} bytes`);
       
       try {
         if (!this.videoMediaBuffer || !this.videoMediaSegmentBuffer || !this.videoSourceBuffer) {
-          this.logger('Video media buffers or source buffer not initialized', 'error');
+          this.logger.error('Video media buffers or source buffer not initialized');
           return;
         }
         
         // Parse the init segment with videoMediaBuffer to get timing info
         const videoTrackInfo = this.videoMediaBuffer.parseInitSegment(videoInitSegment);
-        this.logger(`[VideoMediaBuffer] Parsed init segment, timescale: ${videoTrackInfo.timescale}`, 'info');
+        this.logger.info(`[VideoMediaBuffer] Parsed init segment, timescale: ${videoTrackInfo.timescale}`);
         
         // Set the source buffer in the videoMediaSegmentBuffer
         this.videoMediaSegmentBuffer.setSourceBuffer(this.videoSourceBuffer);
@@ -1409,23 +1428,23 @@ export class Player {
         // Append to video source buffer via mediaSegmentBuffer
         this.videoMediaSegmentBuffer.appendToSourceBuffer(videoInitSegmentObj);
         
-        this.logger('Added video CMAF init segment to MediaSegmentBuffer and SourceBuffer', 'success');
+        this.logger.info('Added video CMAF init segment to MediaSegmentBuffer and SourceBuffer');
       } catch (e) {
-        this.logger('Failed to process video CMAF init segment: ' + (e instanceof Error ? e.message : String(e)), 'error');
+        this.logger.error('Failed to process video CMAF init segment: ' + (e instanceof Error ? e.message : String(e)));
         return;
       }
 
     // Any previous subscriptions will be managed through the trackSubscriptions map
     
     // Log the current state of trackSubscriptions before subscribing
-    this.logger(`Current track subscriptions before subscribing: ${this.trackSubscriptions.size}`, 'info');
+    this.logger.info(`Current track subscriptions before subscribing: ${this.trackSubscriptions.size}`);
     
     // Subscribe to the video track and store the subscription
     this.subscribeToVideoTrack(track, (obj: { data: ArrayBuffer, timing?: { baseMediaDecodeTime?: number, timescale?: number } }) => {
         try {
           // Check if we have a valid data object
           if (!obj.data) {
-            this.logger('[VideoMediaBuffer] Received null or undefined data', 'error');
+            this.logger.error('[VideoMediaBuffer] Received null or undefined data');
             return;
           }
           
@@ -1467,18 +1486,18 @@ export class Player {
             } catch (e) {
               // Ignore any errors when trying to access constructor
             }
-            this.logger(`[VideoMediaBuffer] Received invalid data type: ${type} (${constructorName})`, 'error');
+            this.logger.error(`[VideoMediaBuffer] Received invalid data type: ${type} (${constructorName})`);
             return;
           }
           
           // Check if the ArrayBuffer is empty
           if (arrayBuffer.byteLength === 0) {
-            this.logger('[VideoMediaBuffer] Received empty ArrayBuffer (zero bytes)', 'error');
+            this.logger.error('[VideoMediaBuffer] Received empty ArrayBuffer (zero bytes)');
             return;
           }
 
           if (!this.videoMediaBuffer || !this.videoMediaSegmentBuffer) {
-            this.logger('[VideoMediaBuffer] Video buffers not initialized', 'error');
+            this.logger.error('[VideoMediaBuffer] Video buffers not initialized');
             return;
           }
 
@@ -1502,16 +1521,16 @@ export class Player {
           
           // Only log every 10th segment to reduce logging overhead
           if (videoObjectsReceived % 10 === 0) {
-            this.logger(`[VideoMediaSegmentBuffer] Queued segment with baseMediaDecodeTime: ${trackInfo.baseMediaDecodeTime}`, 'info');
+            this.logger.debug(`[VideoMediaSegmentBuffer] Queued segment with baseMediaDecodeTime: ${trackInfo.baseMediaDecodeTime}`);
           }
           
           // Only log detailed information every 10 segments to reduce overhead
           if (videoObjectsReceived % 10 === 0 || videoObjectsReceived <= 5) {
             const pendingCount = this.videoMediaSegmentBuffer['pendingSegments'] ? this.videoMediaSegmentBuffer['pendingSegments'].length : 0;
-            this.logger(`[VideoSegment] Received segment #${videoObjectsReceived} - ${obj.data.byteLength} bytes. Segments: ${this.videoMediaSegmentBuffer.getSegmentCount()}, Pending: ${pendingCount}`, 'info');
+            this.logger.info(`[VideoSegment] Received segment #${videoObjectsReceived} - ${obj.data.byteLength} bytes. Segments: ${this.videoMediaSegmentBuffer.getSegmentCount()}, Pending: ${pendingCount}`);
             
             if (obj.timing) {
-              this.logger(`[VideoSegment] Timing info - baseMediaDecodeTime: ${obj.timing.baseMediaDecodeTime}, timescale: ${obj.timing.timescale}`, 'info');
+              this.logger.debug(`[VideoSegment] Timing info - baseMediaDecodeTime: ${obj.timing.baseMediaDecodeTime}, timescale: ${obj.timing.timescale}`);
             }
           }
 
@@ -1525,7 +1544,7 @@ export class Player {
             
             if (bufferDurationMs >= this.targetBufferDurationMs) {
               this.videoBufferReady = true;
-              this.logger(`[Video] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.videoObjectsReceived} objects), target: ${this.targetBufferDurationMs}ms`, 'info');
+              this.logger.info(`[Video] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.videoObjectsReceived} objects), target: ${this.targetBufferDurationMs}ms`);
               
               // Check if we can start playback (depends on audio buffer state too)
               this.checkBuffersAndStartPlayback();
@@ -1534,28 +1553,28 @@ export class Player {
           
           // Log video element state (only every 30 segments to avoid excessive logging)
           if (videoObjectsReceived % 30 === 0) {
-            this.logger(`[Video] readyState: ${videoEl.readyState}, currentTime: ${videoEl.currentTime.toFixed(2)}, paused: ${videoEl.paused}`, 'info');
+            this.logger.debug(`[Video] readyState: ${videoEl.readyState}, currentTime: ${videoEl.currentTime.toFixed(2)}, paused: ${videoEl.paused}`);
           }
         } catch (e) {
-          this.logger(`[VideoMediaBuffer] Error parsing media segment: ${e}`, 'error');
+          this.logger.error(`[VideoMediaBuffer] Error parsing media segment: ${e}`);
         }
       });
       
       // MediaSource event listeners
       this.sharedMediaSource?.addEventListener('sourceended', () => {
-        this.logger(`[SharedMediaSource] sourceended - readyState: ${this.sharedMediaSource?.readyState}`, 'info');
+        this.logger.debug(`[SharedMediaSource] sourceended - readyState: ${this.sharedMediaSource?.readyState}`);
       });
       
       this.sharedMediaSource?.addEventListener('sourceclose', () => {
-        this.logger(`[SharedMediaSource] sourceclose - readyState: ${this.sharedMediaSource?.readyState}`, 'info');
+        this.logger.info(`[SharedMediaSource] sourceclose - readyState: ${this.sharedMediaSource?.readyState}`);
       });
       
       // Now check if we also need to set up an audio SourceBuffer
       if (this.audioTrack) {
-        this.logger('[SharedMediaSource] Video setup complete, now setting up audio source buffer', 'info');
+        this.logger.info('[SharedMediaSource] Video setup complete, now setting up audio source buffer');
         this.setupAudioSourceBuffer();
       } else {
-        this.logger('[SharedMediaSource] Video setup complete, no audio track available', 'info');
+        this.logger.info('[SharedMediaSource] Video setup complete, no audio track available');
       }
     });
   }
@@ -1565,7 +1584,7 @@ export class Player {
    */
   private async subscribeToVideoTrack(track: WarpTrack, onObject: (obj: { data: ArrayBuffer, timing?: { baseMediaDecodeTime?: number, timescale?: number } }) => void): Promise<void> {
     if (!this.client) {
-      this.logger('Client not initialized', 'error');
+      this.logger.error('Client not initialized');
       return;
     }
     
@@ -1573,35 +1592,35 @@ export class Player {
     const trackName = track.name;
     const trackKey = `${namespace}/${trackName}`;
     
-    this.logger(`Subscribing to video track: ${trackKey}`, 'info');
-    this.logger(`Current trackSubscriptions size before subscribing: ${this.trackSubscriptions.size}`, 'info');
+    this.logger.info(`Subscribing to video track: ${trackKey}`);
+    this.logger.debug(`Current trackSubscriptions size before subscribing: ${this.trackSubscriptions.size}`);
     
     try {
       // Subscribe to the track and get the track alias
-      this.logger('Calling client.subscribeTrack...', 'info');
+      this.logger.debug('Calling client.subscribeTrack...');
       const trackAlias = await this.client.subscribeTrack(namespace, trackName, (obj: { data: ArrayBuffer }) => {
         onObject(obj);
       });
-      this.logger(`Received track alias: ${trackAlias} from client.subscribeTrack`, 'info');
+      this.logger.debug(`Received track alias: ${trackAlias} from client.subscribeTrack`);
       
       // Store the track subscription in the trackSubscriptions map
       this.trackSubscriptions.set(trackKey, trackAlias);
-      this.logger(`Added track to trackSubscriptions map with key: ${trackKey}`, 'info');
-      this.logger(`trackSubscriptions size after adding: ${this.trackSubscriptions.size}`, 'info');
-      this.logger(`Successfully subscribed to video track ${trackKey} with alias ${trackAlias}`, 'success');
+      this.logger.debug(`Added track to trackSubscriptions map with key: ${trackKey}`);
+      this.logger.debug(`trackSubscriptions size after adding: ${this.trackSubscriptions.size}`);
+      this.logger.debug(`Successfully subscribed to video track ${trackKey} with alias ${trackAlias}`);
       
       // Log all current track subscriptions
       if (this.trackSubscriptions.size > 0) {
-        this.logger('Current track subscriptions:', 'info');
+        this.logger.info('Current track subscriptions:');
         this.trackSubscriptions.forEach((alias, key) => {
-          this.logger(`  - ${key}: ${alias}`, 'info');
+          this.logger.info(`  - ${key}: ${alias}`);
         });
       }
       
       // Track subscriptions are managed through the trackSubscriptions map
       // Unsubscribing will be handled in the stopPlayback method
     } catch (error) {
-      this.logger(`Error subscribing to video track ${trackKey}: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      this.logger.error(`Error subscribing to video track ${trackKey}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   }
@@ -1625,7 +1644,7 @@ export class Player {
    */
   private async subscribeToTrack(track: WarpTrack): Promise<void> {
     if (!this.client || !this.connection) {
-      this.logger('Cannot subscribe to track: Not connected', 'error');
+      this.logger.error('Cannot subscribe to track: Not connected');
       return;
     }
 
@@ -1633,25 +1652,22 @@ export class Player {
       const namespace = track.namespace || '';
       const trackName = track.name;
       
-      this.logger(`Subscribing to track: ${namespace}/${trackName}`, 'info');
-      
-      // Log that we're generating a new request ID for this subscription
-      this.logger('Generating new request ID for track subscription', 'info');
+      this.logger.info(`Subscribing to track: ${namespace}/${trackName}`);
       
       // Subscribe to the track
       // The client.subscribeTrack method will internally call getNextRequestId()
       // to ensure a unique request ID is used for this subscription
       const trackAlias = await this.client.subscribeTrack(namespace, trackName, (obj: { data: ArrayBuffer }) => {
-        this.logger(`Received object for track ${trackName} with size ${obj.data.byteLength} bytes`, 'info');
+        this.logger.debug(`Received object for track ${trackName} with size ${obj.data.byteLength} bytes`);
         // Here you would handle the track data, e.g., decode and play video/audio
       });
       
       // Store the subscription
       this.trackSubscriptions.set(`${namespace}/${trackName}`, trackAlias);
-      this.logger(`Subscribed to track ${namespace}/${trackName} with alias ${trackAlias}`, 'success');
+      this.logger.info(`Subscribed to track ${namespace}/${trackName} with alias ${trackAlias}`);
       
     } catch (error) {
-      this.logger(`Error subscribing to track: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      this.logger.error(`Error subscribing to track: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1661,51 +1677,51 @@ export class Player {
    * This will share the video element and MediaSource with the video track
    */
   private setupAudioPlayback(track: WarpTrack): void {
-    this.logger('setupAudioPlayback called', 'info');
+    this.logger.debug('setupAudioPlayback called');
     
     // Store the audio track reference
     this.audioTrack = track;
     
     // Log audio track information
-    this.logger(`Setting up audio playback for track: ${track.name}`, 'info');
-    this.logger(`Audio codec: ${track.codec || 'mp4a.40.2'}`, 'info');
-    this.logger(`Audio MIME type: ${track.mimeType || 'audio/mp4'}`, 'info');
+    this.logger.info(`Setting up audio playback for track: ${track.name}`);
+    this.logger.info(`Audio codec: ${track.codec || 'mp4a.40.2'}`);
+    this.logger.info(`Audio MIME type: ${track.mimeType || 'audio/mp4'}`);
     
     if (track.samplerate) {
-      this.logger(`Audio sample rate: ${track.samplerate} Hz`, 'info');
+      this.logger.info(`Audio sample rate: ${track.samplerate} Hz`);
     }
     
     if (track.channelConfig) {
-      this.logger(`Audio channels: ${track.channelConfig}`, 'info');
+      this.logger.info(`Audio channels: ${track.channelConfig}`);
     }
     
     // Create media buffer and segment buffer for audio
     this.audioMediaBuffer = new MediaBuffer();
     this.audioMediaSegmentBuffer = new MediaSegmentBuffer({
       onSegmentReady: (segment) => {
-        this.logger(`[AudioMediaSegmentBuffer] Segment ready with baseMediaDecodeTime: ${segment.trackInfo.baseMediaDecodeTime}, timescale: ${segment.trackInfo.timescale}`, 'info');
+        this.logger.debug(`[AudioMediaSegmentBuffer] Segment ready with baseMediaDecodeTime: ${segment.trackInfo.baseMediaDecodeTime}, timescale: ${segment.trackInfo.timescale}`);
       }
     });
     
     // Get the video element (we'll use the same element for both audio and video)
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     if (!videoEl) {
-      this.logger('Video element not found, cannot setup audio', 'error');
+      this.logger.error('Video element not found, cannot setup audio');
       return;
     }
     
     // Check if MediaSource is already open (from video setup)
     if (!videoEl.src || !videoEl.src.startsWith('blob:')) {
-      this.logger('MediaSource not set up yet (no blob URL). Audio setup should happen after video setup.', 'warn');
+      this.logger.info('MediaSource not set up yet (no blob URL). Audio setup should happen after video setup.');
       return;
     }
     
     // Check if the MediaSource is open and ready for adding source buffers
     if (this.sharedMediaSource?.readyState === 'open') {
-      this.logger('[SharedMediaSource] MediaSource is open, setting up audio source buffer', 'info');
+      this.logger.info('[SharedMediaSource] MediaSource is open, setting up audio source buffer');
       this.setupAudioSourceBuffer();
     } else {
-      this.logger('[SharedMediaSource] MediaSource not open yet, audio source buffer will be set up when MediaSource opens', 'info');
+      this.logger.warn('[SharedMediaSource] MediaSource not open yet, audio source buffer will be set up when MediaSource opens');
       // The video sourceopen handler will call setupAudioSourceBuffer
     }
   }
@@ -1716,44 +1732,44 @@ export class Player {
    */
   private setupAudioSourceBuffer(): void {
     if (!this.audioTrack) {
-      this.logger('[AudioSourceBuffer] No audio track available for setup', 'error');
+      this.logger.error('[AudioSourceBuffer] No audio track available for setup');
       return;
     }
     
     if (!this.sharedMediaSource) {
-      this.logger('[AudioSourceBuffer] Shared MediaSource not initialized', 'error');
+      this.logger.error('[AudioSourceBuffer] Shared MediaSource not initialized');
       return;
     }
     
     if (this.sharedMediaSource.readyState !== 'open') {
-      this.logger(`[AudioSourceBuffer] Cannot add audio source buffer - MediaSource is in state: ${this.sharedMediaSource.readyState}`, 'error');
+      this.logger.error(`[AudioSourceBuffer] Cannot add audio source buffer - MediaSource is in state: ${this.sharedMediaSource.readyState}`);
       return;
     }
     
     if (this.audioSourceBuffer) {
-      this.logger('[AudioSourceBuffer] Audio source buffer already initialized', 'warn');
+      this.logger.warn('[AudioSourceBuffer] Audio source buffer already initialized');
       return;
     }
     
     // Create audio source buffer
     const audioMimeType = `audio/mp4; codecs="${this.audioTrack.codec || 'mp4a.40.2'}"`;
-    this.logger(`[AudioSourceBuffer] Using audio mimeType: ${audioMimeType}`, 'info');
+    this.logger.info(`[AudioSourceBuffer] Using audio mimeType: ${audioMimeType}`);
     
     try {
       this.audioSourceBuffer = this.sharedMediaSource.addSourceBuffer(audioMimeType);
-      this.logger('[AudioSourceBuffer] Created successfully', 'info');
+      this.logger.info('[AudioSourceBuffer] Created successfully');
     } catch (e) {
-      this.logger(`[AudioSourceBuffer] Could not add audio source buffer: ${e}`, 'error');
+      this.logger.error(`[AudioSourceBuffer] Could not add audio source buffer: ${e}`);
       return;
     }
     
     // Set up event listeners for audio source buffer
     this.audioSourceBuffer.addEventListener('error', (e) => {
-      this.logger(`[AudioSourceBuffer] ERROR: ${e}`, 'error');
+      this.logger.error(`[AudioSourceBuffer] ERROR: ${e}`);
     });
     
     this.audioSourceBuffer.addEventListener('abort', () => {
-      this.logger('[AudioSourceBuffer] ABORT event', 'error');
+      this.logger.error('[AudioSourceBuffer] ABORT event');
     });
     
     this.audioSourceBuffer.addEventListener('update', () => {
@@ -1766,15 +1782,15 @@ export class Player {
         for (let i = 0; i < (this.audioSourceBuffer?.buffered.length || 0); i++) {
           ranges.push(`[${this.audioSourceBuffer?.buffered.start(i).toFixed(2) || '?'} - ${this.audioSourceBuffer?.buffered.end(i).toFixed(2) || '?'}]`);
         }
-        this.logger(`[AudioSourceBuffer] Buffered ranges: ${ranges.join(', ')}`, 'info');
+        this.logger.debug(`[AudioSourceBuffer] Buffered ranges: ${ranges.join(', ')}`);
       } catch (e) {
-        this.logger(`[AudioSourceBuffer] Error reading buffered ranges: ${e}`, 'error');
+        this.logger.error(`[AudioSourceBuffer] Error reading buffered ranges: ${e}`);
       }
     });
     
     // Set the audio source buffer in the media segment buffer
     if (!this.audioMediaSegmentBuffer) {
-      this.logger('[AudioSourceBuffer] Audio media segment buffer not initialized', 'error');
+      this.logger.error('[AudioSourceBuffer] Audio media segment buffer not initialized');
       return;
     }
     
@@ -1782,33 +1798,33 @@ export class Player {
     
     // Process audio init segment if available
     if (!this.audioTrack.initData) {
-      this.logger('[AudioInitSegment] No initData found for audio track', 'error');
+      this.logger.error('[AudioInitSegment] No initData found for audio track');
       return;
     }
     
     try {
       const audioInitSegment = this.base64ToArrayBuffer(this.audioTrack.initData);
-      this.logger(`[AudioInitSegment] Decoded init segment: ${audioInitSegment.byteLength} bytes`, 'info');
+      this.logger.info(`[AudioInitSegment] Decoded init segment: ${audioInitSegment.byteLength} bytes`);
       
       if (!this.audioMediaBuffer) {
-        this.logger('[AudioMediaBuffer] Audio media buffer not initialized', 'error');
+        this.logger.info('[AudioMediaBuffer] Audio media buffer not initialized');
         return;
       }
       
       // Parse the init segment to get timing info
       const audioTrackInfo = this.audioMediaBuffer.parseInitSegment(audioInitSegment);
-      this.logger(`[AudioMediaBuffer] Parsed init segment, timescale: ${audioTrackInfo.timescale}`, 'info');
+      this.logger.info(`[AudioMediaBuffer] Parsed init segment, timescale: ${audioTrackInfo.timescale}`);
       
       // Add to MediaSegmentBuffer and process
       const audioInitSegmentObj = this.audioMediaSegmentBuffer.addInitSegment(audioInitSegment);
       this.audioMediaSegmentBuffer.appendToSourceBuffer(audioInitSegmentObj);
       
-      this.logger('[AudioInitSegment] Added audio CMAF init segment to MediaSegmentBuffer and SourceBuffer', 'success');
+      this.logger.info('[AudioInitSegment] Added audio CMAF init segment to MediaSegmentBuffer and SourceBuffer');
       
       // Subscribe to the audio track now that we're ready to receive data
       this.subscribeToAudioTrack();
     } catch (e) {
-      this.logger(`[AudioInitSegment] Failed to process audio CMAF init segment: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      this.logger.error(`[AudioInitSegment] Failed to process audio CMAF init segment: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -1818,7 +1834,7 @@ export class Player {
    */
   private subscribeToAudioTrack(): void {
     if (!this.audioTrack) {
-      this.logger('[AudioTrackSubscription] No audio track to subscribe to', 'error');
+      this.logger.error('[AudioTrackSubscription] No audio track to subscribe to');
       return;
     }
     
@@ -1826,10 +1842,10 @@ export class Player {
     const trackName = this.audioTrack.name;
     const trackKey = `${namespace}/${trackName}`;
     
-    this.logger(`[AudioTrackSubscription] Subscribing to audio track: ${trackKey}`, 'info');
+    this.logger.info(`[AudioTrackSubscription] Subscribing to audio track: ${trackKey}`);
     
     if (!this.client) {
-      this.logger('[AudioTrackSubscription] Client not initialized', 'error');
+      this.logger.error('[AudioTrackSubscription] Client not initialized');
       return;
     }
     
@@ -1838,7 +1854,7 @@ export class Player {
       try {
         // Check if we have a valid data object
         if (!obj.data) {
-          this.logger('[AudioMediaBuffer] Received null or undefined data', 'error');
+          this.logger.error('[AudioMediaBuffer] Received null or undefined data');
           return;
         }
         
@@ -1880,19 +1896,19 @@ export class Player {
           } catch (e) {
             // Ignore any errors when trying to access constructor
           }
-          this.logger(`[AudioMediaBuffer] Received invalid data type: ${type} (${constructorName})`, 'error');
+          this.logger.info(`[AudioMediaBuffer] Received invalid data type: ${type} (${constructorName})`);
           return;
         }
         
         // Check if the ArrayBuffer is empty
         if (arrayBuffer.byteLength === 0) {
-          this.logger('[AudioMediaBuffer] Received empty ArrayBuffer (zero bytes)', 'error');
+          this.logger.warn('[AudioMediaBuffer] Received empty ArrayBuffer (zero bytes)');
           return;
         }
 
         // Make sure audio buffers are initialized
         if (!this.audioMediaBuffer || !this.audioMediaSegmentBuffer) {
-          this.logger('[AudioMediaBuffer] Audio buffers not initialized', 'error');
+          this.logger.error('[AudioMediaBuffer] Audio buffers not initialized');
           return;
         }
 
@@ -1916,13 +1932,13 @@ export class Player {
         
         // Log timing information periodically (not for every segment to avoid too much logging)
         if (Math.random() < 0.1) { // Log approximately 10% of segments
-          this.logger(`[AudioMediaBuffer] Processed segment with baseMediaDecodeTime: ${trackInfo.baseMediaDecodeTime}, timescale: ${trackInfo.timescale}`, 'info');
+          this.logger.debug(`[AudioMediaBuffer] Processed segment with baseMediaDecodeTime: ${trackInfo.baseMediaDecodeTime}, timescale: ${trackInfo.timescale}`);
           
           // If we have both audio and video buffers, log their states
           if (this.videoMediaSegmentBuffer && this.audioMediaSegmentBuffer) {
             const videoDuration = this.videoMediaSegmentBuffer.getBufferDuration();
             const audioDuration = this.audioMediaSegmentBuffer.getBufferDuration();
-            this.logger(`[Buffer] Video duration: ${videoDuration.toFixed(2)}s, Audio duration: ${audioDuration.toFixed(2)}s, Objects - Video: ${this.videoObjectsReceived}, Audio: ${this.audioObjectsReceived}`, 'info');
+            this.logger.debug(`[Buffer] Video duration: ${videoDuration.toFixed(2)}s, Audio duration: ${audioDuration.toFixed(2)}s, Objects - Video: ${this.videoObjectsReceived}, Audio: ${this.audioObjectsReceived}`);
           }
         }
         
@@ -1933,14 +1949,14 @@ export class Player {
           
           if (bufferDurationMs >= this.targetBufferDurationMs) {
             this.audioBufferReady = true;
-            this.logger(`[Audio] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.audioObjectsReceived} objects), target: ${this.targetBufferDurationMs}ms`, 'info');
+            this.logger.debug(`[Audio] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.audioObjectsReceived} objects), target: ${this.targetBufferDurationMs}ms`);
             
             // Check if we can start playback (depends on video buffer state too)
             this.checkBuffersAndStartPlayback();
           }
         }
       } catch (e) {
-        this.logger(`[AudioMediaBuffer] Error processing audio segment: ${e instanceof Error ? e.message : String(e)}`, 'error');
+        this.logger.error(`[AudioMediaBuffer] Error processing audio segment: ${e instanceof Error ? e.message : String(e)}`);
       }
     };
     
@@ -1948,10 +1964,10 @@ export class Player {
     this.client.subscribeTrack(namespace, trackName, onAudioObject)
       .then((trackAlias) => {
         this.trackSubscriptions.set(trackKey, trackAlias);
-        this.logger(`[AudioTrackSubscription] Successfully subscribed to audio track ${trackKey} with alias ${trackAlias}`, 'success');
+        this.logger.info(`[AudioTrackSubscription] Successfully subscribed to audio track ${trackKey} with alias ${trackAlias}`);
       })
       .catch((error) => {
-        this.logger(`[AudioTrackSubscription] Error subscribing to audio track ${trackKey}: ${error instanceof Error ? error.message : String(error)}`, 'error');
+        this.logger.error(`[AudioTrackSubscription] Error subscribing to audio track ${trackKey}: ${error instanceof Error ? error.message : String(error)}`);
       });
   }
 
@@ -1967,39 +1983,39 @@ export class Player {
     
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     if (!videoEl) {
-      this.logger('[Sync] Video element not found', 'error');
+      this.logger.error('[Sync] Video element not found');
       return;
     }
     
     // Check for case where only video track is available (no audio)
     if (!this.audioTrack && this.videoBufferReady) {
-      this.logger('[Sync] Only video track available, starting playback', 'info');
+      this.logger.info('[Sync] Only video track available, starting playback');
       this.startVideoOnlyPlayback(videoEl);
       return;
     }
     
     // Check for case where only audio track is available (no video)
     if (!this.videoTrack && this.audioBufferReady) {
-      this.logger('[Sync] Only audio track available, starting playback', 'info');
+      this.logger.info('[Sync] Only audio track available, starting playback');
       this.startAudioOnlyPlayback(videoEl);
       return;
     }
     
     // If both tracks are available, we need both buffers to be ready
     if (this.videoBufferReady && this.audioBufferReady) {
-      this.logger('[Sync] Both audio and video buffers are ready, starting synchronized playback', 'info');
+      this.logger.info('[Sync] Both audio and video buffers are ready, starting synchronized playback');
       this.startSynchronizedPlayback(videoEl);
     }
     else {
       // Log the buffer status
-      this.logger(`[Sync] Buffers not ready yet - Video: ${this.videoBufferReady ? 'Ready' : 'Not ready'}, Audio: ${this.audioBufferReady ? 'Ready' : 'Not ready'}`, 'info');
+      this.logger.warn(`[Sync] Buffers not ready yet - Video: ${this.videoBufferReady ? 'Ready' : 'Not ready'}, Audio: ${this.audioBufferReady ? 'Ready' : 'Not ready'}`);
       
       if (this.videoMediaSegmentBuffer && this.audioMediaSegmentBuffer) {
         const videoDuration = this.videoMediaSegmentBuffer.getBufferDuration();
         const audioDuration = this.audioMediaSegmentBuffer.getBufferDuration();
         const videoMs = videoDuration * 1000;
         const audioMs = audioDuration * 1000;
-        this.logger(`[Sync] Buffer duration - Video: ${videoDuration.toFixed(2)}s (${videoMs.toFixed(0)}ms), Audio: ${audioDuration.toFixed(2)}s (${audioMs.toFixed(0)}ms), Target: ${this.targetBufferDurationMs}ms`, 'info');
+        this.logger.info(`[Sync] Buffer duration - Video: ${videoDuration.toFixed(2)}s (${videoMs.toFixed(0)}ms), Audio: ${audioDuration.toFixed(2)}s (${audioMs.toFixed(0)}ms), Target: ${this.targetBufferDurationMs}ms`);
       }
     }
   }
@@ -2009,12 +2025,12 @@ export class Player {
    */
   private startVideoOnlyPlayback(videoEl: HTMLVideoElement): void {
     if (!this.videoSourceBuffer) {
-      this.logger('[Sync] Video source buffer not initialized', 'error');
+      this.logger.error('[Sync] Video source buffer not initialized');
       return;
     }
     
     if (this.videoSourceBuffer.buffered.length === 0) {
-      this.logger('[Sync] Video buffer is empty, cannot start playback', 'error');
+      this.logger.error('[Sync] Video buffer is empty, cannot start playback');
       return;
     }
     
@@ -2025,10 +2041,10 @@ export class Player {
     videoEl.play()
       .then(() => {
         this.playbackStarted = true;
-        this.logger('[Sync] Video-only playback started successfully', 'success');
+        this.logger.info('[Sync] Video-only playback started successfully');
       })
       .catch((e) => {
-        this.logger(`[Sync] Error starting video-only playback: ${e}`, 'error');
+        this.logger.error(`[Sync] Error starting video-only playback: ${e}`);
       });
   }
   
@@ -2037,12 +2053,12 @@ export class Player {
    */
   private startAudioOnlyPlayback(videoEl: HTMLVideoElement): void {
     if (!this.audioSourceBuffer) {
-      this.logger('[Sync] Audio source buffer not initialized', 'error');
+      this.logger.error('[Sync] Audio source buffer not initialized');
       return;
     }
     
     if (this.audioSourceBuffer.buffered.length === 0) {
-      this.logger('[Sync] Audio buffer is empty, cannot start playback', 'error');
+      this.logger.error('[Sync] Audio buffer is empty, cannot start playback');
       return;
     }
     
@@ -2053,10 +2069,10 @@ export class Player {
     videoEl.play()
       .then(() => {
         this.playbackStarted = true;
-        this.logger('[Sync] Audio-only playback started successfully', 'success');
+        this.logger.info('[Sync] Audio-only playback started successfully');
       })
       .catch((e) => {
-        this.logger(`[Sync] Error starting audio-only playback: ${e}`, 'error');
+        this.logger.error(`[Sync] Error starting audio-only playback: ${e}`);
       });
   }
   
@@ -2065,12 +2081,12 @@ export class Player {
    */
   private startSynchronizedPlayback(videoEl: HTMLVideoElement): void {
     if (!this.videoSourceBuffer || !this.audioSourceBuffer) {
-      this.logger('[Sync] Source buffers not initialized', 'error');
+      this.logger.error('[Sync] Source buffers not initialized');
       return;
     }
     
     if (this.videoSourceBuffer.buffered.length === 0 || this.audioSourceBuffer.buffered.length === 0) {
-      this.logger('[Sync] One or both buffers are empty, cannot start playback', 'error');
+      this.logger.error('[Sync] One or both buffers are empty, cannot start playback');
       return;
     }
     
@@ -2086,11 +2102,11 @@ export class Player {
       const commonEnd = Math.min(videoEnd, audioEnd);
       
       if (commonStart >= commonEnd) {
-        this.logger(`[Sync] No common buffered range - Video: [${videoStart.toFixed(2)}-${videoEnd.toFixed(2)}], Audio: [${audioStart.toFixed(2)}-${audioEnd.toFixed(2)}]`, 'error');
+        this.logger.error(`[Sync] No common buffered range - Video: [${videoStart.toFixed(2)}-${videoEnd.toFixed(2)}], Audio: [${audioStart.toFixed(2)}-${audioEnd.toFixed(2)}]`);
         return;
       }
       
-      this.logger(`[Sync] Common buffered range: [${commonStart.toFixed(2)}-${commonEnd.toFixed(2)}]`, 'info');
+      this.logger.info(`[Sync] Common buffered range: [${commonStart.toFixed(2)}-${commonEnd.toFixed(2)}]`);
       
       // Set the current time to the common start plus a small offset
       // This ensures we have some buffer ahead and avoids potential timing issues
@@ -2099,7 +2115,7 @@ export class Player {
       
       // Make sure we don't exceed the common end
       if (playbackStartTime >= commonEnd) {
-        this.logger(`[Sync] Start position (${playbackStartTime.toFixed(2)}) exceeds common range end (${commonEnd.toFixed(2)})`, 'error');
+        this.logger.error(`[Sync] Start position (${playbackStartTime.toFixed(2)}) exceeds common range end (${commonEnd.toFixed(2)})`);
         return;
       }
       
@@ -2108,14 +2124,14 @@ export class Player {
       
       // Add event listener for stalled events
       videoEl.addEventListener('stalled', () => {
-        this.logger('[Playback] Stalled event detected', 'warn');
+        this.logger.warn('[Playback] Stalled event detected');
         this.playbackStalled = true;
         this.recoverFromBufferUnderrun();
       });
       
       // Add event listener for waiting events
       videoEl.addEventListener('waiting', () => {
-        this.logger('[Playback] Waiting for data', 'warn');
+        this.logger.warn('[Playback] Waiting for data');
         // No immediate recovery action for waiting, just log
       });
       
@@ -2129,15 +2145,15 @@ export class Player {
       videoEl.play()
         .then(() => {
           this.playbackStarted = true;
-          this.logger(`[Sync] Synchronized playback started at ${playbackStartTime.toFixed(2)}s`, 'success');
+          this.logger.info(`[Sync] Synchronized playback started at ${playbackStartTime.toFixed(2)}s`);
         })
         .catch((e) => {
-          this.logger(`[Sync] Error starting synchronized playback: ${e}`, 'error');
+          this.logger.error(`[Sync] Error starting synchronized playback: ${e}`);
           // Attempt generic recovery since play() failed
           this.attemptGenericRecovery();
         });
     } catch (e) {
-      this.logger(`[Sync] Error setting up synchronized playback: ${e}`, 'error');
+      this.logger.error(`[Sync] Error setting up synchronized playback: ${e}`);
     }
   }
   
@@ -2145,8 +2161,10 @@ export class Player {
    * Monitor and maintain audio-video synchronization
    */
   private monitorSync(): void {
-    // This method will be called on the timeupdate event
-    // Don't execute too frequently to avoid excessive logging and processing
+    // Always update the UI indicators every time this function is called
+    this.updateBufferLevelUI();
+    
+    // For the sync logic, don't execute too frequently to avoid excessive processing
     if (Math.random() > 0.05) { // Only execute about 5% of the time
       return;
     }
@@ -2183,9 +2201,13 @@ export class Player {
         }
       }
       
+      // Store buffer levels for UI updating
+      this.lastVideoBufferAhead = videoBufferAhead;
+      this.lastAudioBufferAhead = audioBufferAhead;
+      
       // Log buffer ahead information (but not too frequently)
       if (Math.random() < 0.2) { // Only log about 20% of the time within that 5% sample
-        this.logger(`[Sync] Buffer ahead - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s`, 'info');
+        this.logger.info(`[Sync] Buffer ahead - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s`);
       }
       
       // Check buffer health and attempt recovery if needed
@@ -2206,26 +2228,122 @@ export class Player {
             const newRate = Math.max(normalPlaybackRate - maxAdjustment, 0.9);
             if (videoEl.playbackRate !== newRate) {
               videoEl.playbackRate = newRate;
-              this.logger(`[Sync] Slowing down playback to ${newRate.toFixed(2)}x to help sync`, 'info');
+              this.logger.info(`[Sync] Slowing down playback to ${newRate.toFixed(2)}x to help sync`);
             }
           } else {
             // Audio is ahead, speed up slightly
             const newRate = Math.min(normalPlaybackRate + maxAdjustment, 1.1);
             if (videoEl.playbackRate !== newRate) {
               videoEl.playbackRate = newRate;
-              this.logger(`[Sync] Speeding up playback to ${newRate.toFixed(2)}x to help sync`, 'info');
+              this.logger.info(`[Sync] Speeding up playback to ${newRate.toFixed(2)}x to help sync`);
             }
           }
         } else {
           // Buffers are close enough, use normal playback rate
           if (videoEl.playbackRate !== normalPlaybackRate && !this.playbackStalled) {
             videoEl.playbackRate = normalPlaybackRate;
-            this.logger(`[Sync] Restored normal playback rate`, 'info');
+            this.logger.info(`[Sync] Restored normal playback rate`);
           }
         }
       }
     } catch (e) {
-      this.logger(`[Sync] Error monitoring synchronization: ${e}`, 'error');
+      this.logger.error(`[Sync] Error monitoring synchronization: ${e}`);
+    }
+  }
+  
+  // Track buffer levels for UI display
+  private lastVideoBufferAhead: number = 0;
+  private lastAudioBufferAhead: number = 0;
+  private lastUpdateTime: number = 0;
+  
+  /**
+   * Update the buffer level and playback latency UI elements
+   */
+  private updateBufferLevelUI(): void {
+    const now = Date.now();
+    
+    // Only update the UI about twice per second
+    if (now - this.lastUpdateTime < 500) {
+      return;
+    }
+    
+    this.lastUpdateTime = now;
+    
+    // Get video element
+    const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
+    if (!videoEl) {
+      return;
+    }
+    
+    try {
+      // Convert target buffer from ms to seconds for comparison
+      const targetBufferMs = this.targetBufferDurationMs;
+      
+      // Update video buffer level display
+      const videoBufferEl = document.getElementById('videoBufferLevel');
+      if (videoBufferEl) {
+        const videoBufferMs = Math.round(this.lastVideoBufferAhead * 1000);
+        videoBufferEl.textContent = this.videoSourceBuffer ? `${videoBufferMs} ms` : 'N/A';
+        
+        // Add color coding based on comparison to target buffer
+        // Red if more than 50% above or 25% below the target value
+        if (this.videoSourceBuffer) {
+          const bufferRatio = videoBufferMs / targetBufferMs;
+          
+          if (bufferRatio > 1.5 || bufferRatio < 0.75) {
+            videoBufferEl.style.backgroundColor = '#ffebee'; // Light red for out of optimal range
+          } else {
+            videoBufferEl.style.backgroundColor = '#e3f2fd'; // Default blue for good buffer
+          }
+        } else {
+          videoBufferEl.style.backgroundColor = '#f5f5f5'; // Gray for inactive
+        }
+      }
+      
+      // Update audio buffer level display
+      const audioBufferEl = document.getElementById('audioBufferLevel');
+      if (audioBufferEl) {
+        const audioBufferMs = Math.round(this.lastAudioBufferAhead * 1000);
+        audioBufferEl.textContent = this.audioSourceBuffer ? `${audioBufferMs} ms` : 'N/A';
+        
+        // Add color coding based on comparison to target buffer
+        // Red if more than 50% above or 25% below the target value
+        if (this.audioSourceBuffer) {
+          const bufferRatio = audioBufferMs / targetBufferMs;
+          
+          if (bufferRatio > 1.5 || bufferRatio < 0.75) {
+            audioBufferEl.style.backgroundColor = '#ffebee'; // Light red for out of optimal range
+          } else {
+            audioBufferEl.style.backgroundColor = '#e8f5e9'; // Default green for good buffer
+          }
+        } else {
+          audioBufferEl.style.backgroundColor = '#f5f5f5'; // Gray for inactive
+        }
+      }
+      
+      // Calculate and update playback latency
+      const playbackLatencyEl = document.getElementById('playbackLatency');
+      if (playbackLatencyEl) {
+        if (this.playbackStarted) {
+        // Calculate playback latency (now - videoEl.currentTime)
+        // Latency is the difference between wall clock time and playback time
+        // This is always positive in our real-time streaming scenario
+        if (videoEl) {
+          // Calculate estimated latency in milliseconds given that the media time
+          // is synchronized with UTC time
+          const latencyMs = Math.round(now - videoEl.currentTime*1000);
+          playbackLatencyEl.textContent = `${latencyMs} ms`;
+          
+          // No variable coloring for latency since we don't know transport latency
+          playbackLatencyEl.style.backgroundColor = '#fff3e0'; // Default orange background
+        }
+      } else {
+          playbackLatencyEl.textContent = 'N/A';
+          playbackLatencyEl.style.backgroundColor = '#f5f5f5'; // Gray for inactive
+        }
+      }
+    } catch (e) {
+      this.logger.error(`[UI] Error updating buffer level UI: ${e}`);
     }
   }
 

@@ -1,36 +1,6 @@
-import { ObjectCallback } from './tracks';
+import { ILogger, LoggerFactory } from '../logger';
 
-// Logger for track alias registry operations
-const logger = {
-  log: (message: string, ...args: any[]) => {
-    console.log(`[MoQ TrackAliasRegistry] ${message}`, ...args);
-    // Dispatch a custom event that our UI can listen to
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'info', message: `[TrackAliasRegistry] ${message}` }
-      });
-      window.dispatchEvent(event);
-    }
-  },
-  warn: (message: string, ...args: any[]) => {
-    console.warn(`[MoQ TrackAliasRegistry] ${message}`, ...args);
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'warn', message: `[TrackAliasRegistry] ${message}` }
-      });
-      window.dispatchEvent(event);
-    }
-  },
-  error: (message: string, ...args: any[]) => {
-    console.error(`[MoQ TrackAliasRegistry] ${message}`, ...args);
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'error', message: `[TrackAliasRegistry] ${message}` }
-      });
-      window.dispatchEvent(event);
-    }
-  }
-};
+import { ObjectCallback } from './tracks';
 
 // Interface for track information
 export interface TrackInfo {
@@ -54,6 +24,13 @@ export class TrackAliasRegistry {
   
   // Counter for generating unique track aliases
   private nextTrackAlias: bigint = 1n;
+  
+  // Logger instance
+  private logger: ILogger;
+
+  constructor() {
+    this.logger = LoggerFactory.getInstance().getLogger('TrackRegistry');
+  }
   
   /**
    * Generate a key for namespace+trackName
@@ -81,7 +58,7 @@ export class TrackAliasRegistry {
       if (!info) {
         throw new Error(`Track info for ${namespace}:${trackName} not found despite being registered`);
       }
-      logger.log(`Track ${namespace}:${trackName} already registered with alias ${info.trackAlias} and requestId ${info.requestId}`);
+      this.logger.info(`Track ${namespace}:${trackName} already registered with alias ${info.trackAlias} and requestId ${info.requestId}`);
       return info.trackAlias;
     }
     
@@ -107,7 +84,7 @@ export class TrackAliasRegistry {
     this.trackNameToInfo.set(key, info);
     this.trackAliasToInfo.set(trackAlias.toString(), info);
     
-    logger.log(`Registered new track ${namespace}:${trackName} with alias ${trackAlias} and request ID ${requestId}`);
+    this.logger.info(`Registered new track ${namespace}:${trackName} with alias ${trackAlias} and request ID ${requestId}`);
     return trackAlias;
   }
   
@@ -133,12 +110,12 @@ export class TrackAliasRegistry {
     const info = this.trackAliasToInfo.get(trackAlias.toString());
     
     if (!info) {
-      logger.warn(`Attempted to register callback for unknown track alias ${trackAlias}`);
+      this.logger.warn(`Attempted to register callback for unknown track alias ${trackAlias}`);
       return;
     }
     
     info.callbacks.push(callback);
-    logger.log(`Registered callback for track ${info.namespace}:${info.trackName} (alias: ${trackAlias}), total callbacks: ${info.callbacks.length}`);
+    this.logger.info(`Registered callback for track ${info.namespace}:${info.trackName} (alias: ${trackAlias}), total callbacks: ${info.callbacks.length}`);
   }
   
   /**
@@ -148,14 +125,14 @@ export class TrackAliasRegistry {
     const info = this.trackAliasToInfo.get(trackAlias.toString());
     
     if (!info) {
-      logger.warn(`Attempted to unregister callback for unknown track alias ${trackAlias}`);
+      this.logger.warn(`Attempted to unregister callback for unknown track alias ${trackAlias}`);
       return;
     }
     
     const index = info.callbacks.indexOf(callback);
     if (index !== -1) {
       info.callbacks.splice(index, 1);
-      logger.log(`Unregistered callback for track ${info.namespace}:${info.trackName} (alias: ${trackAlias}), remaining callbacks: ${info.callbacks.length}`);
+      this.logger.info(`Unregistered callback for track ${info.namespace}:${info.trackName} (alias: ${trackAlias}), remaining callbacks: ${info.callbacks.length}`);
     }
   }
   
@@ -166,13 +143,13 @@ export class TrackAliasRegistry {
     const info = this.trackAliasToInfo.get(trackAlias.toString());
     
     if (!info) {
-      logger.warn(`Attempted to unregister all callbacks for unknown track alias ${trackAlias}`);
+      this.logger.warn(`Attempted to unregister all callbacks for unknown track alias ${trackAlias}`);
       return;
     }
     
     const callbackCount = info.callbacks.length;
     info.callbacks = [];
-    logger.log(`Unregistered all ${callbackCount} callbacks for track ${info.namespace}:${info.trackName} (alias: ${trackAlias})`);
+    this.logger.info(`Unregistered all ${callbackCount} callbacks for track ${info.namespace}:${info.trackName} (alias: ${trackAlias})`);
   }
   
   /**
@@ -190,6 +167,6 @@ export class TrackAliasRegistry {
     this.trackNameToInfo.clear();
     this.trackAliasToInfo.clear();
     this.nextTrackAlias = 1n;
-    logger.log('Cleared all track registrations');
+    this.logger.info('Cleared all track registrations');
   }
 }

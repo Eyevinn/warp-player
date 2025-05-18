@@ -2,9 +2,9 @@
  * WARP catalog interface definitions and helper functions
  * Based on the WARP specification
  */
+import { ILogger, LoggerFactory } from './logger';
 
 // Types of callbacks used with catalogs
-type LoggerFunction = (message: string, type?: 'info' | 'success' | 'error' | 'warn') => void;
 type CatalogCallback = (catalog: WarpCatalog) => void;
 
 /**
@@ -40,15 +40,16 @@ export interface WarpTrack {
  */
 export class WarpCatalogManager {
   private catalogData: WarpCatalog | null = null;
-  private logger: LoggerFunction;
+  private logger: ILogger;
   private catalogCallback: CatalogCallback | null = null;
 
   /**
    * Create a new WarpCatalogManager
-   * @param logger Function to log messages
    */
-  constructor(logger: LoggerFunction) {
-    this.logger = logger;
+  constructor() {
+    // Get a logger for the Catalog component
+    this.logger = LoggerFactory.getInstance().getLogger('Catalog');
+    this.logger.info('WarpCatalogManager initialized');
   }
 
   /**
@@ -57,11 +58,11 @@ export class WarpCatalogManager {
    */
   public handleCatalogData(data: WarpCatalog): void {
     try {
-      this.logger('Received catalog data', 'info');
+      this.logger.info('Received catalog data');
       
       // Validate that the data is a WARP catalog
       if (!data || typeof data !== 'object' || !Array.isArray(data.tracks)) {
-        this.logger('Invalid catalog data format', 'error');
+        this.logger.error('Invalid catalog data format');
         return;
       }
       
@@ -69,22 +70,22 @@ export class WarpCatalogManager {
       this.catalogData = data;
       
       // Log the catalog information
-      this.logger(`Processing WARP catalog version ${data.version}`, 'info');
-      this.logger(`Found ${data.tracks.length} tracks in catalog`, 'info');
+      this.logger.info(`Processing WARP catalog version ${data.version}`);
+      this.logger.info(`Found ${data.tracks.length} tracks in catalog`);
       
       // Separate tracks by type
       const videoTracks = this.getTracksByType(data, 'video');
       const audioTracks = this.getTracksByType(data, 'audio');
       
       // Log summary of found tracks
-      this.logger(`Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`, 'success');
+      this.logger.info(`Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`);
       
       // Call the callback if set
       if (this.catalogCallback) {
         this.catalogCallback(data);
       }
     } catch (error) {
-      this.logger(`Error handling catalog data: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      this.logger.error(`Error handling catalog data: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

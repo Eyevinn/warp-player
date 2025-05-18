@@ -1,14 +1,19 @@
 import { Client } from './transport/client.js';
+import { LoggerFactory, LogLevel } from './logger';
 
 // Default server URL - can be changed via command line arguments
 const DEFAULT_SERVER_URL = 'https://localhost:4443';
 
+// Initialize logger
+const logger = LoggerFactory.getInstance().getLogger('Main');
+LoggerFactory.getInstance().setGlobalLogLevel(LogLevel.INFO);
+
 async function main() {
-  console.log('MoQ Player 2 - WebTransport Client');
+  logger.info('WARP Player - Eyevinn MoQ WARP CMAF player');
   
   // Get server URL from command line arguments or use default
   const serverUrl = process.argv[2] || DEFAULT_SERVER_URL;
-  console.log(`Using server URL: ${serverUrl}`);
+  logger.info(`Using server URL: ${serverUrl}`);
   
   try {
     // Create and connect the client
@@ -18,36 +23,36 @@ async function main() {
       // fingerprint: 'https://localhost:4443/fingerprint',
     });
     
-    console.log('Connecting to MoQ server...');
+    logger.info('Connecting to MoQ server...');
     const connection = await client.connect();
-    console.log('Connected to MoQ server successfully!');
+    logger.info('Connected to MoQ server successfully!');
     
     // Handle connection closure
     connection.closed().then((error) => {
-      console.log('Connection closed:', error.message);
+      logger.info(`Connection closed: ${error.message}`);
       process.exit(0);
     }).catch((error) => {
-      console.error('Connection error:', error);
+      logger.error(`Connection error: ${error}`);
       process.exit(1);
     });
     
     // Keep the process running
-    console.log('Press Ctrl+C to exit');
+    logger.info('Press Ctrl+C to exit');
     
   } catch (error) {
-    console.error('Error:', error);
+    logger.error(`Error: ${error}`);
     process.exit(1);
   }
 }
 
 // Handle process termination
 process.on('SIGINT', () => {
-  console.log('Received SIGINT. Shutting down...');
+  logger.info('Received SIGINT. Shutting down...');
   process.exit(0);
 });
 
 // Start the application
 main().catch(error => {
-  console.error('Unhandled error:', error);
+  logger.error(`Unhandled error: ${error}`);
   process.exit(1);
 });

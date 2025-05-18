@@ -36,7 +36,7 @@ module.exports = {
     }),
     new CopyWebpackPlugin({
       patterns: [
-        { from: 'src/eyevinn-technology-250px.png', to: 'eyevinn-technology-250px.png' }
+        { from: 'src/assets/images/eyevinn-technology-250px.png', to: 'eyevinn-technology-250px.png' }
       ],
     }),
   ],

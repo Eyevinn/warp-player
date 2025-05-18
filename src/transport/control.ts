@@ -1,37 +1,9 @@
 import { BufferCtrlWriter } from "./bufferctrlwriter";
 import { Reader, Writer, KeyValuePair } from "./stream";
+import { ILogger, LoggerFactory } from '../logger';
 
 // Logger for control message operations
-const logger = {
-  log: (message: string, ...args: any[]) => {
-    console.log(`[MoQ Control] ${message}`, ...args);
-    // Dispatch a custom event that our UI can listen to
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'info', message: `[Control] ${message}` }
-      });
-      window.dispatchEvent(event);
-    }
-  },
-  warn: (message: string, ...args: any[]) => {
-    console.warn(`[MoQ Control] ${message}`, ...args);
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'warn', message: `[Control] ${message}` }
-      });
-      window.dispatchEvent(event);
-    }
-  },
-  error: (message: string, ...args: any[]) => {
-    console.error(`[MoQ Control] ${message}`, ...args);
-    if (typeof window !== 'undefined') {
-      const event = new CustomEvent('moq-log', { 
-        detail: { type: 'error', message: `[Control] ${message}` }
-      });
-      window.dispatchEvent(event);
-    }
-  }
-};
+const controlLogger: ILogger = LoggerFactory.getInstance().getLogger('Control');
 
 export type Message = Subscriber | Publisher;
 
@@ -201,16 +173,16 @@ export class CtrlStream {
 
   // Will error if two messages are read at once.
   async recv(): Promise<Message> {
-    logger.log("Attempting to receive a control message...");
+    controlLogger.debug("Attempting to receive a control message...");
     const msg = await this.decoder.message();
-    logger.log("Received control message:", msg);
+    controlLogger.debug("Received control message:", msg);
     return msg;
   }
 
   async send(msg: Message): Promise<void> {
     const unlock = await this.#lock();
     try {
-      logger.log("Sending control message:", msg);
+      controlLogger.debug("Sending control message:", msg);
       await this.encoder.message(msg);
     } finally {
       unlock();
@@ -243,14 +215,14 @@ export class Decoder {
   }
 
   private async msg(): Promise<Msg> {
-    logger.log("Reading message type...");
+    controlLogger.debug("Reading message type...");
     const t = await this.r.u53();
-    logger.log(`Raw message type: 0x${t.toString(16)}`);
+    controlLogger.debug(`Raw message type: 0x${t.toString(16)}`);
 
     // Read the 16-bit MSB length field
     const lengthBytes = await this.r.read(2);
     const messageLength = (lengthBytes[0] << 8) | lengthBytes[1]; // MSB format
-    logger.log(`Message length (16-bit MSB): ${messageLength} bytes, actual length: ${this.r.getByteLength()}`);
+    controlLogger.debug(`Message length (16-bit MSB): ${messageLength} bytes, actual length: ${this.r.getByteLength()}`);
     
     let msgType: Msg;
     switch (t as Id) {
@@ -283,16 +255,16 @@ export class Decoder {
         break;
       default:
         const errorMsg = `Unknown message type: 0x${t.toString(16)}`;
-        logger.error(errorMsg);
+        controlLogger.error(errorMsg);
         throw new Error(errorMsg);
     }
 
-    logger.log(`Parsed message type: ${msgType} (0x${t.toString(16)})`);
+    controlLogger.debug(`Parsed message type: ${msgType} (0x${t.toString(16)})`);
     return msgType;
   }
 
   async message(): Promise<Message> {
-    logger.log("Parsing control message...");
+    controlLogger.debug("Parsing control message...");
     const t = await this.msg();
     
     let result: Message;
@@ -326,54 +298,54 @@ export class Decoder {
         break;
       default:
         const errorMsg = `Unsupported message type: ${(t as any).kind}`;
-        logger.error(errorMsg);
+        controlLogger.error(errorMsg);
         throw new Error(errorMsg);
     }
     
-    logger.log("Successfully parsed control message:", result);
+    controlLogger.debug("Successfully parsed control message:", result);
     return result;
   }
 
   private async subscribe(): Promise<Subscribe> {
-    logger.log("Parsing Subscribe message...");
+    controlLogger.debug("Parsing Subscribe message...");
     const requestId = await this.r.u62();
-    logger.log(`RequestID: ${requestId}`);
+    controlLogger.debug(`RequestID: ${requestId}`);
     
     const trackAlias = await this.r.u62();
-    logger.log(`TrackAlias: ${trackAlias}`);
+    controlLogger.debug(`TrackAlias: ${trackAlias}`);
     
     const namespace = await this.r.tuple();
-    logger.log(`Namespace: ${namespace.join('/')}`);
+    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
     
     const name = await this.r.string();
-    logger.log(`Name: ${name}`);
+    controlLogger.debug(`Name: ${name}`);
     
     const subscriber_priority = await this.r.u8();
-    logger.log(`Subscriber priority: ${subscriber_priority}`);
+    controlLogger.debug(`Subscriber priority: ${subscriber_priority}`);
     
     const group_order = await this.decodeGroupOrder();
-    logger.log(`Group order: ${group_order}`);
+    controlLogger.debug(`Group order: ${group_order}`);
 
     const forward = await this.r.u8Bool();
-    logger.log(`Forward: ${forward}`);
+    controlLogger.debug(`Forward: ${forward}`);
 
     const filterType = await this.r.u8();
-    logger.log(`Filter type: ${filterType}`);
+    controlLogger.debug(`Filter type: ${filterType}`);
     
     let startLocation: Location | undefined;
     if (filterType === FilterType.AbsoluteStart || filterType === FilterType.AbsoluteRange) {
       startLocation = await this.location();
-      logger.log(`Start Location: ${JSON.stringify(startLocation)}`);
+      controlLogger.debug(`Start Location: ${JSON.stringify(startLocation)}`);
     }
 
     let endGroup: bigint | undefined;
     if (filterType === FilterType.AbsoluteRange) {
       endGroup = await this.r.u62();
-      logger.log(`End group: ${endGroup}`);
+      controlLogger.debug(`End group: ${endGroup}`);
     }
 
     const params = await this.r.keyValuePairs();
-    logger.log(`Parameters: ${params.length}`);
+    controlLogger.debug(`Parameters: ${params.length}`);
     
     return {
       kind: Msg.Subscribe,
@@ -393,7 +365,7 @@ export class Decoder {
 
   private async decodeGroupOrder(): Promise<GroupOrder> {
     const orderCode = await this.r.u8();
-    logger.log(`Raw group order code: ${orderCode}`);
+    controlLogger.debug(`Raw group order code: ${orderCode}`);
     
     switch (orderCode) {
       case 0:
@@ -404,7 +376,7 @@ export class Decoder {
         return GroupOrder.Descending;
       default:
         const errorMsg = `Invalid GroupOrder value: ${orderCode}`;
-        logger.error(errorMsg);
+        controlLogger.error(errorMsg);
         throw new Error(errorMsg);
     }
   }
@@ -450,23 +422,23 @@ export class Decoder {
   }
 
   private async subscribe_ok(): Promise<SubscribeOk> {
-    logger.log("Parsing SubscribeOk message...");
+    controlLogger.debug("Parsing SubscribeOk message...");
     const requestId = await this.r.u62();
-    logger.log(`Request ID: ${requestId}`);
+    controlLogger.debug(`Request ID: ${requestId}`);
     
     const expires = await this.r.u62();
-    logger.log(`Expires: ${expires}`);
+    controlLogger.debug(`Expires: ${expires}`);
     
     const group_order = await this.decodeGroupOrder();
-    logger.log(`Group order: ${group_order}`);
+    controlLogger.debug(`Group order: ${group_order}`);
 
     const content_exists = await this.r.u8Bool();
-    logger.log(`Content exists: ${content_exists}`);
+    controlLogger.debug(`Content exists: ${content_exists}`);
 
     let largest: Location | undefined;
     if (content_exists) {
       largest = await this.location();
-      logger.log(`Largest: group ${largest.group}, object ${largest.object}`);
+      controlLogger.debug(`Largest: group ${largest.group}, object ${largest.object}`);
     }
     
     const params = await this.r.keyValuePairs();
@@ -483,18 +455,18 @@ export class Decoder {
   }
 
   private async subscribe_error(): Promise<SubscribeError> {
-    logger.log("Parsing SubscribeError message...");
+    controlLogger.debug("Parsing SubscribeError message...");
     const requestId = await this.r.u62();
-    logger.log(`Subscribe ID: ${requestId}`);
+    controlLogger.debug(`Subscribe ID: ${requestId}`);
     
     const code = await this.r.u62();
-    logger.log(`Code: ${code}`);
+    controlLogger.debug(`Code: ${code}`);
     
     const reason = await this.r.string();
-    logger.log(`Reason: ${reason}`);
+    controlLogger.debug(`Reason: ${reason}`);
     
     const trackAlias = await this.r.u62();
-    logger.log(`Track Alias: ${trackAlias}`);
+    controlLogger.debug(`Track Alias: ${trackAlias}`);
     
     return {
       kind: Msg.SubscribeError,
@@ -506,19 +478,19 @@ export class Decoder {
   }
 
   private async subscribe_done(): Promise<SubscribeDone> {
-    logger.log("Parsing SubscribeDone message...");
+    controlLogger.debug("Parsing SubscribeDone message...");
     const requestId = await this.r.u62();
-    logger.log(`Subscribe ID: ${requestId}`);
+    controlLogger.debug(`Subscribe ID: ${requestId}`);
     
     const code = await this.r.u62();
-    logger.log(`Code: ${code}`);
+    controlLogger.debug(`Code: ${code}`);
     
     const reason = await this.r.string();
-    logger.log(`Reason: ${reason}`);
+    controlLogger.debug(`Reason: ${reason}`);
     
     // Read the stream count
     const streamCount = await this.r.u53();
-    logger.log(`Stream count: ${streamCount}`);
+    controlLogger.debug(`Stream count: ${streamCount}`);
     
     return {
       kind: Msg.SubscribeDone,
@@ -530,9 +502,9 @@ export class Decoder {
   }
 
   private async unsubscribe(): Promise<Unsubscribe> {
-    logger.log("Parsing Unsubscribe message...");
+    controlLogger.debug("Parsing Unsubscribe message...");
     const requestId = await this.r.u62();
-    logger.log(`Subscribe ID: ${requestId}`);
+    controlLogger.debug(`Subscribe ID: ${requestId}`);
     
     return {
       kind: Msg.Unsubscribe,
@@ -541,15 +513,15 @@ export class Decoder {
   }
 
   private async announce(): Promise<Announce> {
-    logger.log("Parsing Announce message...");
+    controlLogger.debug("Parsing Announce message...");
     const requestId = await this.r.u62();
-    logger.log(`Request ID: ${requestId}`);
+    controlLogger.debug(`Request ID: ${requestId}`);
     
     const namespace = await this.r.tuple();
-    logger.log(`Namespace: ${namespace.join('/')}`);
+    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
     
     const params = await this.r.keyValuePairs();
-    logger.log(`Parameters: ${params.length}`);
+    controlLogger.debug(`Parameters: ${params.length}`);
     
     return {
       kind: Msg.Announce,
@@ -560,12 +532,12 @@ export class Decoder {
   }
 
   private async announce_ok(): Promise<AnnounceOk> {
-    logger.log("Parsing AnnounceOk message...");
+    controlLogger.debug("Parsing AnnounceOk message...");
     const requestId = await this.r.u62();
-    logger.log(`Request ID: ${requestId}`);
+    controlLogger.debug(`Request ID: ${requestId}`);
     
     const namespace = await this.r.tuple();
-    logger.log(`Namespace: ${namespace.join('/')}`);
+    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
     
     return {
       kind: Msg.AnnounceOk,
@@ -575,15 +547,15 @@ export class Decoder {
   }
 
   private async announce_error(): Promise<AnnounceError> {
-    logger.log("Parsing AnnounceError message...");
+    controlLogger.debug("Parsing AnnounceError message...");
     const requestId = await this.r.u62();
-    logger.log(`Request ID: ${requestId}`);
+    controlLogger.debug(`Request ID: ${requestId}`);
     
     const code = await this.r.u62();
-    logger.log(`Error code: ${code}`);
+    controlLogger.debug(`Error code: ${code}`);
     
     const reason = await this.r.string();
-    logger.log(`Error reason: ${reason}`);
+    controlLogger.debug(`Error reason: ${reason}`);
     
     return {
       kind: Msg.AnnounceError,
@@ -594,9 +566,9 @@ export class Decoder {
   }
 
   private async unannounce(): Promise<Unannounce> {
-    logger.log("Parsing Unannounce message...");
+    controlLogger.debug("Parsing Unannounce message...");
     const namespace = await this.r.tuple();
-    logger.log(`Namespace: ${namespace.join('/')}`);
+    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
     
     return {
       kind: Msg.Unannounce,
@@ -614,7 +586,7 @@ export class Encoder {
   
   
   async message(msg: Message): Promise<void> {
-    logger.log(`Encoding message of type: ${msg.kind}`);
+    controlLogger.debug(`Encoding message of type: ${msg.kind}`);
     
     // Create a BufferCtrlWriter to marshal the message
     const writer = new BufferCtrlWriter();
@@ -650,13 +622,13 @@ export class Encoder {
         break;
       default:
         const errorMsg = `Unsupported message type for encoding: ${(msg as any).kind}`;
-        logger.error(errorMsg);
+        controlLogger.error(errorMsg);
         throw new Error(errorMsg);
     }
     
     // Get the marshaled bytes and write them to the output stream
     const bytes = writer.getBytes();
-    logger.log(`Marshaled ${bytes.length} bytes for message type: ${msg.kind}`);
+    controlLogger.debug(`Marshaled ${bytes.length} bytes for message type: ${msg.kind}`);
     
     // Write the bytes directly to the output stream
     await this.w.write(bytes);

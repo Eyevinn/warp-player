@@ -278,7 +278,7 @@
     <div>
       <h1 style="margin-top: 0;">WARP Player</h1>
       <p style="color: #666; margin-top: 5px; margin-bottom: 0;">
-        A Media Player for WARP content over MoQ protocol with MSE playback
+        Player for WARP media over MoQ transport using MSE playback
       </p>
     </div>
   </div>
@@ -308,8 +308,90 @@
       Status: Disconnected
     </div>
     
+    <!-- Buffer Information Section -->
+    <div class="info-section" style="margin-top: 20px; border: 1px solid #ddd; border-radius: 4px; padding: 15px; background-color: #f9f9f9;">
+      <h3 style="margin-top: 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 8px;">Playback Information</h3>
+      
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px;">
+        <div>
+          <div style="font-weight: bold; margin-bottom: 5px; color: #2196F3;">Video Buffer</div>
+          <div id="videoBufferLevel" style="font-family: monospace; padding: 5px 8px; background-color: #e3f2fd; border-radius: 4px;">N/A</div>
+        </div>
+        
+        <div>
+          <div style="font-weight: bold; margin-bottom: 5px; color: #4CAF50;">Audio Buffer</div>
+          <div id="audioBufferLevel" style="font-family: monospace; padding: 5px 8px; background-color: #e8f5e9; border-radius: 4px;">N/A</div>
+        </div>
+        
+        <div>
+          <div style="font-weight: bold; margin-bottom: 5px; color: #FF9800;">Playback Latency</div>
+          <div id="playbackLatency" style="font-family: monospace; padding: 5px 8px; background-color: #fff3e0; border-radius: 4px;">N/A</div>
+        </div>
+      </div>
+    </div>
+    
     <h3>Available Tracks</h3>
-    <div id="tracks-container"></div>    
+    <div id="tracks-container"></div>
+    
+    <!-- Logging Section -->
+    <div class="logging-section" style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
+      <h3>Logs</h3>
+      
+      <div style="display: flex; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 15px;">
+        <div>
+          <label for="logLevel" style="margin-right: 8px; font-size: 14px; display: inline-block;">Log Level:</label>
+          <select id="logLevel" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+            <option value="NONE">None</option>
+            <option value="FATAL">Fatal</option>
+            <option value="ERROR">Error</option>
+            <option value="WARNING">Warning</option>
+            <option value="INFO" selected>Info</option>
+            <option value="DEBUG">Debug</option>
+          </select>
+        </div>
+        
+        <div>
+          <label for="componentFilter" style="margin-right: 8px; font-size: 14px; display: inline-block;">Component:</label>
+          <select id="componentFilter" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+            <option value="All" selected>All Components</option>
+            <!-- Will be populated dynamically -->
+          </select>
+        </div>
+        
+        <div>
+          <button id="clearLogs" style="background-color: #f5f5f5; color: #333; font-size: 14px; padding: 5px 12px;">
+            Clear Logs
+          </button>
+        </div>
+      </div>
+      
+      <div class="log-container" id="logContainer" style="height: 400px; font-family: monospace; font-size: 12px;">
+        <!-- Logs will be displayed here -->
+      </div>
+    </div>
   </div>
+  
+  <script>
+    // This script will be automatically replaced by webpack's bundled JS
+    // Adding a placeholder for log event handling that will be overridden
+    document.addEventListener('DOMContentLoaded', function() {
+      // Handle log level change
+      document.getElementById('logLevel').addEventListener('change', function(e) {
+        try {
+          const event = new CustomEvent('warp-log-level-change', {
+            detail: { level: e.target.value }
+          });
+          window.dispatchEvent(event);
+        } catch (error) {
+          console.error('Error dispatching log level change event:', error);
+        }
+      });
+      
+      // Handle clear logs button
+      document.getElementById('clearLogs').addEventListener('click', function() {
+        document.getElementById('logContainer').innerHTML = '';
+      });
+    });
+  </script>
 </body>
 </html>

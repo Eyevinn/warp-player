@@ -1,5 +1,7 @@
 import * as ISOBoxer from 'codem-isoboxer';
 
+import { ILogger, LoggerFactory } from '../logger';
+
 /**
  * Media track information extracted from CMAF segments
  */
@@ -8,6 +10,7 @@ export interface MediaTrackInfo {
   baseMediaDecodeTime?: number;
   duration?: number;
   sequenceNumber?: number;
+  mediaType?: 'video' | 'audio' | 'unknown';
 }
 
 /**
@@ -17,8 +20,36 @@ export interface MediaTrackInfo {
 export class MediaBuffer {
   private initSegment: ArrayBuffer | null = null;
   private trackInfo: MediaTrackInfo = {
-    timescale: 0
+    timescale: 0,
+    mediaType: 'unknown'
   };
+  private logger: ILogger;
+  
+  constructor(mediaType?: 'video' | 'audio') {
+    this.logger = LoggerFactory.getInstance().getLogger('MediaBuffer');
+    
+    if (mediaType) {
+      this.trackInfo.mediaType = mediaType;
+      this.logger = LoggerFactory.getInstance().getLogger(`MediaBuffer:${mediaType}`);
+    }
+  }
+  
+  /**
+   * Get the media type of this buffer
+   */
+  public getMediaType(): 'video' | 'audio' | 'unknown' {
+    return this.trackInfo.mediaType || 'unknown';
+  }
+  
+  /**
+   * Set the media type for this buffer
+   */
+  public setMediaType(mediaType: 'video' | 'audio'): void {
+    this.trackInfo.mediaType = mediaType;
+    // Update logger to use the new media type
+    this.logger = LoggerFactory.getInstance().getLogger(`MediaBuffer:${mediaType}`);
+    this.logger.info(`Media type set to ${mediaType}`);
+  }
   
   /**
    * Find a specific box in the parsed structure
@@ -42,7 +73,7 @@ export class MediaBuffer {
       try {
         return parsed.fetch(boxType);
       } catch (e) {
-        console.warn(`Error using fetch for ${boxType}:`, e);
+        this.logger.warn(`Error using fetch for ${boxType}: ${e}`);
       }
     }
     
@@ -68,11 +99,58 @@ export class MediaBuffer {
       try {
         return parentBox.fetch(boxType);
       } catch (e) {
-        console.warn(`Error using fetch for ${boxType} in parent:`, e);
+        this.logger.warn(`Error using fetch for ${boxType} in parent: ${e}`);
       }
     }
     
     return undefined;
+  }
+  
+  /**
+   * Try to detect media type from the initialization segment
+   * @param parsed The parsed ISO structure
+   */
+  private detectMediaType(parsed: any): void {
+    try {
+      // Find the moov box
+      const moov = this.findBox(parsed, 'moov');
+      if (!moov) {
+        return;
+      }
+      
+      // Find the trak box
+      const trak = this.findBoxInParent(moov, 'trak');
+      if (!trak) {
+        return;
+      }
+      
+      // Find the mdia box
+      const mdia = this.findBoxInParent(trak, 'mdia');
+      if (!mdia) {
+        return;
+      }
+      
+      // Find the hdlr box
+      const hdlr = this.findBoxInParent(mdia, 'hdlr');
+      if (!hdlr) {
+        return;
+      }
+      
+      // Check the handler type
+      if (hdlr.handler_type) {
+        if (hdlr.handler_type === 'vide') {
+          this.trackInfo.mediaType = 'video';
+          this.logger.info('Detected media type: video');
+        } else if (hdlr.handler_type === 'soun') {
+          this.trackInfo.mediaType = 'audio';
+          this.logger.info('Detected media type: audio');
+        } else {
+          this.logger.info(`Unrecognized handler type: ${hdlr.handler_type}`);
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`Error detecting media type: ${e}`);
+    }
   }
   
   /**
@@ -106,7 +184,10 @@ export class MediaBuffer {
       // Parse the init segment using ISOBoxer
       const parsed = ISOBoxer.parseBuffer(initSegment);
       
-
+      // Try to detect the media type if not already set
+      if (this.trackInfo.mediaType === 'unknown') {
+        this.detectMediaType(parsed);
+      }
       
       // Find the moov box
       const moov = this.findBox(parsed, 'moov');
@@ -137,15 +218,15 @@ export class MediaBuffer {
       
       // If no timescale was found, use a default value (typically 48000 for audio)
       if (this.trackInfo.timescale === 0) {
-        this.trackInfo.timescale = 48000; // Default timescale for audio
-        console.warn('[MediaBuffer] No timescale found in mdhd box, using default value of 48000');
+        this.trackInfo.timescale = this.trackInfo.mediaType === 'audio' ? 48000 : 90000; // Default timescales
+        this.logger.warn(`No timescale found in mdhd box, using default value of ${this.trackInfo.timescale}`);
+      } else {
+        this.logger.info(`Parsed init segment with timescale: ${this.trackInfo.timescale}`);
       }
-      
-
       
       return { ...this.trackInfo };
     } catch (error) {
-      console.error('[MediaBuffer] Error parsing init segment:', error);
+      this.logger.error(`Error parsing init segment: ${error}`);
       throw error;
     }
   }
@@ -182,8 +263,6 @@ export class MediaBuffer {
       // Parse the media segment using ISOBoxer
       const parsed = ISOBoxer.parseBuffer(mediaSegment);
       
-
-      
       // Find the moof box
       const moof = this.findBox(parsed, 'moof');
       if (!moof) {
@@ -217,7 +296,6 @@ export class MediaBuffer {
         // Extract defaultSampleDuration if available
         if (tfhd.default_sample_duration !== undefined) {
           defaultSampleDuration = tfhd.default_sample_duration;
-
         }
       }
       
@@ -249,11 +327,12 @@ export class MediaBuffer {
         }
       }
       
-
+      // Log segment info at debug level to avoid excessive logs
+      this.logger.debug(`Parsed media segment with baseMediaDecodeTime: ${this.trackInfo.baseMediaDecodeTime}, timescale: ${this.trackInfo.timescale}`);
       
       return { ...this.trackInfo };
     } catch (error) {
-      console.error('[MediaBuffer] Error parsing media segment:', error);
+      this.logger.error(`Error parsing media segment: ${error}`);
       throw error;
     }
   }
@@ -284,8 +363,12 @@ export class MediaBuffer {
    */
   public reset(): void {
     this.initSegment = null;
+    // Keep the media type when resetting
+    const mediaType = this.trackInfo.mediaType;
     this.trackInfo = {
-      timescale: 0
+      timescale: 0,
+      mediaType
     };
+    this.logger.info('MediaBuffer reset');
   }
 }
