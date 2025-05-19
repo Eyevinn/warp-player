@@ -1,6 +1,23 @@
-# WARP Player
+<h1 align="center">
+  WARP Player
+</h1>
 
-A browser-based Media Player using the Media over QUIC (MoQ) protocol to access WARP catalogs and stream media content, using Media Source Extensions (MSE) for playback.
+<div align="center">
+  A browser-based Media Player for Media over QUIC (MoQ) protocol with WARP support
+  <br />
+  <br />
+</div>
+
+<div align="center">
+<br />
+
+[![npm](https://img.shields.io/npm/v/@eyevinn/warp-player?style=flat-square)](https://www.npmjs.com/package/@eyevinn/warp-player)
+[![github release](https://img.shields.io/github/v/release/Eyevinn/warp-player?style=flat-square)](https://github.com/Eyevinn/warp-player/releases)
+[![license](https://img.shields.io/github/license/eyevinn/warp-player.svg?style=flat-square)](LICENSE)
+
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg?style=flat-square)](https://github.com/eyevinn/warp-player/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
+
+</div>
 
 ## Overview
 
@@ -11,11 +28,13 @@ This project implements a media player that:
 4. Receives media segments in CMAF format through the MoQ protocol
 5. Uses Media Source Extensions (MSE) to decode and play media content
 6. Provides adaptive buffer management for smooth playback experience
+7. This player is intended to work towards [moqlivemock][moqlivemock] publisher
 
-## Prerequisites
+## Requirements
 
 - A modern browser that supports WebTransport (Chrome 87+ or Edge 87+)
 - A MoQ server that supports draft-11 such as moqlivemock
+- Node.js version 20+
 
 ## Project Structure
 
@@ -39,7 +58,7 @@ warp-player/
 └── package.json          # Project dependencies and scripts
 ```
 
-## Getting Started
+## Installation / Usage
 
 1. Install dependencies:
    ```
@@ -61,6 +80,39 @@ The development server includes:
 - Hot module replacement for quick development
 - Source maps for debugging
 - HTTPS support (required for WebTransport)
+
+### Available Scripts
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server (HTTPS on port 8080)
+npm start
+# or
+npm run dev
+
+# Build for production
+npm run build
+
+# Run tests
+npm test
+
+# Run a specific test
+npx jest src/buffer/mediaBuffer.test.ts
+
+# Check code styling
+npm run pretty
+
+# Type checking
+npm run typecheck
+
+# Lint code
+npm run lint
+
+# Fix linting issues
+npm run lint:fix
+```
 
 ## Building for Production
 
@@ -89,3 +141,39 @@ This will create a `dist` directory with the compiled application.
 - WebTransport is only supported in some modern browsers, not in Node.js or Safari
 - For development, you may need to accept the self-signed certificate warning in your browser
 - The UI includes controls for adjusting target buffer duration and log level
+
+## Contributing
+
+See [CONTRIBUTING](CONTRIBUTING.md)
+
+## License
+
+This project is licensed under the MIT License, see [LICENSE](LICENSE).
+
+## Support
+
+Join our [community on Slack](http://slack.osaas.io/) where you can post any questions regarding any of our open source projects. Eyevinn's consulting business can also offer you:
+
+- Further development of this component
+- Customization and integration of this component into your platform
+- Support and maintenance agreement
+
+Contact [sales@eyevinn.se](mailto:sales@eyevinn.se) if you are interested.
+
+## About Eyevinn Technology
+
+[Eyevinn Technology](https://www.eyevinntechnology.se) help companies in the TV, media, and entertainment sectors optimize costs and boost profitability through enhanced media solutions.
+We are independent in a way that we are not commercially tied to any platform or technology vendor. As our way to innovate and push the industry forward, we develop proof-of-concepts and tools. We share things we have learn and code as open-source.
+
+With Eyevinn Open Source Cloud we enable to build solutions and applications based on Open Web Services and avoid being locked in with a single web service vendor. Our open-source solutions offer full flexibility with a revenue share model that supports the creators.
+
+Read our blogs and articles here:
+
+- [Developer blogs](https://dev.to/video)
+- [Medium](https://eyevinntechnology.medium.com)
+- [OSC](https://www.osaas.io)
+- [LinkedIn](https://www.linkedin.com/company/eyevinn/)
+
+Want to know more about Eyevinn, contact us at info@eyevinn.se!
+
+[moqlivemock]: https://github.com/Eyevinn/moqlivemock

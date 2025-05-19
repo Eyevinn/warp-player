@@ -1,30 +1,49 @@
 {
-  "name": "warp-player",
+  "name": "@eyevinn/warp-player",
   "version": "0.2.0",
+  "description": "Browser-based Media Player for Media over QUIC (MoQ) protocol with WARP support",
   "main": "dist/index.js",
   "scripts": {
-    "build": "webpack",
-    "start": "webpack serve",
-    "dev": "webpack serve",
     "test": "jest",
-    "lint": "eslint . --ext .ts",
-    "lint:fix": "eslint . --ext .ts --fix"
+    "prepare": "husky install",
+    "build": "webpack",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "pretty": "prettier --check --ignore-unknown .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "webpack serve",
+    "start": "webpack serve"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "WebTransport client for Media over QUIC (MoQ) protocol with WARP support",
+  "keywords": [
+    "moq",
+    "warp",
+    "media",
+    "player",
+    "streaming",
+    "webtransport"
+  ],
+  "author": "Eyevinn Technology AB",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
+    "@commitlint/cli": "^17.4.2",
+    "@commitlint/config-conventional": "^17.4.2",
     "@types/jest": "^29.5.0",
     "@types/node": "^20.11.5",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
     "copy-webpack-plugin": "^13.0.0",
     "eslint": "^8.57.0",
+    "eslint-config-prettier": "^8.6.0",
     "eslint-import-resolver-typescript": "^4.3.4",
     "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-prettier": "^4.2.1",
     "html-webpack-plugin": "^5.5.0",
+    "husky": "^8.0.3",
     "jest": "^29.5.0",
+    "prettier": "^2.8.4",
     "ts-jest": "^29.1.0",
     "ts-loader": "^9.4.2",
     "ts-node": "^10.9.2",
@@ -32,6 +51,9 @@
     "webpack": "^5.76.0",
     "webpack-cli": "^5.0.1",
     "webpack-dev-server": "^4.11.1"
+  },
+  "dependencies": {
+    "codem-isoboxer": "^0.3.10"
   },
   "jest": {
     "preset": "ts-jest",
@@ -44,8 +66,5 @@
       "json",
       "node"
     ]
-  },
-  "dependencies": {
-    "codem-isoboxer": "^0.3.10"
   }
 }

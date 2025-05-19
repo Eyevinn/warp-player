@@ -28,6 +28,12 @@ npm run lint
 
 # Fix linting issues
 npm run lint:fix
+
+# Check code styling
+npm run pretty
+
+# Type checking
+npm run typecheck
 ```
 
 ## Project Overview
@@ -38,6 +44,31 @@ via WebTransport. It uses the WARP protocol to fetch a catalog with media tracks
 The actual media playback is done using MSE, and the media container is CMAF.
 This player allows browsers to connect to MoQ servers, subscribe to media tracks, and receive media segments over WebTransport.
 
+### Project Structure
+
+The project follows the Eyevinn TypeScript project template structure:
+
+```
+warp-player/
+├── src/
+│   ├── transport/        # MoQ protocol implementation
+│   │   ├── client.ts     # WebTransport client implementation
+│   │   ├── setup.ts      # Setup message handling
+│   │   ├── tracks.ts     # Track subscription and management
+│   │   └── control.ts    # Control stream handling
+│   ├── buffer/           # Media buffering components
+│   │   ├── mediaBuffer.ts         # CMAF segment parsing
+│   │   └── mediaSegmentBuffer.ts  # Buffer management for MSE
+│   ├── player.ts         # Core player implementation with MSE integration
+│   ├── browser.ts        # Browser entry point and UI handling
+│   └── index.html        # HTML template and UI components
+├── references/           # MoQ and WARP specification references
+├── tsconfig.json         # TypeScript configuration
+├── tsconfig.base.json    # Base TypeScript configuration
+├── webpack.config.js     # Webpack configuration
+├── jest.config.js        # Jest test configuration
+└── package.json          # Project dependencies and scripts
+```
 
 ### Core Architecture
 
@@ -89,3 +120,8 @@ The codebase is organized into several key modules:
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is expected in CMAF format with ISO BMFF container structure.
 5. The client includes proper handling of bidirectional control streams for subscribing to content.
+6. The project follows the Eyevinn code quality standards with:
+   - Conventional commits using commitlint
+   - Prettier for code formatting
+   - ESLint for code linting
+   - TypeScript strict type checking
