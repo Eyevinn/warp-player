@@ -1,0 +1,28 @@
+WARP Player
+Copyright (c) 2025 Eyevinn Technology AB
+
+This product includes software developed by Eyevinn Technology AB.
+
+================================================================================
+Third-Party Software Acknowledgments
+================================================================================
+
+MoQ Transport Implementation
+----------------------------
+Portions of the MoQ transport code in this project are derived from:
+
+1. moq-js (https://github.com/kixelated/moq-js)
+   Copyright (c) Luke Curley (kixelated)
+   Licensed under the Apache License, Version 2.0
+
+2. moq-js fork (https://github.com/englishm/moq-js)
+   Copyright (c) Mike English (englishm) and contributors
+   Licensed under the Apache License, Version 2.0
+
+We gratefully acknowledge the contributions of these developers to the 
+Media over QUIC (MoQ) ecosystem.
+
+================================================================================
+
+For the full text of the Apache License, Version 2.0, see:
+http://www.apache.org/licenses/LICENSE-2.0
