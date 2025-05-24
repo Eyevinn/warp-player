@@ -39,7 +39,7 @@
     "copy-webpack-plugin": "^13.0.0",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^8.6.0",
-    "eslint-import-resolver-typescript": "^4.3.4",
+    "eslint-import-resolver-typescript": "^4.3.5",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-prettier": "^4.2.1",
     "html-webpack-plugin": "^5.5.0",
@@ -51,7 +51,7 @@
     "ts-loader": "^9.4.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3",
-    "webpack": "^5.76.0",
+    "webpack": "^5.99.9",
     "webpack-cli": "^5.0.1",
     "webpack-dev-server": "^5.2.1"
   },
