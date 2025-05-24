@@ -3,144 +3,288 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Warp Player</title>
+  <title>WARP Player - Media over QUIC</title>
   <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 20px;
-      line-height: 1.6;
-    }
-    h1 {
-      color: #333;
-      border-bottom: 1px solid #eee;
-      padding-bottom: 10px;
-    }
-    .container {
-      margin-top: 20px;
-    }
-    .form-group {
-      margin-bottom: 15px;
-    }
-    label {
-      display: block;
-      margin-bottom: 5px;
-      font-weight: bold;
-    }
-    input[type="text"] {
-      width: 100%;
-      padding: 8px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
+    * {
+      margin: 0;
+      padding: 0;
       box-sizing: border-box;
     }
-    button {
-      background-color: #4CAF50;
-      color: white;
-      padding: 10px 15px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 16px;
-    }
-    button:hover {
-      background-color: #45a049;
-    }
-    button:disabled {
-      background-color: #cccccc;
-      cursor: not-allowed;
-    }
-    .log-container {
-      margin-top: 20px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      padding: 10px;
-      height: 300px;
-      overflow-y: auto;
-      background-color: #f9f9f9;
-    }
-    .log-entry {
-      margin: 5px 0;
-      padding: 5px;
-      border-bottom: 1px solid #eee;
-    }
-    .log-entry.info {
-      color: #333;
-    }
-    .log-entry.success {
-      color: #4CAF50;
-    }
-    .log-entry.error {
-      color: #f44336;
+    
+    :root {
+      --bg-primary: #000000;
+      --bg-secondary: #111111;
+      --bg-card: #1a1a1a;
+      --bg-button-primary: #9333ea;
+      --bg-button-hover: #7c3aed;
+      --bg-button-danger: #dc2626;
+      --bg-button-danger-hover: #b91c1c;
+      --text-primary: #ffffff;
+      --text-secondary: #9ca3af;
+      --border-color: #374151;
+      --accent-blue: #3b82f6;
+      --accent-green: #10b981;
+      --accent-orange: #f59e0b;
+      --input-bg: #111111;
+      --success-bg: #065f46;
+      --error-bg: #991b1b;
+      --warning-bg: #92400e;
     }
     
-    /* Styles for announcements */
-    .announcements-container {
-      margin-top: 20px;
-      border: 1px solid #2196F3;
-      border-radius: 4px;
-      padding: 10px;
-      max-height: 200px;
-      overflow-y: auto;
-      background-color: #e3f2fd;
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
     }
     
-    .announcement {
-      margin: 5px 0;
-      padding: 12px;
-      border: 1px solid #bbdefb;
-      background-color: #ffffff;
-      border-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    /* Header */
+    .header {
+      background-color: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(10px);
+      position: fixed;
+      width: 100%;
+      top: 0;
+      z-index: 1000;
+      border-bottom: 1px solid var(--border-color);
     }
     
-    .announcement-container {
+    .header-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
       display: flex;
       align-items: center;
+      gap: 1rem;
+      text-decoration: none;
+      color: var(--text-primary);
+    }
+    
+    .logo img {
+      height: 40px;
+      width: auto;
+    }
+    
+    .logo-text {
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      align-items: center;
+    }
+    
+    .nav-link {
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: color 0.2s;
+      font-size: 0.875rem;
+    }
+    
+    .nav-link:hover {
+      color: var(--text-primary);
+    }
+    
+    /* Main Container */
+    .main-container {
+      margin-top: 80px;
+      padding: 2rem;
+      max-width: 1200px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    
+    /* Video Player Section */
+    .player-section {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 2rem;
+    }
+    
+    #videoPlayer {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      outline: none;
+    }
+    
+    /* Controls Section */
+    .controls-section {
+      padding: 1.5rem;
+      background-color: var(--bg-secondary);
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 1rem;
       flex-wrap: wrap;
-      gap: 10px;
     }
     
-    .announcement-title {
-      margin: 0;
-      font-weight: bold;
-      color: #0066cc;
-      font-size: 14px;
+    .btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      font-weight: 500;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
     }
     
-    .announcement-namespace {
-      margin: 0;
-      padding: 4px 8px;
-      background-color: #f1f8e9;
-      border-left: 4px solid #4CAF50;
-      font-family: monospace;
-      font-size: 14px;
-      word-break: break-all;
-      flex-grow: 1;
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
+    
+    .btn-primary {
+      background-color: var(--bg-button-primary);
+      color: var(--text-primary);
+    }
+    
+    .btn-primary:hover:not(:disabled) {
+      background-color: var(--bg-button-hover);
+    }
+    
+    .btn-danger {
+      background-color: var(--bg-button-danger);
+      color: var(--text-primary);
+    }
+    
+    .btn-danger:hover:not(:disabled) {
+      background-color: var(--bg-button-danger-hover);
+    }
+    
+    .buffer-control {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+    
+    .buffer-control input {
+      width: 80px;
+      padding: 0.5rem;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+    }
+    
+    /* Connection Section */
+    .connection-section {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 2rem;
+      margin-bottom: 2rem;
+    }
+    
+    .card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 2rem;
+    }
+    
+    .card h2 {
+      font-size: 1.25rem;
+      margin-bottom: 1.5rem;
+      color: var(--text-primary);
+    }
+    
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+    }
+    
+    .form-group input {
+      width: 100%;
+      padding: 0.75rem;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+      transition: border-color 0.2s;
+    }
+    
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--bg-button-primary);
+    }
+    
+    .form-group input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 1rem;
+    }
+    
+    .connection-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    
+    /* Status */
     .status {
-      margin-top: 10px;
-      padding: 10px;
-      border-radius: 4px;
-    }
-    .status.connected {
-      background-color: #dff0d8;
-      color: #3c763d;
-    }
-    .status.disconnected {
-      background-color: #f2dede;
-      color: #a94442;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
     }
     
-    /* WebTransport warning styles */
+    .status.connected {
+      background-color: var(--success-bg);
+      color: var(--accent-green);
+      border: 1px solid var(--accent-green);
+    }
+    
+    .status.disconnected {
+      background-color: var(--error-bg);
+      color: #ef4444;
+      border: 1px solid #ef4444;
+    }
+    
+    /* Browser Warning */
     .browser-warning {
-      background-color: #fff3cd;
-      border: 1px solid #ffecb5;
-      color: #856404;
-      padding: 15px;
-      margin-bottom: 20px;
-      border-radius: 4px;
+      background-color: var(--warning-bg);
+      border: 1px solid var(--accent-orange);
+      color: var(--accent-orange);
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+      border-radius: 12px;
       display: none;
     }
     
@@ -149,188 +293,272 @@
     }
     
     .browser-warning h4 {
-      margin-top: 0;
-      margin-bottom: 10px;
-      font-size: 16px;
+      font-size: 1.125rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
     }
     
     .browser-warning p {
-      margin: 5px 0;
-      font-size: 14px;
+      margin: 0.5rem 0;
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+    
+    .browser-warning ul {
+      margin: 0.75rem 0;
+      padding-left: 1.5rem;
     }
     
     .browser-warning a {
-      color: #533f03;
+      color: var(--accent-orange);
       text-decoration: underline;
     }
     
-    /* Styles for tracks display */
-    .tracks-section {
-      margin-top: 20px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      padding: 15px;
-      background-color: #f9f9f9;
+    /* Info Cards */
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
     }
     
-    .tracks-section h3 {
+    .info-card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.75rem;
+      text-align: center;
+    }
+    
+    .info-card-title {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.25rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .info-card-value {
+      font-size: 1.25rem;
+      font-weight: 600;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    }
+    
+    .info-card-value.video {
+      color: var(--accent-blue);
+    }
+    
+    .info-card-value.audio {
+      color: var(--accent-green);
+    }
+    
+    .info-card-value.latency {
+      color: var(--accent-orange);
+    }
+    
+    /* Tracks Section */
+    .tracks-container {
       margin-top: 0;
-      color: #333;
-      border-bottom: 1px solid #eee;
-      padding-bottom: 8px;
     }
     
-    /* Styles for select dropdown */
-    .selector-container {
-      display: flex;
-      align-items: center;
-      margin-bottom: 15px;
+    /* Announcement styles */
+    .announcement {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
     }
     
-    .selector-container label {
-      margin-right: 10px;
-      margin-bottom: 0;
-      font-weight: bold;
-      min-width: 120px;
+    .announcement-title {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .announcement-namespace {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+      font-size: 0.875rem;
+      color: var(--accent-green);
+      word-break: break-all;
+    }
+    
+    .track-selector {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    
+    .track-selector label {
+      display: block;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
     }
     
     .track-select {
-      flex-grow: 1;
-      padding: 8px 12px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      background-color: white;
-      font-size: 14px;
-      max-width: 400px;
+      width: 100%;
+      padding: 0.75rem;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+      cursor: pointer;
     }
     
     .track-select:focus {
       outline: none;
-      border-color: #2196F3;
-      box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+      border-color: var(--bg-button-primary);
     }
     
-    /* Track details container */
-    .track-details-container {
-      padding: 10px;
-      margin-bottom: 15px;
-      background-color: #f5f5f5;
-      border-radius: 4px;
-      border-left: 3px solid #2196F3;
-      font-size: 14px;
-      color: #666;
-      max-width: 530px;
+    /* Logging Section */
+    .logging-section {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 2rem;
+      margin-top: 2rem;
     }
     
-    /* Legacy styles for backward compatibility */
-    .tracks-list {
-      display: none; /* Hide the old radio buttons list */
+    .logging-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+      gap: 1rem;
     }
     
-    .track-item {
-      padding: 10px;
-      margin-bottom: 10px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      background-color: white;
-      position: relative;
-      transition: all 0.3s ease;
+    .logging-controls {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
     }
     
-    .radio-container {
+    .log-control {
       display: flex;
       align-items: center;
-      margin-bottom: 5px;
+      gap: 0.5rem;
     }
     
-    .radio-container input[type="radio"] {
-      margin-right: 8px;
+    .log-control label {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
     }
     
-    .radio-container label {
-      font-weight: bold;
-      color: #2196F3;
+    .log-control select {
+      padding: 0.5rem;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 0.875rem;
       cursor: pointer;
     }
     
-    /* Hide track details by default */
-    .track-details {
-      font-size: 14px;
-      color: #666;
-      padding: 8px;
-      margin-top: 8px;
-      background-color: #f5f5f5;
-      border-radius: 4px;
-      display: none;
-      border-left: 3px solid #2196F3;
-    }
-    
-    /* Start button styles */
-    .start-btn {
-      display: block;
-      margin: 20px auto 0;
-      padding: 10px 30px;
-      background-color: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      font-size: 16px;
-      font-weight: bold;
-      cursor: pointer;
-      transition: background-color 0.3s ease;
-    }
-    
-    .start-btn:hover {
-      background-color: #45a049;
-    }
-    
-    .start-btn:disabled {
-      background-color: #cccccc;
-      cursor: not-allowed;
-    }
-
-    /* Video player styles */
-    #videoPlayer {
-      display: block;
-      width: 100%;
-      max-width: 720px;
-      height: 400px;
-      margin: 30px auto 20px auto;
-      background: #222;
+    .log-container {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
       border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      outline: none;
+      padding: 1rem;
+      height: 400px;
+      overflow-y: auto;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+      font-size: 0.75rem;
+      line-height: 1.5;
+    }
+    
+    .log-entry {
+      margin: 0.25rem 0;
+      padding: 0.25rem 0;
+      border-bottom: 1px solid rgba(55, 65, 81, 0.3);
+    }
+    
+    .log-entry.debug { color: #6b7280; }
+    .log-entry.info { color: #e5e7eb; }
+    .log-entry.warning { color: var(--accent-orange); }
+    .log-entry.error { color: #ef4444; }
+    .log-entry.fatal { color: #dc2626; }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+      .header-content {
+        padding: 1rem;
+      }
+      
+      .logo-text {
+        font-size: 1.25rem;
+      }
+      
+      .nav-links {
+        display: none;
+      }
+      
+      .main-container {
+        padding: 1rem;
+      }
+      
+      .connection-section {
+        grid-template-columns: 1fr;
+      }
+      
+      .controls-section {
+        flex-direction: column;
+      }
+      
+      .logging-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      
+      .connection-controls {
+        flex-direction: column;
+        gap: 1rem;
+      }
+      
+      .connection-controls .status {
+        align-self: flex-start;
+      }
+      
+      .info-grid {
+        grid-template-columns: 1fr;
+        gap: 0.5rem;
+      }
     }
   </style>
 </head>
 <body>
-  <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin: 20px 0;">
-    <img src="eyevinn-technology-250px.png" alt="Eyevinn Technology" style="width: 150px; height: auto;">
-    <div>
-      <h1 style="margin-top: 0;">WARP Player</h1>
-      <p style="color: #666; margin-top: 5px; margin-bottom: 0;">
-        Player for WARP media over MoQ transport using MSE playback
-      </p>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-content">
+      <div class="logo">
+        <img src="eyevinn-technology-logo-white-400px.png" alt="Eyevinn Technology">
+        <span class="logo-text">WARP Player</span>
+      </div>
+      <nav class="nav-links">
+        <a href="https://github.com/Eyevinn/warp-player" class="nav-link">GitHub</a>
+        <a href="https://datatracker.ietf.org/doc/draft-ietf-moq-transport/" class="nav-link">MoQ Spec</a>
+        <a href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-warp-00" class="nav-link">WARP Spec</a>
+        <a href="https://www.eyevinn.se" class="nav-link">About</a>
+      </nav>
     </div>
-  </div>
-  <video id="videoPlayer" controls muted></video>
+  </header>
 
-  <div style="display: flex; justify-content: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
-    <button id="startBtn" class="start-btn">Start</button>
-    <button id="stopBtn" class="start-btn" style="background-color: #f44336;">Stop</button>
-    <div style="display: flex; align-items: center; margin-left: 20px;">
-      <label for="bufferDuration" style="margin-right: 8px; font-size: 14px;">Target Buffer (ms):</label>
-      <input type="number" id="bufferDuration" min="0" max="5000" step="50" value="200" style="width: 70px; padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
-    </div>
-  </div>
-
-  <div class="container">
+  <!-- Main Container -->
+  <div class="main-container">
     <!-- WebTransport Browser Warning -->
     <div id="browserWarning" class="browser-warning">
       <h4>⚠️ WebTransport Not Supported</h4>
       <p>Your browser does not support WebTransport, which is required for this application to function.</p>
       <p>Please use one of the following browsers:</p>
-      <ul style="margin: 10px 0; padding-left: 20px;">
+      <ul>
         <li>Google Chrome (version 97 or higher)</li>
         <li>Microsoft Edge (version 97 or higher)</li>
         <li>Opera (version 83 or higher)</li>
@@ -340,78 +568,99 @@
       </p>
     </div>
     
-    <div class="form-group">
-      <label for="serverUrl">MoQ Server URL:</label>
-      <input type="text" id="serverUrl" value="https://172-234-110-95.ip.linodeusercontent.com:443/moq" placeholder="Enter server URL">
-    </div>
-    
-    <div class="form-group">
-      <button id="connectBtn">Connect</button>
-      <button id="disconnectBtn" disabled>Disconnect</button>
-    </div> <!-- Start/Stop buttons moved above video -->
-    
-    <div id="status" class="status disconnected">
-      Status: Disconnected
-    </div>
-    
-    <!-- Buffer Information Section -->
-    <div class="info-section" style="margin-top: 20px; border: 1px solid #ddd; border-radius: 4px; padding: 15px; background-color: #f9f9f9;">
-      <h3 style="margin-top: 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 8px;">Playback Information</h3>
-      
-      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px;">
-        <div>
-          <div style="font-weight: bold; margin-bottom: 5px; color: #2196F3;">Video Buffer</div>
-          <div id="videoBufferLevel" style="font-family: monospace; padding: 5px 8px; background-color: #e3f2fd; border-radius: 4px;">N/A</div>
-        </div>
-        
-        <div>
-          <div style="font-weight: bold; margin-bottom: 5px; color: #4CAF50;">Audio Buffer</div>
-          <div id="audioBufferLevel" style="font-family: monospace; padding: 5px 8px; background-color: #e8f5e9; border-radius: 4px;">N/A</div>
-        </div>
-        
-        <div>
-          <div style="font-weight: bold; margin-bottom: 5px; color: #FF9800;">Playback Latency</div>
-          <div id="playbackLatency" style="font-family: monospace; padding: 5px 8px; background-color: #fff3e0; border-radius: 4px;">N/A</div>
+    <!-- Video Player Section -->
+    <div class="player-section">
+      <video id="videoPlayer" controls muted></video>
+      <div class="controls-section">
+        <button id="startBtn" class="btn btn-primary">
+          <span>▶</span> Start
+        </button>
+        <button id="stopBtn" class="btn btn-danger">
+          <span>■</span> Stop
+        </button>
+        <div class="buffer-control">
+          <label for="bufferDuration">Target Buffer (ms):</label>
+          <input type="number" id="bufferDuration" min="0" max="5000" step="50" value="200">
         </div>
       </div>
     </div>
-    
-    <h3>Available Tracks</h3>
-    <div id="tracks-container"></div>
-    
+
+    <!-- Connection Section -->
+    <div class="connection-section">
+      <!-- Connection Card -->
+      <div class="card">
+        <h2>Connection</h2>
+        <div class="form-group">
+          <label for="serverUrl">MoQ Server URL</label>
+          <input type="text" id="serverUrl" value="https://moqlivemock.demo.osaas.io/moq" placeholder="Enter server URL">
+        </div>
+        <div class="connection-controls">
+          <div class="button-group">
+            <button id="connectBtn" class="btn btn-primary">Connect</button>
+            <button id="disconnectBtn" class="btn btn-danger" disabled>Disconnect</button>
+          </div>
+          <div id="status" class="status disconnected">
+            <span>●</span> Disconnected
+          </div>
+        </div>
+      </div>
+
+      <!-- Playback Info Card -->
+      <div class="card">
+        <h2>Playback Information</h2>
+        <div class="info-grid">
+          <div class="info-card">
+            <div class="info-card-title">Video Buffer</div>
+            <div id="videoBufferLevel" class="info-card-value video">N/A</div>
+          </div>
+          <div class="info-card">
+            <div class="info-card-title">Audio Buffer</div>
+            <div id="audioBufferLevel" class="info-card-value audio">N/A</div>
+          </div>
+          <div class="info-card">
+            <div class="info-card-title">Latency</div>
+            <div id="playbackLatency" class="info-card-value latency">N/A</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content Section -->
+    <div class="card" style="margin-bottom: 2rem;">
+      <h2>Content</h2>
+      <!-- Tracks Container -->
+      <div id="tracks-container" class="tracks-container"></div>
+    </div>
+
     <!-- Logging Section -->
-    <div class="logging-section" style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
-      <h3>Logs</h3>
-      
-      <div style="display: flex; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 15px;">
-        <div>
-          <label for="logLevel" style="margin-right: 8px; font-size: 14px; display: inline-block;">Log Level:</label>
-          <select id="logLevel" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
-            <option value="NONE">None</option>
-            <option value="FATAL">Fatal</option>
-            <option value="ERROR">Error</option>
-            <option value="WARNING">Warning</option>
-            <option value="INFO" selected>Info</option>
-            <option value="DEBUG">Debug</option>
-          </select>
-        </div>
-        
-        <div>
-          <label for="componentFilter" style="margin-right: 8px; font-size: 14px; display: inline-block;">Component:</label>
-          <select id="componentFilter" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
-            <option value="All" selected>All Components</option>
-            <!-- Will be populated dynamically -->
-          </select>
-        </div>
-        
-        <div>
-          <button id="clearLogs" style="background-color: #f5f5f5; color: #333; font-size: 14px; padding: 5px 12px;">
+    <div class="logging-section">
+      <div class="logging-header">
+        <h2>Debug Logs</h2>
+        <div class="logging-controls">
+          <div class="log-control">
+            <label for="logLevel">Log Level:</label>
+            <select id="logLevel">
+              <option value="NONE">None</option>
+              <option value="FATAL">Fatal</option>
+              <option value="ERROR">Error</option>
+              <option value="WARNING">Warning</option>
+              <option value="INFO" selected>Info</option>
+              <option value="DEBUG">Debug</option>
+            </select>
+          </div>
+          <div class="log-control">
+            <label for="componentFilter">Component:</label>
+            <select id="componentFilter">
+              <option value="All" selected>All Components</option>
+              <!-- Will be populated dynamically -->
+            </select>
+          </div>
+          <button id="clearLogs" class="btn btn-primary" style="padding: 0.5rem 1rem;">
             Clear Logs
           </button>
         </div>
       </div>
-      
-      <div class="log-container" id="logContainer" style="height: 400px; font-family: monospace; font-size: 12px;">
+      <div class="log-container" id="logContainer">
         <!-- Logs will be displayed here -->
       </div>
     </div>

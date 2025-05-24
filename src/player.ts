@@ -113,7 +113,7 @@ export class Player {
       
       // Update status
       this.statusEl.className = 'status connected';
-      this.statusEl.textContent = 'Status: Connected';
+      this.statusEl.innerHTML = '<span>●</span> Connected';
       
       this.logger.info('Connected to MoQ server successfully!');
       
@@ -176,7 +176,7 @@ export class Player {
       
       // Update status
       this.statusEl.className = 'status disconnected';
-      this.statusEl.textContent = 'Status: Disconnected';
+      this.statusEl.innerHTML = '<span>●</span> Disconnected';
       
       // Clear tracks display
       this.tracksContainerEl.innerHTML = '';

@@ -48,7 +48,8 @@ module.exports = (env, argv) => {
       }),
       new CopyWebpackPlugin({
         patterns: [
-          { from: 'src/assets/images/eyevinn-technology-250px.png', to: 'eyevinn-technology-250px.png' }
+          { from: 'src/assets/images/eyevinn-technology-logo-white-400px.png', to: 'eyevinn-technology-logo-white-400px.png' },
+          { from: 'src/config.json', to: 'config.json' }
         ],
       }),
     ],

@@ -1,0 +1,5 @@
+{
+  "defaultServerUrl": "https://moqlivemock.demo.osaas.io/moq",
+  "targetBufferDuration": 200,
+  "comment": "This configuration file can be modified after build to change default settings"
+}

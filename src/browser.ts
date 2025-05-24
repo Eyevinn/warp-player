@@ -28,8 +28,37 @@ let player: Player | null = null;
 // Logger
 const logger = LoggerFactory.getInstance().getLogger('Browser');
 
+// Configuration
+interface Config {
+  defaultServerUrl?: string;
+  targetBufferDuration?: number;
+}
+
+let config: Config = {
+  defaultServerUrl: 'https://moqlivemock.demo.osaas.io/moq',
+  targetBufferDuration: 200
+};
+
+// Load configuration from external file
+async function loadConfig(): Promise<void> {
+  try {
+    const response = await fetch('./config.json');
+    if (response.ok) {
+      const loadedConfig = await response.json();
+      config = { ...config, ...loadedConfig };
+      logger.info('Configuration loaded from config.json');
+    } else {
+      logger.info('Using default configuration (config.json not found)');
+    }
+  } catch (error) {
+    logger.info('Using default configuration (error loading config.json)');
+  }
+}
+
 // Initialize the application when the DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Load configuration first
+  await loadConfig();
   // Get DOM elements
   serverUrlInput = document.getElementById('serverUrl') as HTMLInputElement;
   connectBtn = document.getElementById('connectBtn') as HTMLButtonElement;
@@ -47,6 +76,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Setup logging
   setupLogging();
+  
+  // Apply configuration to UI elements
+  if (config.defaultServerUrl) {
+    serverUrlInput.value = config.defaultServerUrl;
+  }
+  if (config.targetBufferDuration) {
+    bufferDurationInput.value = config.targetBufferDuration.toString();
+  }
 
   // Add event listeners
   connectBtn.addEventListener('click', connect);
@@ -65,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     browserWarning.classList.add('show');
     
     // Update status to show the issue
-    statusEl.textContent = 'Status: WebTransport Not Supported';
+    statusEl.innerHTML = '<span>●</span> WebTransport Not Supported';
     statusEl.className = 'status disconnected';
     
     // Don't create player instance if WebTransport is not supported
@@ -74,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
     logger.info('WebTransport is supported in this browser.');
   }
   
-  // Create the Player instance with the default server URL
+  // Create the Player instance with the server URL
   player = new Player(
     serverUrlInput.value,
     tracksContainerEl,
@@ -82,8 +119,8 @@ document.addEventListener('DOMContentLoaded', () => {
     legacyLogMessage
   );
   
-  // Set initial buffer duration from input field
-  const initialBufferDuration = parseInt(bufferDurationInput.value) || 200;
+  // Set initial buffer duration from config or input field
+  const initialBufferDuration = parseInt(bufferDurationInput.value) || config.targetBufferDuration || 200;
   player.setTargetBufferDuration(initialBufferDuration);
   
   // Add event listener for buffer duration changes
