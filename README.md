@@ -203,6 +203,14 @@ Without proper NTP synchronization on both client and server, latency measuremen
 - For development, you may need to accept the self-signed certificate warning in your browser
 - The UI includes controls for adjusting both minimal buffer and target latency
 
+## Acknowledgments
+
+The MoQ transport implementation in this project is based on work from:
+- [moq-js](https://github.com/kixelated/moq-js) by Luke Curley (kixelated)
+- [moq-js fork](https://github.com/englishm/moq-js) by Mike English (englishm)
+
+We are grateful for their pioneering work on MoQ transport in JavaScript/TypeScript.
+
 ## Contributing
 
 See [CONTRIBUTING](CONTRIBUTING.md)
@@ -210,6 +218,8 @@ See [CONTRIBUTING](CONTRIBUTING.md)
 ## License
 
 This project is licensed under the MIT License, see [LICENSE](LICENSE).
+
+For third-party software acknowledgments, see [NOTICE](NOTICE).
 
 ## Support
 
