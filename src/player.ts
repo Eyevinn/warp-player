@@ -39,7 +39,10 @@ export class Player {
   private playbackStarted = false;
   private videoObjectsReceived = 0;
   private audioObjectsReceived = 0;
-  private targetBufferDurationMs = 200; // Target buffer duration in milliseconds for playback
+  private minimalBufferMs = 200; // Minimal buffer threshold in milliseconds
+  private targetLatencyMs = 300; // Target latency in milliseconds
+  private minBufferLevel: number = Infinity; // Track minimum buffer level between segments
+  private lastSegmentAppendTime: number = 0; // Track when we last appended a segment
   
   // Error handling and recovery
   private recoveryInProgress = false;
@@ -87,13 +90,23 @@ export class Player {
   }
 
   /**
-   * Set the target buffer duration in milliseconds for playback
-   * @param durationMs Duration in milliseconds
+   * Set the buffer control parameters
+   * @param minimalBufferMs Minimal buffer level in milliseconds
+   * @param targetLatencyMs Target latency in milliseconds
    */
-  public setTargetBufferDuration(durationMs: number): void {
-    const oldValue = this.targetBufferDurationMs;
-    this.targetBufferDurationMs = durationMs;
-    this.logger.info(`Target buffer duration changed from ${oldValue}ms to ${durationMs}ms`);
+  public setBufferParameters(minimalBufferMs: number, targetLatencyMs: number): void {
+    if (targetLatencyMs <= minimalBufferMs) {
+      this.logger.warn(`Target latency (${targetLatencyMs}ms) must be greater than minimal buffer (${minimalBufferMs}ms). Ignoring.`);
+      return;
+    }
+    
+    const oldMinBuffer = this.minimalBufferMs;
+    const oldTargetLatency = this.targetLatencyMs;
+    
+    this.minimalBufferMs = minimalBufferMs;
+    this.targetLatencyMs = targetLatencyMs;
+    
+    this.logger.info(`Buffer parameters changed - Minimal buffer: ${oldMinBuffer}ms → ${minimalBufferMs}ms, Target latency: ${oldTargetLatency}ms → ${targetLatencyMs}ms`);
   }
 
   /**
@@ -1107,26 +1120,151 @@ export class Player {
   }
   
   /**
-   * Check for critically low buffer and attempt to recover
+   * Track the minimum buffer level before appending new segments
+   */
+  private trackMinimumBufferLevel(): void {
+    const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
+    if (!videoEl || !this.playbackStarted) return;
+    
+    const currentTime = videoEl.currentTime;
+    const now = Date.now();
+    
+    // Reset minimum buffer tracking every 2 seconds to avoid getting stuck
+    if (now - this.lastSegmentAppendTime > 2000) {
+      this.minBufferLevel = Infinity;
+      this.logger.debug(`[BufferTracking] Reset minimum buffer tracking`);
+    }
+    
+    // Calculate current buffer levels
+    if (this.videoSourceBuffer && !this.videoSourceBuffer.updating) {
+      const videoRanges = this.videoSourceBuffer.buffered;
+      if (videoRanges.length > 0) {
+        for (let i = 0; i < videoRanges.length; i++) {
+          if (currentTime >= videoRanges.start(i) && currentTime <= videoRanges.end(i)) {
+            const videoBufferAhead = videoRanges.end(i) - currentTime;
+            this.minBufferLevel = Math.min(this.minBufferLevel, videoBufferAhead * 1000);
+            break;
+          }
+        }
+      }
+    }
+    
+    if (this.audioSourceBuffer && !this.audioSourceBuffer.updating) {
+      const audioRanges = this.audioSourceBuffer.buffered;
+      if (audioRanges.length > 0) {
+        for (let i = 0; i < audioRanges.length; i++) {
+          if (currentTime >= audioRanges.start(i) && currentTime <= audioRanges.end(i)) {
+            const audioBufferAhead = audioRanges.end(i) - currentTime;
+            this.minBufferLevel = Math.min(this.minBufferLevel, audioBufferAhead * 1000);
+            break;
+          }
+        }
+      }
+    }
+    
+    this.lastSegmentAppendTime = now;
+    
+    // Log occasionally
+    if (Math.random() < 0.05) {
+      this.logger.debug(`[BufferTracking] Minimum buffer level: ${this.minBufferLevel.toFixed(0)}ms`);
+    }
+  }
+
+  /**
+   * Get the average segment duration in seconds for a given buffer
+   */
+  private getAverageSegmentDuration(buffer: MediaSegmentBuffer): number {
+    const segments = buffer.getAllSegments();
+    if (segments.length === 0) return 0;
+    
+    let totalDuration = 0;
+    let segmentCount = 0;
+    
+    // Look at recent segments (last 10 or so)
+    const recentSegments = segments.slice(-10);
+    
+    for (const segment of recentSegments) {
+      if (segment.trackInfo && segment.trackInfo.duration && segment.trackInfo.timescale) {
+        const durationInSeconds = segment.trackInfo.duration / segment.trackInfo.timescale;
+        totalDuration += durationInSeconds;
+        segmentCount++;
+      }
+    }
+    
+    return segmentCount > 0 ? totalDuration / segmentCount : 0;
+  }
+
+  /**
+   * Update just the playback rate display
+   */
+  private updatePlaybackRateDisplay(): void {
+    const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
+    const playbackRateEl = document.getElementById('playbackRate');
+    
+    if (playbackRateEl && videoEl && this.playbackStarted) {
+      const rate = videoEl.playbackRate;
+      playbackRateEl.textContent = `${rate.toFixed(3)}x`; // Show 3 decimal places
+      
+      // Color coding based on playback rate
+      if (Math.abs(rate - 1.0) < 0.005) {
+        playbackRateEl.style.color = '#10b981'; // Green for very close to normal
+      } else if (Math.abs(rate - 1.0) < 0.02) {
+        playbackRateEl.style.color = '#f59e0b'; // Orange for minor adjustment
+      } else {
+        playbackRateEl.style.color = '#ef4444'; // Red for significant adjustment
+      }
+    }
+  }
+
+  /**
+   * Check buffer health and control playback rate based on minimal buffer and target latency
    * This is called during the monitorSync process
    */
   private checkBufferHealth(videoBufferAhead: number, audioBufferAhead: number): void {
     const videoEl = document.getElementById('videoPlayer') as HTMLVideoElement;
     if (!videoEl) {return;}
     
-    // Convert target buffer from ms to seconds for comparison
-    const targetBufferSec = this.targetBufferDurationMs / 1000;
+    // Convert parameters to seconds for comparison
+    const minimalBufferSec = this.minimalBufferMs / 1000;
+    const targetLatencySec = this.targetLatencyMs / 1000;
+    
+    // Calculate actual latency assuming media timestamps are NTP-synchronized
+    // Latency = current wall clock time - media presentation time
+    // This requires both player and media producer to have synchronized clocks
+    let currentLatencyMs = Date.now() - (videoEl.currentTime * 1000);
+    
+    // Sanity check - if latency is negative or unreasonably large, fall back to buffer-based estimate
+    if (currentLatencyMs < 0 || currentLatencyMs > 30000) {
+      this.logger.warn(`[BufferHealth] Unusual latency value: ${currentLatencyMs}ms, falling back to buffer-based estimate`);
+      const avgBufferAhead = (videoBufferAhead + audioBufferAhead) / 2;
+      currentLatencyMs = avgBufferAhead * 1000;
+    }
+    
+    const currentLatencySec = currentLatencyMs / 1000;
+    
+    // For buffer control, use the current buffer levels, not the historical minimum
+    // The minBufferLevel tracking is for monitoring purposes only
+    const effectiveMinBuffer = Math.min(videoBufferAhead, audioBufferAhead);
     
     // Check if either buffer is critically low
     const videoCritical = this.videoSourceBuffer && videoBufferAhead < this.bufferCriticalThreshold;
     const audioCritical = this.audioSourceBuffer && audioBufferAhead < this.bufferCriticalThreshold;
     
-    // Check if either buffer is below target
-    const videoBelowTarget = this.videoSourceBuffer && videoBufferAhead < targetBufferSec;
-    const audioBelowTarget = this.audioSourceBuffer && audioBufferAhead < targetBufferSec;
+    // Stage 1: Check if minimum buffer constraint is violated
+    const belowMinimalBuffer = effectiveMinBuffer < minimalBufferSec;
+    
+    // Stage 2: Check if we're above or below target latency
+    const aboveTargetLatency = currentLatencySec > targetLatencySec;
+    const belowTargetLatency = currentLatencySec < targetLatencySec;
+    
+    // Debug logging - log every 10th call to see the effect
+    if (Math.random() < 0.1) {
+      const trackedMin = this.minBufferLevel !== Infinity ? this.minBufferLevel : -1;
+      this.logger.info(`[BufferHealth] Current buffer: ${(effectiveMinBuffer * 1000).toFixed(0)}ms (threshold: ${this.minimalBufferMs}ms), Tracked min: ${trackedMin.toFixed(0)}ms, Latency: ${currentLatencyMs.toFixed(0)}ms (target: ${this.targetLatencyMs}ms), Rate: ${videoEl.playbackRate.toFixed(2)}x, Conditions: belowMin=${belowMinimalBuffer}, aboveLat=${aboveTargetLatency}, belowLat=${belowTargetLatency}`);
+    }
     
     if ((videoCritical || audioCritical) && !this.playbackStalled && !this.recoveryInProgress) {
-      this.logger.info(`[BufferHealth] Buffer critically low - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s, Target: ${targetBufferSec.toFixed(2)}s`);
+      this.logger.info(`[BufferHealth] Buffer critically low - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s`);
       
       // Check if we're stalled or about to stall
       if (videoEl.paused || videoEl.readyState < 3) {
@@ -1143,40 +1281,73 @@ export class Player {
           const originalRate = videoEl.playbackRate;
           videoEl.playbackRate = 0.7;
           this.logger.info(`[BufferHealth] Reduced playback rate from ${originalRate.toFixed(2)}x to ${videoEl.playbackRate.toFixed(2)}x to prevent stall`);
+          this.updatePlaybackRateDisplay();
         }
       }
-    } else if (this.playbackStalled && videoBufferAhead > targetBufferSec && audioBufferAhead > targetBufferSec) {
-      // We have recovered from stalled state and reached target buffer levels
+    } else if (this.playbackStalled && effectiveMinBuffer > minimalBufferSec) {
+      // We have recovered from stalled state and have enough buffer
       this.playbackStalled = false;
-      this.logger.info(`[BufferHealth] Playback recovered from stall, buffer levels at target (${targetBufferSec.toFixed(2)}s)`);
+      this.logger.info(`[BufferHealth] Playback recovered from stall, buffer above minimal threshold`);
       
       // Reset playback rate to normal
       videoEl.playbackRate = 1.0;
-    } else if ((videoBelowTarget || audioBelowTarget) && !this.playbackStalled && videoEl.playbackRate >= 1.0) {
-      // Buffers below target but not critical - adjust playback rate to allow buffering
-      const minBuffer = Math.min(videoBufferAhead || Infinity, audioBufferAhead || Infinity);
-      const bufferRatio = minBuffer / targetBufferSec; // How full is our buffer compared to target
+      this.updatePlaybackRateDisplay();
+    } else if (belowMinimalBuffer && !this.playbackStalled) {
+      // Priority 1: Minimal buffer constraint violated - slow down to build buffer
+      const newRate = 0.97;
+      if (Math.abs(videoEl.playbackRate - newRate) >= 0.01) {
+        videoEl.playbackRate = newRate;
+        this.logger.info(`[BufferHealth] Below minimal buffer (${(effectiveMinBuffer * 1000).toFixed(0)}ms < ${this.minimalBufferMs}ms), reducing rate to ${newRate.toFixed(2)}x`);
+        this.updatePlaybackRateDisplay();
+      }
+    } else if (!belowMinimalBuffer && aboveTargetLatency && !this.playbackStalled) {
+      // Priority 2: Above target latency - speed up to reduce latency
+      const latencyError = (currentLatencyMs - this.targetLatencyMs) / this.targetLatencyMs;
       
-      if (bufferRatio < 0.5) {
-        // Less than 50% of target buffer - slow down more
-        const newRate = 0.9;
-        if (videoEl.playbackRate > newRate) {
-          const originalRate = videoEl.playbackRate;
-          videoEl.playbackRate = newRate;
-          this.logger.info(`[BufferHealth] Reduced playback rate from ${originalRate.toFixed(2)}x to ${newRate.toFixed(2)}x (buffer at ${(bufferRatio * 100).toFixed(0)}% of target)`);
-        }
+      // Non-linear gain: starts at 3% for large errors, reduces as we approach target
+      const baseGain = 0.03;
+      const gainReduction = Math.exp(-Math.abs(latencyError) * 10); // Exponential reduction
+      const effectiveGain = baseGain * (1 - gainReduction * 0.8); // Reduce gain by up to 80% as we approach target
+      
+      const newRate = Math.min(1.02, 1.0 + latencyError * effectiveGain);
+      
+      if (Math.abs(videoEl.playbackRate - newRate) >= 0.001) { // Lower threshold for small adjustments
+        videoEl.playbackRate = newRate;
+        this.logger.info(`[BufferHealth] Above target latency (${currentLatencyMs.toFixed(0)}ms > ${this.targetLatencyMs}ms), increasing rate to ${newRate.toFixed(3)}x (gain: ${(effectiveGain * 100).toFixed(1)}%)`);
+        this.updatePlaybackRateDisplay();
       }
-    } else if (!this.playbackStalled && videoBufferAhead > targetBufferSec * 1.5 && audioBufferAhead > targetBufferSec * 1.5) {
-      // Buffer exceeds target by 50% - reset to normal speed if needed
-      if (videoEl.playbackRate !== 1.0) {
+    } else if (!belowMinimalBuffer && belowTargetLatency && !this.playbackStalled) {
+      // Below target latency - slow down to increase latency (avoid getting too close to live edge)
+      const latencyError = (this.targetLatencyMs - currentLatencyMs) / this.targetLatencyMs;
+      
+      // Non-linear gain: more aggressive reduction for latency overshoot
+      // Use higher base gain but stronger reduction near target
+      const baseGain = 0.05;
+      const gainReduction = Math.exp(-Math.abs(latencyError) * 15); // Stronger exponential reduction
+      const effectiveGain = baseGain * (1 - gainReduction * 0.9); // Reduce gain by up to 90% as we approach target
+      
+      const newRate = Math.max(0.95, 1.0 - latencyError * effectiveGain);
+      
+      if (Math.abs(videoEl.playbackRate - newRate) >= 0.001) { // Lower threshold for small adjustments
+        videoEl.playbackRate = newRate;
+        this.logger.info(`[BufferHealth] Below target latency (${currentLatencyMs.toFixed(0)}ms < ${this.targetLatencyMs}ms), reducing rate to ${newRate.toFixed(3)}x to increase latency (gain: ${(effectiveGain * 100).toFixed(1)}%)`);
+        this.updatePlaybackRateDisplay();
+      }
+    } else {
+      // Log why we're not adjusting
+      if (Math.random() < 0.05) {
+        this.logger.debug(`[BufferHealth] No adjustment needed - belowMin: ${belowMinimalBuffer}, aboveLat: ${aboveTargetLatency}, belowLat: ${belowTargetLatency}, stalled: ${this.playbackStalled}, rate: ${videoEl.playbackRate.toFixed(2)}x`);
+      }
+      
+      // Only reset to 1.0 if we're actually within target range (with some tolerance)
+      const withinTargetRange = !belowMinimalBuffer && 
+                               Math.abs(currentLatencyMs - this.targetLatencyMs) < (this.targetLatencyMs * 0.1);
+                               
+      if (!this.playbackStalled && Math.abs(videoEl.playbackRate - 1.0) >= 0.01 && withinTargetRange) {
         videoEl.playbackRate = 1.0;
-        this.logger.info(`[BufferHealth] Restored normal playback rate, buffers exceed target by >50%`);
+        this.logger.info(`[BufferHealth] Within 10% of target latency, restoring normal playback rate`);
+        this.updatePlaybackRateDisplay();
       }
-    } else if (this.videoSourceBuffer && this.audioSourceBuffer && 
-              videoBufferAhead < this.bufferLowThreshold && 
-              audioBufferAhead < this.bufferLowThreshold) {
-      // Both buffers are low but not yet critical
-      this.logger.info(`[BufferHealth] Buffer levels low - Video: ${videoBufferAhead.toFixed(2)}s, Audio: ${audioBufferAhead.toFixed(2)}s, Target: ${targetBufferSec.toFixed(2)}s`);
     }
   }
   
@@ -1188,7 +1359,7 @@ export class Player {
       return;
     }
 
-    const targetBufferSec = this.targetBufferDurationMs / 1000;
+    const minimalBufferSec = this.minimalBufferMs / 1000;
     
     this.recoveryInProgress = true;
     this.recoveryAttempts++;
@@ -1217,7 +1388,7 @@ export class Player {
       
       if (furthestBufferStart !== -1) {
         // We found a range ahead, seek to it
-        const newPosition = furthestBufferStart + targetBufferSec; // Start target buffer from buffered end
+        const newPosition = furthestBufferStart + minimalBufferSec; // Start minimal buffer from buffered end
         this.logger.info(`[BufferHealth] Found buffered range starting at ${furthestBufferStart.toFixed(2)}, seeking to ${newPosition.toFixed(2)}`);
         
         videoEl.currentTime = newPosition;
@@ -1252,8 +1423,8 @@ export class Player {
               }
             }
             
-            // Calculate buffer ahead and compare to target
-            const targetBufferSec = this.targetBufferDurationMs / 1000;
+            // Calculate buffer ahead and compare to minimal buffer
+            const minimalBufferSec = this.minimalBufferMs / 1000;
             let bufferAheadSec = 0;
             
             for (let i = 0; i < videoEl.buffered.length; i++) {
@@ -1263,7 +1434,7 @@ export class Player {
               }
             }
             
-            const bufferPercent = (bufferAheadSec / targetBufferSec) * 100;
+            const bufferPercent = (bufferAheadSec / minimalBufferSec) * 100;
             
             if (hasBufferAhead) {
               videoEl.play().then(() => {
@@ -1274,7 +1445,7 @@ export class Player {
                 this.recoveryInProgress = false;
               });
             } else {
-              this.logger.warn(`[BufferHealth] Still insufficient buffer after wait (${bufferAheadSec.toFixed(2)}s, target: ${targetBufferSec.toFixed(2)}s)`);
+              this.logger.warn(`[BufferHealth] Still insufficient buffer after wait (${bufferAheadSec.toFixed(2)}s, minimal: ${minimalBufferSec.toFixed(2)}s)`);
               this.recoveryInProgress = false;
             }
           } else {
@@ -1574,6 +1745,9 @@ export class Player {
           // Add the media segment to the media segment buffer and get the segment object
           const mediaSegment = this.videoMediaSegmentBuffer.addMediaSegment(obj.data);
           
+          // Track buffer level before appending (this is the minimum point)
+          this.trackMinimumBufferLevel();
+          
           // Append the segment to the source buffer via mediaSegmentBuffer only
           this.videoMediaSegmentBuffer.appendToSourceBuffer(mediaSegment);
           
@@ -1603,9 +1777,9 @@ export class Player {
             const bufferDurationSec = this.videoMediaSegmentBuffer.getBufferDuration();
             const bufferDurationMs = bufferDurationSec * 1000;
             
-            if (bufferDurationMs >= this.targetBufferDurationMs) {
+            if (bufferDurationMs >= this.targetLatencyMs) {
               this.videoBufferReady = true;
-              this.logger.info(`[Video] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.videoObjectsReceived} objects), target: ${this.targetBufferDurationMs}ms`);
+              this.logger.info(`[Video] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.videoObjectsReceived} objects), target latency: ${this.targetLatencyMs}ms`);
               
               // Check if we can start playback (depends on audio buffer state too)
               this.checkBuffersAndStartPlayback();
@@ -1985,6 +2159,9 @@ export class Player {
         // Add the media segment to the media segment buffer and get the segment object
         const mediaSegment = this.audioMediaSegmentBuffer.addMediaSegment(obj.data);
         
+        // Track buffer level before appending (this is the minimum point)
+        this.trackMinimumBufferLevel();
+        
         // Append the segment to the source buffer via mediaSegmentBuffer
         this.audioMediaSegmentBuffer.appendToSourceBuffer(mediaSegment);
         
@@ -2008,9 +2185,9 @@ export class Player {
           const bufferDurationSec = this.audioMediaSegmentBuffer.getBufferDuration();
           const bufferDurationMs = bufferDurationSec * 1000;
           
-          if (bufferDurationMs >= this.targetBufferDurationMs) {
+          if (bufferDurationMs >= this.targetLatencyMs) {
             this.audioBufferReady = true;
-            this.logger.debug(`[Audio] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.audioObjectsReceived} objects), target: ${this.targetBufferDurationMs}ms`);
+            this.logger.debug(`[Audio] Buffer ready with ${bufferDurationMs.toFixed(0)}ms duration (${this.audioObjectsReceived} objects), target latency: ${this.targetLatencyMs}ms`);
             
             // Check if we can start playback (depends on video buffer state too)
             this.checkBuffersAndStartPlayback();
@@ -2076,7 +2253,7 @@ export class Player {
         const audioDuration = this.audioMediaSegmentBuffer.getBufferDuration();
         const videoMs = videoDuration * 1000;
         const audioMs = audioDuration * 1000;
-        this.logger.info(`[Sync] Buffer duration - Video: ${videoDuration.toFixed(2)}s (${videoMs.toFixed(0)}ms), Audio: ${audioDuration.toFixed(2)}s (${audioMs.toFixed(0)}ms), Target: ${this.targetBufferDurationMs}ms`);
+        this.logger.info(`[Sync] Buffer duration - Video: ${videoDuration.toFixed(2)}s (${videoMs.toFixed(0)}ms), Audio: ${audioDuration.toFixed(2)}s (${audioMs.toFixed(0)}ms), Target latency: ${this.targetLatencyMs}ms`);
       }
     }
   }
@@ -2275,37 +2452,35 @@ export class Player {
       this.checkBufferHealth(videoBufferAhead, audioBufferAhead);
       
       // Only perform sync adjustment if both audio and video are active
+      // AND if the buffer health check didn't already adjust the playback rate
       if (this.videoSourceBuffer && this.audioSourceBuffer) {
         // Simple playback rate adjustment based on buffer difference
         // This helps compensate for the slightly fluctuating audio segment durations
         const bufferDifference = Math.abs(videoBufferAhead - audioBufferAhead);
-        const normalPlaybackRate = 1.0;
-        const maxAdjustment = 0.1; // Maximum 10% speed adjustment
         
         if (bufferDifference > 0.5) { // If buffers are more than 500ms apart
-          // Adjust playback rate to help synchronize
+          // Only adjust for sync if we're not already adjusting for buffer health
+          const currentRate = videoEl.playbackRate;
+          
           if (videoBufferAhead > audioBufferAhead) {
-            // Video is ahead, slow down slightly
-            const newRate = Math.max(normalPlaybackRate - maxAdjustment, 0.9);
-            if (videoEl.playbackRate !== newRate) {
-              videoEl.playbackRate = newRate;
-              this.logger.info(`[Sync] Slowing down playback to ${newRate.toFixed(2)}x to help sync`);
+            // Video is ahead, slow down slightly - but respect buffer health decisions
+            const syncRate = 0.9;
+            if (currentRate > syncRate && currentRate <= 1.0) {
+              videoEl.playbackRate = syncRate;
+              this.logger.info(`[Sync] Slowing down playback to ${syncRate.toFixed(2)}x to help sync`);
+              this.updatePlaybackRateDisplay();
             }
           } else {
-            // Audio is ahead, speed up slightly
-            const newRate = Math.min(normalPlaybackRate + maxAdjustment, 1.1);
-            if (videoEl.playbackRate !== newRate) {
-              videoEl.playbackRate = newRate;
-              this.logger.info(`[Sync] Speeding up playback to ${newRate.toFixed(2)}x to help sync`);
+            // Audio is ahead, speed up slightly - but respect buffer health decisions
+            const syncRate = 1.1;
+            if (currentRate < syncRate && currentRate >= 1.0) {
+              videoEl.playbackRate = syncRate;
+              this.logger.info(`[Sync] Speeding up playback to ${syncRate.toFixed(2)}x to help sync`);
+              this.updatePlaybackRateDisplay();
             }
           }
-        } else {
-          // Buffers are close enough, use normal playback rate
-          if (videoEl.playbackRate !== normalPlaybackRate && !this.playbackStalled) {
-            videoEl.playbackRate = normalPlaybackRate;
-            this.logger.info(`[Sync] Restored normal playback rate`);
-          }
         }
+        // Remove the else block that was resetting to normal rate - let buffer health control this
       }
     } catch (e) {
       this.logger.error(`[Sync] Error monitoring synchronization: ${e}`);
@@ -2337,48 +2512,90 @@ export class Player {
     }
     
     try {
-      // Convert target buffer from ms to seconds for comparison
-      const targetBufferMs = this.targetBufferDurationMs;
+      // Get buffer parameters for UI display
+      const minimalBufferMs = this.minimalBufferMs;
+      const targetLatencyMs = this.targetLatencyMs;
+      
+      // Debug log occasionally
+      if (Math.random() < 0.02) {
+        this.logger.debug(`[UI] Minimal buffer: ${minimalBufferMs}ms, Target latency: ${targetLatencyMs}ms`);
+      }
+      
+      // Calculate current buffer levels
+      const currentTime = videoEl.currentTime;
+      let videoBufferAhead = 0;
+      let audioBufferAhead = 0;
+      
+      // Find how much buffer we have ahead of the current position
+      if (this.videoSourceBuffer) {
+        for (let i = 0; i < this.videoSourceBuffer.buffered.length; i++) {
+          if (currentTime >= this.videoSourceBuffer.buffered.start(i) && 
+              currentTime < this.videoSourceBuffer.buffered.end(i)) {
+            videoBufferAhead = this.videoSourceBuffer.buffered.end(i) - currentTime;
+            break;
+          }
+        }
+      }
+      
+      if (this.audioSourceBuffer) {
+        for (let i = 0; i < this.audioSourceBuffer.buffered.length; i++) {
+          if (currentTime >= this.audioSourceBuffer.buffered.start(i) && 
+              currentTime < this.audioSourceBuffer.buffered.end(i)) {
+            audioBufferAhead = this.audioSourceBuffer.buffered.end(i) - currentTime;
+            break;
+          }
+        }
+      }
+      
+      // Update stored values for other uses
+      this.lastVideoBufferAhead = videoBufferAhead;
+      this.lastAudioBufferAhead = audioBufferAhead;
       
       // Update video buffer level display
       const videoBufferEl = document.getElementById('videoBufferLevel');
       if (videoBufferEl) {
-        const videoBufferMs = Math.round(this.lastVideoBufferAhead * 1000);
+        const videoBufferMs = Math.round(videoBufferAhead * 1000);
         videoBufferEl.textContent = this.videoSourceBuffer ? `${videoBufferMs} ms` : 'N/A';
         
-        // Add color coding based on comparison to target buffer
-        // Red if more than 50% above or 25% below the target value
+        // Add color coding based on comparison to minimal buffer
+        // Red if below minimal buffer, orange if close (within 50ms)
         if (this.videoSourceBuffer) {
-          const bufferRatio = videoBufferMs / targetBufferMs;
-          
-          if (bufferRatio > 1.5 || bufferRatio < 0.75) {
-            videoBufferEl.style.backgroundColor = '#ffebee'; // Light red for out of optimal range
+          if (videoBufferMs < minimalBufferMs) {
+            videoBufferEl.style.color = '#ef4444'; // Red for below minimal
+            videoBufferEl.parentElement!.style.backgroundColor = '#fee2e2'; // Light red background
+          } else if (videoBufferMs < minimalBufferMs + 50) {
+            videoBufferEl.style.color = '#f59e0b'; // Orange for close to minimal
+            videoBufferEl.parentElement!.style.backgroundColor = '#fef3c7'; // Light orange background
           } else {
-            videoBufferEl.style.backgroundColor = '#e3f2fd'; // Default blue for good buffer
+            videoBufferEl.style.color = ''; // Reset to CSS default
+            videoBufferEl.parentElement!.style.backgroundColor = ''; // Reset background
           }
         } else {
-          videoBufferEl.style.backgroundColor = '#f5f5f5'; // Gray for inactive
+          videoBufferEl.style.color = '#6b7280'; // Gray for inactive
         }
       }
       
       // Update audio buffer level display
       const audioBufferEl = document.getElementById('audioBufferLevel');
       if (audioBufferEl) {
-        const audioBufferMs = Math.round(this.lastAudioBufferAhead * 1000);
+        const audioBufferMs = Math.round(audioBufferAhead * 1000);
         audioBufferEl.textContent = this.audioSourceBuffer ? `${audioBufferMs} ms` : 'N/A';
         
-        // Add color coding based on comparison to target buffer
-        // Red if more than 50% above or 25% below the target value
+        // Add color coding based on comparison to minimal buffer
+        // Red if below minimal buffer, orange if close (within 50ms)
         if (this.audioSourceBuffer) {
-          const bufferRatio = audioBufferMs / targetBufferMs;
-          
-          if (bufferRatio > 1.5 || bufferRatio < 0.75) {
-            audioBufferEl.style.backgroundColor = '#ffebee'; // Light red for out of optimal range
+          if (audioBufferMs < minimalBufferMs) {
+            audioBufferEl.style.color = '#ef4444'; // Red for below minimal
+            audioBufferEl.parentElement!.style.backgroundColor = '#fee2e2'; // Light red background
+          } else if (audioBufferMs < minimalBufferMs + 50) {
+            audioBufferEl.style.color = '#f59e0b'; // Orange for close to minimal
+            audioBufferEl.parentElement!.style.backgroundColor = '#fef3c7'; // Light orange background
           } else {
-            audioBufferEl.style.backgroundColor = '#e8f5e9'; // Default green for good buffer
+            audioBufferEl.style.color = ''; // Reset to CSS default
+            audioBufferEl.parentElement!.style.backgroundColor = ''; // Reset background
           }
         } else {
-          audioBufferEl.style.backgroundColor = '#f5f5f5'; // Gray for inactive
+          audioBufferEl.style.color = '#6b7280'; // Gray for inactive
         }
       }
       
@@ -2395,12 +2612,34 @@ export class Player {
           const latencyMs = Math.round(now - videoEl.currentTime*1000);
           playbackLatencyEl.textContent = `${latencyMs} ms`;
           
-          // No variable coloring for latency since we don't know transport latency
-          playbackLatencyEl.style.backgroundColor = '#fff3e0'; // Default orange background
+          // Keep default orange color from CSS
+          playbackLatencyEl.style.color = ''; // Use CSS default
         }
       } else {
           playbackLatencyEl.textContent = 'N/A';
-          playbackLatencyEl.style.backgroundColor = '#f5f5f5'; // Gray for inactive
+          playbackLatencyEl.style.color = '#6b7280'; // Gray for inactive
+        }
+      }
+      
+      // Update playback rate display
+      const playbackRateEl = document.getElementById('playbackRate');
+      if (playbackRateEl) {
+        if (videoEl && this.playbackStarted) {
+          const rate = videoEl.playbackRate;
+          playbackRateEl.textContent = `${rate.toFixed(3)}x`; // Show 3 decimal places
+          
+          // Color coding based on playback rate
+          // Green for very close to normal, orange for minor adjustments, red for significant adjustments
+          if (Math.abs(rate - 1.0) < 0.005) {
+            playbackRateEl.style.color = '#10b981'; // Green for very close to normal
+          } else if (Math.abs(rate - 1.0) < 0.02) {
+            playbackRateEl.style.color = '#f59e0b'; // Orange for minor adjustment
+          } else {
+            playbackRateEl.style.color = '#ef4444'; // Red for significant adjustment
+          }
+        } else {
+          playbackRateEl.textContent = 'N/A';
+          playbackRateEl.style.color = '#6b7280'; // Gray for inactive
         }
       }
     } catch (e) {

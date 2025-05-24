@@ -319,7 +319,7 @@
     /* Info Cards */
     .info-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 1rem;
     }
     
@@ -327,20 +327,21 @@
       background-color: var(--bg-secondary);
       border: 1px solid var(--border-color);
       border-radius: 8px;
-      padding: 0.75rem;
+      padding: 1.25rem;
       text-align: center;
     }
     
     .info-card-title {
-      font-size: 0.7rem;
+      font-size: 0.75rem;
       color: var(--text-secondary);
-      margin-bottom: 0.25rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
     }
     
     .info-card-value {
-      font-size: 1.25rem;
+      font-size: 1.5rem;
       font-weight: 600;
       font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
     }
@@ -355,6 +356,10 @@
     
     .info-card-value.latency {
       color: var(--accent-orange);
+    }
+    
+    .info-card-value.rate {
+      color: #e91e63;
     }
     
     /* Tracks Section */
@@ -529,7 +534,11 @@
       
       .info-grid {
         grid-template-columns: 1fr;
-        gap: 0.5rem;
+        gap: 0.75rem;
+      }
+      
+      .info-card {
+        padding: 1rem;
       }
     }
   </style>
@@ -579,8 +588,12 @@
           <span>■</span> Stop
         </button>
         <div class="buffer-control">
-          <label for="bufferDuration">Target Buffer (ms):</label>
-          <input type="number" id="bufferDuration" min="0" max="5000" step="50" value="200">
+          <label for="minimalBuffer">Minimal Buffer (ms):</label>
+          <input type="number" id="minimalBuffer" min="0" max="1000" step="10" value="200">
+        </div>
+        <div class="buffer-control">
+          <label for="targetLatency">Target Latency (ms):</label>
+          <input type="number" id="targetLatency" min="0" max="5000" step="50" value="300">
         </div>
       </div>
     </div>
@@ -608,6 +621,9 @@
       <!-- Playback Info Card -->
       <div class="card">
         <h2>Playback Information</h2>
+        <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem; text-align: center;">
+          Latency measurement assumes synchronized clocks (NTP)
+        </p>
         <div class="info-grid">
           <div class="info-card">
             <div class="info-card-title">Video Buffer</div>
@@ -620,6 +636,10 @@
           <div class="info-card">
             <div class="info-card-title">Latency</div>
             <div id="playbackLatency" class="info-card-value latency">N/A</div>
+          </div>
+          <div class="info-card">
+            <div class="info-card-title">Playback Rate</div>
+            <div id="playbackRate" class="info-card-value rate">N/A</div>
           </div>
         </div>
       </div>

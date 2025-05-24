@@ -9,14 +9,16 @@ The `config.json` file supports the following options:
 ```json
 {
   "defaultServerUrl": "https://moqlivemock.demo.osaas.io/moq",
-  "targetBufferDuration": 200
+  "minimalBuffer": 200,
+  "targetLatency": 300
 }
 ```
 
 ### Options
 
 - **defaultServerUrl**: The default MoQ server URL that appears in the connection input field
-- **targetBufferDuration**: The default target buffer duration in milliseconds
+- **minimalBuffer**: The minimal buffer threshold in milliseconds (default: 200ms). Below this threshold, playback quality may suffer
+- **targetLatency**: The target end-to-end latency in milliseconds (default: 300ms). Must be greater than minimalBuffer
 
 ## Usage
 
@@ -28,11 +30,14 @@ If the configuration file is not found or cannot be loaded, the application will
 
 ## Example
 
-To change the default server to your own instance:
+To change the default server and adjust buffer parameters for lower latency:
 
 ```json
 {
   "defaultServerUrl": "https://your-server.example.com:443/moq",
-  "targetBufferDuration": 500
+  "minimalBuffer": 150,
+  "targetLatency": 250
 }
 ```
+
+Note: Setting targetLatency too low may result in more frequent buffer underruns. The targetLatency must always be greater than minimalBuffer.

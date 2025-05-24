@@ -124,23 +124,84 @@ npm run build
 
 This will create a `dist` directory with the compiled application.
 
+## Configuration
+
+Default parameters can be configured in two ways:
+
+1. **Before build**: Edit `src/config.json` to change defaults
+2. **After build**: Edit `dist/config.json` to change defaults without rebuilding
+
+See [CONFIG.md](CONFIG.md) for detailed configuration options.
+
 ## Features
 
 - Complete MoQ client implementation based on draft-11 of the specification
 - Full WARP catalog support for discovering available media streams
 - Media Source Extensions (MSE) integration for seamless playback in browsers
 - CMAF/ISO-BMFF media segment parsing and playback
-- Advanced buffer management with configurable target buffer duration
-- Adaptive playback rate adjustment based on buffer health
+- Advanced two-parameter buffer control system (see Buffer Control Algorithm below)
+- Adaptive playback rate adjustment based on buffer health and latency
 - Synchronized audio and video playback with automatic recovery
 - Configurable logging with support for debug, info, warn, and error levels
-- Clean and intuitive UI for track selection and playback control
+- Clean and intuitive UI with real-time buffer and latency monitoring
+
+## Buffer Control Algorithm
+
+The player uses a sophisticated two-parameter control system to maintain optimal playback:
+
+### Parameters
+
+1. **Minimal Buffer** (default: 200ms)
+   - The safety threshold below which playback quality may suffer
+   - Prevents buffer underruns and playback stalls
+   
+2. **Target Latency** (default: 300ms)
+   - The desired end-to-end latency for live streaming
+   - Must be greater than the minimal buffer value
+
+### Control Logic
+
+The playback rate is adjusted based on a priority system:
+
+1. **Priority 1 - Buffer Safety**: If buffer level < minimal buffer
+   - Reduce playback rate to 0.97x to build up buffer
+   - This takes precedence over latency control
+
+2. **Priority 2 - Latency Control**: If buffer level ≥ minimal buffer
+   - If latency > target: Increase playback rate (up to 1.02x) to reduce latency
+   - If latency < target: Decrease playback rate (down to 0.98x) to maintain target latency
+   - This prevents drifting too close to the live edge
+
+3. **Normal Playback**: When within acceptable ranges
+   - Playback rate returns to 1.0x
+
+### Visual Indicators
+
+Buffer levels are color-coded in the UI:
+- **Red background**: Buffer is below minimal threshold (critical)
+- **Orange background**: Buffer is within 50ms of minimal threshold (warning)
+- **Default colors**: Buffer is at safe levels
+
+### Latency Measurement
+
+Accurate latency measurement requires:
+- **Clock Synchronization**: Both the client (player) and server must have their clocks synchronized via NTP
+- **Media Timestamps**: The media timestamps must be relative to the UNIX epoch (wall clock time)
+- **Calculation**: Latency = Current Time - Media Presentation Time
+
+Without proper NTP synchronization on both client and server, latency measurements will be inaccurate.
+
+### Limitations
+
+- Target latency must be greater than minimal buffer
+- Latency measurement accuracy depends on clock synchronization
+- WebTransport is required (Chrome/Edge only)
 
 ## Notes
 
 - WebTransport is only supported in some modern browsers, not in Node.js or Safari
 - For development, you may need to accept the self-signed certificate warning in your browser
-- The UI includes controls for adjusting target buffer duration and log level
+- The UI includes controls for adjusting both minimal buffer and target latency
 
 ## Contributing
 
