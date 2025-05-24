@@ -1,4 +1,4 @@
-declare module 'codem-isoboxer' {
+declare module "codem-isoboxer" {
   export function parseBuffer(buffer: ArrayBuffer): ISOFile | ISOBox;
 
   export interface ISOFile {
@@ -13,17 +13,17 @@ declare module 'codem-isoboxer' {
     fetch(type: string): ISOBox | null;
     fetchAll(type: string): ISOBox[];
     boxes?: ISOBox[];
-    
+
     // mdhd box properties
     timescale?: number;
-    
+
     // tfdt box properties
     baseMediaDecodeTime?: number;
-    
+
     // tfhd box properties
     sequence_number?: number;
     default_sample_duration?: number;
-    
+
     // trun box properties
     sample_count?: number;
     samples?: {

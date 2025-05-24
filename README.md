@@ -15,6 +15,7 @@
 [![github release](https://img.shields.io/github/v/release/Eyevinn/warp-player?style=flat-square)](https://github.com/Eyevinn/warp-player/releases)
 [![license](https://img.shields.io/github/license/eyevinn/warp-player.svg?style=flat-square)](LICENSE)
 
+[![CI](https://github.com/Eyevinn/warp-player/actions/workflows/ci.yml/badge.svg)](https://github.com/Eyevinn/warp-player/actions/workflows/ci.yml)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg?style=flat-square)](https://github.com/eyevinn/warp-player/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
 
 </div>
@@ -22,6 +23,7 @@
 ## Overview
 
 This project implements a media player that:
+
 1. Establishes a WebTransport connection to a MoQ server
 2. Subscribes to and parses WARP catalogs for available media
 3. Subscribes to selected media tracks through MoQ transport protocol
@@ -61,11 +63,13 @@ warp-player/
 ## Installation / Usage
 
 1. Install dependencies:
+
    ```
    npm install
    ```
 
 2. Start the development server:
+
    ```
    npm start
    ```
@@ -77,6 +81,7 @@ warp-player/
 ## Development
 
 The development server includes:
+
 - Hot module replacement for quick development
 - Source maps for debugging
 - HTTPS support (required for WebTransport)
@@ -113,6 +118,43 @@ npm run lint
 # Fix linting issues
 npm run lint:fix
 ```
+
+### Git Hooks
+
+This project uses [Husky](https://typicode.github.io/husky/) to manage Git hooks that ensure code quality:
+
+#### Pre-push Hook
+
+Before pushing code, the following checks are automatically run:
+
+- **TypeScript type checking** (`npm run typecheck`)
+- **ESLint linting** (`npm run lint`)
+- **Jest tests** (`npm test`)
+
+If any of these checks fail, the push will be blocked.
+
+#### Commit Message Hook
+
+All commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) format. Examples:
+
+- `feat: add new buffer control algorithm`
+- `fix: resolve WebTransport connection issue`
+- `docs: update README with configuration details`
+- `chore: update dependencies`
+
+The commit will be rejected if the message doesn't follow this format.
+
+### Code Quality Standards
+
+The project enforces the following standards:
+
+- **TypeScript**: Strict type checking enabled
+- **ESLint**: Enforces code style and best practices
+  - All `if` statements must use curly braces
+  - Imports must be ordered and grouped
+  - No unused variables (prefix with `_` to ignore)
+- **Prettier**: Automatic code formatting
+- **Jest**: Unit tests for critical components
 
 ## Building for Production
 
@@ -154,7 +196,6 @@ The player uses a sophisticated two-parameter control system to maintain optimal
 1. **Minimal Buffer** (default: 200ms)
    - The safety threshold below which playback quality may suffer
    - Prevents buffer underruns and playback stalls
-   
 2. **Target Latency** (default: 300ms)
    - The desired end-to-end latency for live streaming
    - Must be greater than the minimal buffer value
@@ -164,10 +205,12 @@ The player uses a sophisticated two-parameter control system to maintain optimal
 The playback rate is adjusted based on a priority system:
 
 1. **Priority 1 - Buffer Safety**: If buffer level < minimal buffer
+
    - Reduce playback rate to 0.97x to build up buffer
    - This takes precedence over latency control
 
 2. **Priority 2 - Latency Control**: If buffer level ≥ minimal buffer
+
    - If latency > target: Increase playback rate (up to 1.02x) to reduce latency
    - If latency < target: Decrease playback rate (down to 0.98x) to maintain target latency
    - This prevents drifting too close to the live edge
@@ -178,6 +221,7 @@ The playback rate is adjusted based on a priority system:
 ### Visual Indicators
 
 Buffer levels are color-coded in the UI:
+
 - **Red background**: Buffer is below minimal threshold (critical)
 - **Orange background**: Buffer is within 50ms of minimal threshold (warning)
 - **Default colors**: Buffer is at safe levels
@@ -185,6 +229,7 @@ Buffer levels are color-coded in the UI:
 ### Latency Measurement
 
 Accurate latency measurement requires:
+
 - **Clock Synchronization**: Both the client (player) and server must have their clocks synchronized via NTP
 - **Media Timestamps**: The media timestamps must be relative to the UNIX epoch (wall clock time)
 - **Calculation**: Latency = Current Time - Media Presentation Time
@@ -206,6 +251,7 @@ Without proper NTP synchronization on both client and server, latency measuremen
 ## Acknowledgments
 
 The MoQ transport implementation in this project is based on work from:
+
 - [moq-js](https://github.com/kixelated/moq-js) by Luke Curley (kixelated)
 - [moq-js fork](https://github.com/englishm/moq-js) by Mike English (englishm)
 

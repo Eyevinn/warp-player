@@ -1,10 +1,10 @@
-import { ILogger, LoggerFactory } from '../logger';
+import { ILogger, LoggerFactory } from "../logger";
 
 import { BufferCtrlWriter } from "./bufferctrlwriter";
 import { Reader, Writer, KeyValuePair } from "./stream";
 
 // Logger for control message operations
-const controlLogger: ILogger = LoggerFactory.getInstance().getLogger('Control');
+const controlLogger: ILogger = LoggerFactory.getInstance().getLogger("Control");
 
 export type Message = Subscriber | Publisher;
 
@@ -21,7 +21,12 @@ export function isSubscriber(m: Message): m is Subscriber {
 }
 
 // Sent by publisher
-export type Publisher = SubscribeOk | SubscribeError | SubscribeDone | Announce | Unannounce;
+export type Publisher =
+  | SubscribeOk
+  | SubscribeError
+  | SubscribeDone
+  | Announce
+  | Unannounce;
 
 export function isPublisher(m: Message): m is Publisher {
   return (
@@ -71,7 +76,7 @@ export interface Subscribe {
   filterType: FilterType;
   startLocation?: Location;
   endGroup?: bigint;
-  params : KeyValuePair[];
+  params: KeyValuePair[];
 }
 
 export enum GroupOrder {
@@ -82,7 +87,7 @@ export enum GroupOrder {
 
 export enum FilterType {
   None = 0x0,
-  NextGroupStart =0x1,
+  NextGroupStart = 0x1,
   LatestObject = 0x2,
   AbsoluteStart = 0x3,
   AbsoluteRange = 0x4,
@@ -196,13 +201,13 @@ export class CtrlStream {
     const p = new Promise<void>((resolve) => {
       done = () => resolve();
     });
-  
+
     // Wait until the previous lock is done, then resolve our lock.
     const lock = this.#mutex.then(() => done);
-    
+
     // Update the mutex
     this.#mutex = lock.then(() => p);
-    
+
     // Return the unlock function
     return lock;
   }
@@ -223,8 +228,10 @@ export class Decoder {
     // Read the 16-bit MSB length field
     const lengthBytes = await this.r.read(2);
     const messageLength = (lengthBytes[0] << 8) | lengthBytes[1]; // MSB format
-    controlLogger.debug(`Message length (16-bit MSB): ${messageLength} bytes, actual length: ${this.r.getByteLength()}`);
-    
+    controlLogger.debug(
+      `Message length (16-bit MSB): ${messageLength} bytes, actual length: ${this.r.getByteLength()}`
+    );
+
     let msgType: Msg;
     switch (t as Id) {
       case Id.Subscribe:
@@ -260,14 +267,16 @@ export class Decoder {
         throw new Error(errorMsg);
     }
 
-    controlLogger.debug(`Parsed message type: ${msgType} (0x${t.toString(16)})`);
+    controlLogger.debug(
+      `Parsed message type: ${msgType} (0x${t.toString(16)})`
+    );
     return msgType;
   }
 
   async message(): Promise<Message> {
     controlLogger.debug("Parsing control message...");
     const t = await this.msg();
-    
+
     let result: Message;
     switch (t) {
       case Msg.Subscribe:
@@ -302,7 +311,7 @@ export class Decoder {
         controlLogger.error(errorMsg);
         throw new Error(errorMsg);
     }
-    
+
     controlLogger.debug("Successfully parsed control message:", result);
     return result;
   }
@@ -311,19 +320,19 @@ export class Decoder {
     controlLogger.debug("Parsing Subscribe message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`RequestID: ${requestId}`);
-    
+
     const trackAlias = await this.r.u62();
     controlLogger.debug(`TrackAlias: ${trackAlias}`);
-    
+
     const namespace = await this.r.tuple();
-    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
-    
+    controlLogger.debug(`Namespace: ${namespace.join("/")}`);
+
     const name = await this.r.string();
     controlLogger.debug(`Name: ${name}`);
-    
+
     const subscriber_priority = await this.r.u8();
     controlLogger.debug(`Subscriber priority: ${subscriber_priority}`);
-    
+
     const group_order = await this.decodeGroupOrder();
     controlLogger.debug(`Group order: ${group_order}`);
 
@@ -332,9 +341,12 @@ export class Decoder {
 
     const filterType = await this.r.u8();
     controlLogger.debug(`Filter type: ${filterType}`);
-    
+
     let startLocation: Location | undefined;
-    if (filterType === FilterType.AbsoluteStart || filterType === FilterType.AbsoluteRange) {
+    if (
+      filterType === FilterType.AbsoluteStart ||
+      filterType === FilterType.AbsoluteRange
+    ) {
       startLocation = await this.location();
       controlLogger.debug(`Start Location: ${JSON.stringify(startLocation)}`);
     }
@@ -347,7 +359,7 @@ export class Decoder {
 
     const params = await this.r.keyValuePairs();
     controlLogger.debug(`Parameters: ${params.length}`);
-    
+
     return {
       kind: Msg.Subscribe,
       requestId,
@@ -367,7 +379,7 @@ export class Decoder {
   private async decodeGroupOrder(): Promise<GroupOrder> {
     const orderCode = await this.r.u8();
     controlLogger.debug(`Raw group order code: ${orderCode}`);
-    
+
     switch (orderCode) {
       case 0:
         return GroupOrder.Publisher;
@@ -393,31 +405,31 @@ export class Decoder {
     const params: KeyValuePair[] = [];
     for (let i = 0; i < numParams; i++) {
       const key = await this.r.u62();
-      const isEven = (key % 2n) === 0n;
+      const isEven = key % 2n === 0n;
       if (isEven) {
         const value = await this.r.u62();
-        params.push({ 'type': key, 'value': value });
+        params.push({ type: key, value: value });
       } else {
-        const length = await this.r.u53();  
+        const length = await this.r.u53();
         const value = await this.r.read(length);
-        params.push({ 'type': key, 'value': value });
+        params.push({ type: key, value: value });
       }
     }
     return params;
   }
-  
+
   private formatBytes(bytes: Uint8Array): string {
     if (bytes.length <= 16) {
       return Array.from(bytes)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join(' ');
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(" ");
     } else {
       const start = Array.from(bytes.slice(0, 8))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join(' ');
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(" ");
       const end = Array.from(bytes.slice(-8))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join(' ');
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(" ");
       return `${start} ... ${end} (${bytes.length} bytes total)`;
     }
   }
@@ -426,10 +438,10 @@ export class Decoder {
     controlLogger.debug("Parsing SubscribeOk message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
-    
+
     const expires = await this.r.u62();
     controlLogger.debug(`Expires: ${expires}`);
-    
+
     const group_order = await this.decodeGroupOrder();
     controlLogger.debug(`Group order: ${group_order}`);
 
@@ -439,11 +451,13 @@ export class Decoder {
     let largest: Location | undefined;
     if (content_exists) {
       largest = await this.location();
-      controlLogger.debug(`Largest: group ${largest.group}, object ${largest.object}`);
+      controlLogger.debug(
+        `Largest: group ${largest.group}, object ${largest.object}`
+      );
     }
-    
+
     const params = await this.r.keyValuePairs();
-    
+
     return {
       kind: Msg.SubscribeOk,
       requestId,
@@ -459,16 +473,16 @@ export class Decoder {
     controlLogger.debug("Parsing SubscribeError message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Subscribe ID: ${requestId}`);
-    
+
     const code = await this.r.u62();
     controlLogger.debug(`Code: ${code}`);
-    
+
     const reason = await this.r.string();
     controlLogger.debug(`Reason: ${reason}`);
-    
+
     const trackAlias = await this.r.u62();
     controlLogger.debug(`Track Alias: ${trackAlias}`);
-    
+
     return {
       kind: Msg.SubscribeError,
       requestId,
@@ -482,23 +496,23 @@ export class Decoder {
     controlLogger.debug("Parsing SubscribeDone message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Subscribe ID: ${requestId}`);
-    
+
     const code = await this.r.u62();
     controlLogger.debug(`Code: ${code}`);
-    
+
     const reason = await this.r.string();
     controlLogger.debug(`Reason: ${reason}`);
-    
+
     // Read the stream count
     const streamCount = await this.r.u53();
     controlLogger.debug(`Stream count: ${streamCount}`);
-    
+
     return {
       kind: Msg.SubscribeDone,
       requestId,
       code,
       streamCount,
-      reason
+      reason,
     };
   }
 
@@ -506,7 +520,7 @@ export class Decoder {
     controlLogger.debug("Parsing Unsubscribe message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Subscribe ID: ${requestId}`);
-    
+
     return {
       kind: Msg.Unsubscribe,
       requestId,
@@ -517,13 +531,13 @@ export class Decoder {
     controlLogger.debug("Parsing Announce message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
-    
+
     const namespace = await this.r.tuple();
-    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
-    
+    controlLogger.debug(`Namespace: ${namespace.join("/")}`);
+
     const params = await this.r.keyValuePairs();
     controlLogger.debug(`Parameters: ${params.length}`);
-    
+
     return {
       kind: Msg.Announce,
       requestId,
@@ -536,10 +550,10 @@ export class Decoder {
     controlLogger.debug("Parsing AnnounceOk message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
-    
+
     const namespace = await this.r.tuple();
-    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
-    
+    controlLogger.debug(`Namespace: ${namespace.join("/")}`);
+
     return {
       kind: Msg.AnnounceOk,
       requestId,
@@ -551,13 +565,13 @@ export class Decoder {
     controlLogger.debug("Parsing AnnounceError message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
-    
+
     const code = await this.r.u62();
     controlLogger.debug(`Error code: ${code}`);
-    
+
     const reason = await this.r.string();
     controlLogger.debug(`Error reason: ${reason}`);
-    
+
     return {
       kind: Msg.AnnounceError,
       requestId,
@@ -569,8 +583,8 @@ export class Decoder {
   private async unannounce(): Promise<Unannounce> {
     controlLogger.debug("Parsing Unannounce message...");
     const namespace = await this.r.tuple();
-    controlLogger.debug(`Namespace: ${namespace.join('/')}`);
-    
+    controlLogger.debug(`Namespace: ${namespace.join("/")}`);
+
     return {
       kind: Msg.Unannounce,
       namespace,
@@ -584,14 +598,13 @@ export class Encoder {
   constructor(w: Writer) {
     this.w = w;
   }
-  
-  
+
   async message(msg: Message): Promise<void> {
     controlLogger.debug(`Encoding message of type: ${msg.kind}`);
-    
+
     // Create a BufferCtrlWriter to marshal the message
     const writer = new BufferCtrlWriter();
-    
+
     // Marshal the message based on its type
     switch (msg.kind) {
       case Msg.Subscribe:
@@ -622,15 +635,19 @@ export class Encoder {
         writer.marshalUnannounce(msg as Unannounce);
         break;
       default:
-        const errorMsg = `Unsupported message type for encoding: ${(msg as any).kind}`;
+        const errorMsg = `Unsupported message type for encoding: ${
+          (msg as any).kind
+        }`;
         controlLogger.error(errorMsg);
         throw new Error(errorMsg);
     }
-    
+
     // Get the marshaled bytes and write them to the output stream
     const bytes = writer.getBytes();
-    controlLogger.debug(`Marshaled ${bytes.length} bytes for message type: ${msg.kind}`);
-    
+    controlLogger.debug(
+      `Marshaled ${bytes.length} bytes for message type: ${msg.kind}`
+    );
+
     // Write the bytes directly to the output stream
     await this.w.write(bytes);
   }

@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+coverage/
+
+# References directory (contains external code)
+references/
+
+# Test files that shouldn't be formatted
+test/
+
+# Temporary files
+*.log
+*.tmp
+
+# OS files
+.DS_Store

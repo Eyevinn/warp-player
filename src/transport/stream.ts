@@ -63,14 +63,23 @@ export class Reader {
 
   // Consumes the first size bytes of the buffer.
   #slice(size: number): Uint8Array {
-    const result = new Uint8Array(this.#buffer.buffer, this.#buffer.byteOffset, size);
-    this.#buffer = new Uint8Array(this.#buffer.buffer, this.#buffer.byteOffset + size);
+    const result = new Uint8Array(
+      this.#buffer.buffer,
+      this.#buffer.byteOffset,
+      size
+    );
+    this.#buffer = new Uint8Array(
+      this.#buffer.buffer,
+      this.#buffer.byteOffset + size
+    );
 
     return result;
   }
 
   async read(size: number): Promise<Uint8Array> {
-    if (size === 0) {return new Uint8Array();}
+    if (size === 0) {
+      return new Uint8Array();
+    }
 
     await this.#fillTo(size);
     return this.#slice(size);
@@ -85,7 +94,7 @@ export class Reader {
   async tuple(): Promise<string[]> {
     // Get the count of tuple elements
     const count = await this.u53();
-    
+
     // Read each tuple element individually
     const tupleElements: string[] = [];
     for (let i = 0; i < count; i++) {
@@ -95,14 +104,16 @@ export class Reader {
       const element = new TextDecoder().decode(bytes);
       tupleElements.push(element);
     }
-    
+
     return tupleElements;
   }
 
   async string(maxLength?: number): Promise<string> {
     const length = await this.u53();
     if (maxLength !== undefined && length > maxLength) {
-      throw new Error(`string length ${length} exceeds max length ${maxLength}`);
+      throw new Error(
+        `string length ${length} exceeds max length ${maxLength}`
+      );
     }
 
     const buffer = await this.read(length);
@@ -130,14 +141,14 @@ export class Reader {
   }
 
   // Returns a Number using 53-bits and tracks the number of bytes read
-  async u53WithSize(): Promise<{value: number, bytesRead: number}> {
+  async u53WithSize(): Promise<{ value: number; bytesRead: number }> {
     const result = await this.u62WithSize();
     const v = result.value;
     if (v > MAX_U53) {
       throw new Error("value larger than 53-bits; use v62 instead");
     }
 
-    return {value: Number(v), bytesRead: result.bytesRead};
+    return { value: Number(v), bytesRead: result.bytesRead };
   }
 
   // NOTE: Returns a bigint instead of a number since it may be larger than 53-bits
@@ -151,19 +162,31 @@ export class Reader {
     } else if (size === 1) {
       await this.#fillTo(2);
       const slice = this.#slice(2);
-      const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+      const view = new DataView(
+        slice.buffer,
+        slice.byteOffset,
+        slice.byteLength
+      );
 
       return BigInt(view.getInt16(0)) & 0x3fffn;
     } else if (size === 2) {
       await this.#fillTo(4);
       const slice = this.#slice(4);
-      const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+      const view = new DataView(
+        slice.buffer,
+        slice.byteOffset,
+        slice.byteLength
+      );
 
       return BigInt(view.getUint32(0)) & 0x3fffffffn;
     } else if (size === 3) {
       await this.#fillTo(8);
       const slice = this.#slice(8);
-      const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+      const view = new DataView(
+        slice.buffer,
+        slice.byteOffset,
+        slice.byteLength
+      );
 
       return BigInt(view.getBigUint64(0)) & 0x3fffffffffffffffn;
     } else {
@@ -172,37 +195,51 @@ export class Reader {
   }
 
   // Returns a bigint and tracks the number of bytes read
-  async u62WithSize(): Promise<{value: bigint, bytesRead: number}> {
+  async u62WithSize(): Promise<{ value: bigint; bytesRead: number }> {
     await this.#fillTo(1);
     const size = (this.#buffer[0] & 0xc0) >> 6;
 
     if (size === 0) {
       const first = this.#slice(1)[0];
-      return {value: BigInt(first) & 0x3fn, bytesRead: 1};
+      return { value: BigInt(first) & 0x3fn, bytesRead: 1 };
     } else if (size === 1) {
       await this.#fillTo(2);
       const slice = this.#slice(2);
-      const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+      const view = new DataView(
+        slice.buffer,
+        slice.byteOffset,
+        slice.byteLength
+      );
 
-      return {value: BigInt(view.getInt16(0)) & 0x3fffn, bytesRead: 2};
+      return { value: BigInt(view.getInt16(0)) & 0x3fffn, bytesRead: 2 };
     } else if (size === 2) {
       await this.#fillTo(4);
       const slice = this.#slice(4);
-      const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+      const view = new DataView(
+        slice.buffer,
+        slice.byteOffset,
+        slice.byteLength
+      );
 
-      return {value: BigInt(view.getUint32(0)) & 0x3fffffffn, bytesRead: 4};
+      return { value: BigInt(view.getUint32(0)) & 0x3fffffffn, bytesRead: 4 };
     } else if (size === 3) {
       await this.#fillTo(8);
       const slice = this.#slice(8);
-      const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+      const view = new DataView(
+        slice.buffer,
+        slice.byteOffset,
+        slice.byteLength
+      );
 
-      return {value: BigInt(view.getBigUint64(0)) & 0x3fffffffffffffffn, bytesRead: 8};
+      return {
+        value: BigInt(view.getBigUint64(0)) & 0x3fffffffffffffffn,
+        bytesRead: 8,
+      };
     } else {
       throw new Error(`invalid size: ${size}`);
     }
   }
 
-  
   async keyValuePairs(): Promise<KeyValuePair[]> {
     const numPairs = await this.u53();
     const result: KeyValuePair[] = [];
@@ -210,18 +247,20 @@ export class Reader {
       const key = await this.u62();
       if (key % 2n === 0n) {
         const value = await this.u62();
-        result.push({type: key, value});
+        result.push({ type: key, value });
       } else {
         const length = await this.u53();
         const value = await this.read(length);
-        result.push({type: key, value});
+        result.push({ type: key, value });
       }
     }
     return result;
   }
 
   async done(): Promise<boolean> {
-    if (this.#buffer.byteLength > 0) {return false;}
+    if (this.#buffer.byteLength > 0) {
+      return false;
+    }
     return !(await this.#fill());
   }
 
@@ -345,13 +384,17 @@ export class Writer {
   concatBuffer(bufferArray: (Uint8Array | undefined)[]): Uint8Array {
     let length = 0;
     bufferArray.forEach((buffer) => {
-      if (buffer === undefined) {return;}
+      if (buffer === undefined) {
+        return;
+      }
       length += buffer.length;
     });
     let offset = 0;
     const result = new Uint8Array(length);
     bufferArray.forEach((buffer) => {
-      if (buffer === undefined) {return;}
+      if (buffer === undefined) {
+        return;
+      }
       result.set(buffer, offset);
       offset += buffer.length;
     });
@@ -371,28 +414,31 @@ export class Writer {
   encodeString(buffer: Uint8Array, str: string): Uint8Array {
     const strBytes = new TextEncoder().encode(str);
 
-    return this.concatBuffer([this.setVint53(buffer, strBytes.length), strBytes]);
+    return this.concatBuffer([
+      this.setVint53(buffer, strBytes.length),
+      strBytes,
+    ]);
   }
 
   async write(v: Uint8Array): Promise<void> {
     await this.#writer.write(v);
   }
-  
+
   async tuple(arr: string[]): Promise<void> {
     // Write the count of tuple elements
     await this.u53(arr.length);
-    
+
     // Write each tuple element individually
     for (let i = 0; i < arr.length; i++) {
       const element = arr[i];
       const bytes = new TextEncoder().encode(element);
-      
+
       // Each element is a varint length followed by that many bytes
       await this.u53(bytes.length);
       await this.write(bytes);
     }
   }
-  
+
   async string(str: string): Promise<void> {
     const data = new TextEncoder().encode(str);
     await this.u53(data.byteLength);

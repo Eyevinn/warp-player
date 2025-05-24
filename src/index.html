@@ -1,712 +1,783 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WARP Player - Media over QUIC</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    
-    :root {
-      --bg-primary: #000000;
-      --bg-secondary: #111111;
-      --bg-card: #1a1a1a;
-      --bg-button-primary: #9333ea;
-      --bg-button-hover: #7c3aed;
-      --bg-button-danger: #dc2626;
-      --bg-button-danger-hover: #b91c1c;
-      --text-primary: #ffffff;
-      --text-secondary: #9ca3af;
-      --border-color: #374151;
-      --accent-blue: #3b82f6;
-      --accent-green: #10b981;
-      --accent-orange: #f59e0b;
-      --input-bg: #111111;
-      --success-bg: #065f46;
-      --error-bg: #991b1b;
-      --warning-bg: #92400e;
-    }
-    
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background-color: var(--bg-primary);
-      color: var(--text-primary);
-      line-height: 1.6;
-      overflow-x: hidden;
-    }
-    
-    /* Header */
-    .header {
-      background-color: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(10px);
-      position: fixed;
-      width: 100%;
-      top: 0;
-      z-index: 1000;
-      border-bottom: 1px solid var(--border-color);
-    }
-    
-    .header-content {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 1rem 2rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      text-decoration: none;
-      color: var(--text-primary);
-    }
-    
-    .logo img {
-      height: 40px;
-      width: auto;
-    }
-    
-    .logo-text {
-      font-size: 1.5rem;
-      font-weight: 600;
-    }
-    
-    .nav-links {
-      display: flex;
-      gap: 2rem;
-      align-items: center;
-    }
-    
-    .nav-link {
-      color: var(--text-secondary);
-      text-decoration: none;
-      transition: color 0.2s;
-      font-size: 0.875rem;
-    }
-    
-    .nav-link:hover {
-      color: var(--text-primary);
-    }
-    
-    /* Main Container */
-    .main-container {
-      margin-top: 80px;
-      padding: 2rem;
-      max-width: 1200px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    
-    /* Video Player Section */
-    .player-section {
-      background-color: var(--bg-card);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      overflow: hidden;
-      margin-bottom: 2rem;
-    }
-    
-    #videoPlayer {
-      display: block;
-      width: 100%;
-      max-width: 100%;
-      height: auto;
-      aspect-ratio: 16 / 9;
-      background: #000;
-      outline: none;
-    }
-    
-    /* Controls Section */
-    .controls-section {
-      padding: 1.5rem;
-      background-color: var(--bg-secondary);
-      border-top: 1px solid var(--border-color);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      gap: 1rem;
-      flex-wrap: wrap;
-    }
-    
-    .btn {
-      padding: 0.75rem 1.5rem;
-      border-radius: 8px;
-      border: none;
-      font-weight: 500;
-      font-size: 0.875rem;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    
-    .btn-primary {
-      background-color: var(--bg-button-primary);
-      color: var(--text-primary);
-    }
-    
-    .btn-primary:hover:not(:disabled) {
-      background-color: var(--bg-button-hover);
-    }
-    
-    .btn-danger {
-      background-color: var(--bg-button-danger);
-      color: var(--text-primary);
-    }
-    
-    .btn-danger:hover:not(:disabled) {
-      background-color: var(--bg-button-danger-hover);
-    }
-    
-    .buffer-control {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      color: var(--text-secondary);
-      font-size: 0.875rem;
-    }
-    
-    .buffer-control input {
-      width: 80px;
-      padding: 0.5rem;
-      background-color: var(--input-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      color: var(--text-primary);
-      font-size: 0.875rem;
-    }
-    
-    /* Connection Section */
-    .connection-section {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-      gap: 2rem;
-      margin-bottom: 2rem;
-    }
-    
-    .card {
-      background-color: var(--bg-card);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 2rem;
-    }
-    
-    .card h2 {
-      font-size: 1.25rem;
-      margin-bottom: 1.5rem;
-      color: var(--text-primary);
-    }
-    
-    .form-group {
-      margin-bottom: 1.5rem;
-    }
-    
-    .form-group label {
-      display: block;
-      margin-bottom: 0.5rem;
-      font-weight: 500;
-      font-size: 0.875rem;
-      color: var(--text-secondary);
-    }
-    
-    .form-group input {
-      width: 100%;
-      padding: 0.75rem;
-      background-color: var(--input-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      color: var(--text-primary);
-      font-size: 0.875rem;
-      transition: border-color 0.2s;
-    }
-    
-    .form-group input:focus {
-      outline: none;
-      border-color: var(--bg-button-primary);
-    }
-    
-    .form-group input:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    
-    .button-group {
-      display: flex;
-      gap: 1rem;
-    }
-    
-    .connection-controls {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-    }
-    
-    /* Status */
-    .status {
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      font-size: 0.875rem;
-      font-weight: 500;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .status.connected {
-      background-color: var(--success-bg);
-      color: var(--accent-green);
-      border: 1px solid var(--accent-green);
-    }
-    
-    .status.disconnected {
-      background-color: var(--error-bg);
-      color: #ef4444;
-      border: 1px solid #ef4444;
-    }
-    
-    /* Browser Warning */
-    .browser-warning {
-      background-color: var(--warning-bg);
-      border: 1px solid var(--accent-orange);
-      color: var(--accent-orange);
-      padding: 1.5rem;
-      margin-bottom: 2rem;
-      border-radius: 12px;
-      display: none;
-    }
-    
-    .browser-warning.show {
-      display: block;
-    }
-    
-    .browser-warning h4 {
-      font-size: 1.125rem;
-      margin-bottom: 0.75rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .browser-warning p {
-      margin: 0.5rem 0;
-      font-size: 0.875rem;
-      line-height: 1.5;
-    }
-    
-    .browser-warning ul {
-      margin: 0.75rem 0;
-      padding-left: 1.5rem;
-    }
-    
-    .browser-warning a {
-      color: var(--accent-orange);
-      text-decoration: underline;
-    }
-    
-    /* Info Cards */
-    .info-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 1rem;
-    }
-    
-    .info-card {
-      background-color: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 1.25rem;
-      text-align: center;
-    }
-    
-    .info-card-title {
-      font-size: 0.75rem;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      font-weight: 500;
-      margin-bottom: 0.5rem;
-    }
-    
-    .info-card-value {
-      font-size: 1.5rem;
-      font-weight: 600;
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-    }
-    
-    .info-card-value.video {
-      color: var(--accent-blue);
-    }
-    
-    .info-card-value.audio {
-      color: var(--accent-green);
-    }
-    
-    .info-card-value.latency {
-      color: var(--accent-orange);
-    }
-    
-    .info-card-value.rate {
-      color: #e91e63;
-    }
-    
-    /* Tracks Section */
-    .tracks-container {
-      margin-top: 0;
-    }
-    
-    /* Announcement styles */
-    .announcement {
-      background-color: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1rem;
-    }
-    
-    .announcement-title {
-      font-size: 0.875rem;
-      color: var(--text-secondary);
-      margin-bottom: 0.5rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    
-    .announcement-namespace {
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-      font-size: 0.875rem;
-      color: var(--accent-green);
-      word-break: break-all;
-    }
-    
-    .track-selector {
-      background-color: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1rem;
-    }
-    
-    .track-selector label {
-      display: block;
-      font-size: 0.875rem;
-      color: var(--text-secondary);
-      margin-bottom: 0.5rem;
-    }
-    
-    .track-select {
-      width: 100%;
-      padding: 0.75rem;
-      background-color: var(--input-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      color: var(--text-primary);
-      font-size: 0.875rem;
-      cursor: pointer;
-    }
-    
-    .track-select:focus {
-      outline: none;
-      border-color: var(--bg-button-primary);
-    }
-    
-    /* Logging Section */
-    .logging-section {
-      background-color: var(--bg-card);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 2rem;
-      margin-top: 2rem;
-    }
-    
-    .logging-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1.5rem;
-      flex-wrap: wrap;
-      gap: 1rem;
-    }
-    
-    .logging-controls {
-      display: flex;
-      gap: 1rem;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    
-    .log-control {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .log-control label {
-      font-size: 0.875rem;
-      color: var(--text-secondary);
-    }
-    
-    .log-control select {
-      padding: 0.5rem;
-      background-color: var(--input-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      color: var(--text-primary);
-      font-size: 0.875rem;
-      cursor: pointer;
-    }
-    
-    .log-container {
-      background-color: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 1rem;
-      height: 400px;
-      overflow-y: auto;
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-      font-size: 0.75rem;
-      line-height: 1.5;
-    }
-    
-    .log-entry {
-      margin: 0.25rem 0;
-      padding: 0.25rem 0;
-      border-bottom: 1px solid rgba(55, 65, 81, 0.3);
-    }
-    
-    .log-entry.debug { color: #6b7280; }
-    .log-entry.info { color: #e5e7eb; }
-    .log-entry.warning { color: var(--accent-orange); }
-    .log-entry.error { color: #ef4444; }
-    .log-entry.fatal { color: #dc2626; }
-    
-    /* Responsive */
-    @media (max-width: 768px) {
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WARP Player - Media over QUIC</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --bg-primary: #000000;
+        --bg-secondary: #111111;
+        --bg-card: #1a1a1a;
+        --bg-button-primary: #9333ea;
+        --bg-button-hover: #7c3aed;
+        --bg-button-danger: #dc2626;
+        --bg-button-danger-hover: #b91c1c;
+        --text-primary: #ffffff;
+        --text-secondary: #9ca3af;
+        --border-color: #374151;
+        --accent-blue: #3b82f6;
+        --accent-green: #10b981;
+        --accent-orange: #f59e0b;
+        --input-bg: #111111;
+        --success-bg: #065f46;
+        --error-bg: #991b1b;
+        --warning-bg: #92400e;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+        line-height: 1.6;
+        overflow-x: hidden;
+      }
+
+      /* Header */
+      .header {
+        background-color: rgba(0, 0, 0, 0.8);
+        backdrop-filter: blur(10px);
+        position: fixed;
+        width: 100%;
+        top: 0;
+        z-index: 1000;
+        border-bottom: 1px solid var(--border-color);
+      }
+
       .header-content {
-        padding: 1rem;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 1rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
       }
-      
+
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        text-decoration: none;
+        color: var(--text-primary);
+      }
+
+      .logo img {
+        height: 40px;
+        width: auto;
+      }
+
       .logo-text {
-        font-size: 1.25rem;
+        font-size: 1.5rem;
+        font-weight: 600;
       }
-      
+
       .nav-links {
-        display: none;
+        display: flex;
+        gap: 2rem;
+        align-items: center;
       }
-      
+
+      .nav-link {
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: color 0.2s;
+        font-size: 0.875rem;
+      }
+
+      .nav-link:hover {
+        color: var(--text-primary);
+      }
+
+      /* Main Container */
       .main-container {
-        padding: 1rem;
+        margin-top: 80px;
+        padding: 2rem;
+        max-width: 1200px;
+        margin-left: auto;
+        margin-right: auto;
       }
-      
-      .connection-section {
-        grid-template-columns: 1fr;
+
+      /* Video Player Section */
+      .player-section {
+        background-color: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 2rem;
       }
-      
+
+      #videoPlayer {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        height: auto;
+        aspect-ratio: 16 / 9;
+        background: #000;
+        outline: none;
+      }
+
+      /* Controls Section */
       .controls-section {
-        flex-direction: column;
+        padding: 1.5rem;
+        background-color: var(--bg-secondary);
+        border-top: 1px solid var(--border-color);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
       }
-      
-      .logging-header {
-        flex-direction: column;
-        align-items: flex-start;
+
+      .btn {
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        border: none;
+        font-weight: 500;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
       }
-      
-      .connection-controls {
-        flex-direction: column;
+
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .btn-primary {
+        background-color: var(--bg-button-primary);
+        color: var(--text-primary);
+      }
+
+      .btn-primary:hover:not(:disabled) {
+        background-color: var(--bg-button-hover);
+      }
+
+      .btn-danger {
+        background-color: var(--bg-button-danger);
+        color: var(--text-primary);
+      }
+
+      .btn-danger:hover:not(:disabled) {
+        background-color: var(--bg-button-danger-hover);
+      }
+
+      .buffer-control {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+      }
+
+      .buffer-control input {
+        width: 80px;
+        padding: 0.5rem;
+        background-color: var(--input-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        color: var(--text-primary);
+        font-size: 0.875rem;
+      }
+
+      /* Connection Section */
+      .connection-section {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+        gap: 2rem;
+        margin-bottom: 2rem;
+      }
+
+      .card {
+        background-color: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 2rem;
+      }
+
+      .card h2 {
+        font-size: 1.25rem;
+        margin-bottom: 1.5rem;
+        color: var(--text-primary);
+      }
+
+      .form-group {
+        margin-bottom: 1.5rem;
+      }
+
+      .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+      }
+
+      .form-group input {
+        width: 100%;
+        padding: 0.75rem;
+        background-color: var(--input-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        color: var(--text-primary);
+        font-size: 0.875rem;
+        transition: border-color 0.2s;
+      }
+
+      .form-group input:focus {
+        outline: none;
+        border-color: var(--bg-button-primary);
+      }
+
+      .form-group input:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .button-group {
+        display: flex;
         gap: 1rem;
       }
-      
-      .connection-controls .status {
-        align-self: flex-start;
+
+      .connection-controls {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
       }
-      
+
+      /* Status */
+      .status {
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .status.connected {
+        background-color: var(--success-bg);
+        color: var(--accent-green);
+        border: 1px solid var(--accent-green);
+      }
+
+      .status.disconnected {
+        background-color: var(--error-bg);
+        color: #ef4444;
+        border: 1px solid #ef4444;
+      }
+
+      /* Browser Warning */
+      .browser-warning {
+        background-color: var(--warning-bg);
+        border: 1px solid var(--accent-orange);
+        color: var(--accent-orange);
+        padding: 1.5rem;
+        margin-bottom: 2rem;
+        border-radius: 12px;
+        display: none;
+      }
+
+      .browser-warning.show {
+        display: block;
+      }
+
+      .browser-warning h4 {
+        font-size: 1.125rem;
+        margin-bottom: 0.75rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .browser-warning p {
+        margin: 0.5rem 0;
+        font-size: 0.875rem;
+        line-height: 1.5;
+      }
+
+      .browser-warning ul {
+        margin: 0.75rem 0;
+        padding-left: 1.5rem;
+      }
+
+      .browser-warning a {
+        color: var(--accent-orange);
+        text-decoration: underline;
+      }
+
+      /* Info Cards */
       .info-grid {
-        grid-template-columns: 1fr;
-        gap: 0.75rem;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
       }
-      
+
       .info-card {
-        padding: 1rem;
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1.25rem;
+        text-align: center;
       }
-    }
-  </style>
-</head>
-<body>
-  <!-- Header -->
-  <header class="header">
-    <div class="header-content">
-      <div class="logo">
-        <img src="eyevinn-technology-logo-white-400px.png" alt="Eyevinn Technology">
-        <span class="logo-text">WARP Player</span>
-      </div>
-      <nav class="nav-links">
-        <a href="https://github.com/Eyevinn/warp-player" class="nav-link">GitHub</a>
-        <a href="https://datatracker.ietf.org/doc/draft-ietf-moq-transport/" class="nav-link">MoQ Spec</a>
-        <a href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-warp-00" class="nav-link">WARP Spec</a>
-        <a href="https://www.eyevinn.se" class="nav-link">About</a>
-      </nav>
-    </div>
-  </header>
 
-  <!-- Main Container -->
-  <div class="main-container">
-    <!-- WebTransport Browser Warning -->
-    <div id="browserWarning" class="browser-warning">
-      <h4>⚠️ WebTransport Not Supported</h4>
-      <p>Your browser does not support WebTransport, which is required for this application to function.</p>
-      <p>Please use one of the following browsers:</p>
-      <ul>
-        <li>Google Chrome (version 97 or higher)</li>
-        <li>Microsoft Edge (version 97 or higher)</li>
-        <li>Opera (version 83 or higher)</li>
-      </ul>
-      <p>For more information about WebTransport support, visit: 
-        <a href="https://caniuse.com/webtransport" target="_blank" rel="noopener">Can I Use WebTransport</a>
-      </p>
-    </div>
-    
-    <!-- Video Player Section -->
-    <div class="player-section">
-      <video id="videoPlayer" controls muted></video>
-      <div class="controls-section">
-        <button id="startBtn" class="btn btn-primary" disabled>
-          <span>▶</span> Start
-        </button>
-        <button id="stopBtn" class="btn btn-danger" disabled>
-          <span>■</span> Stop
-        </button>
-        <div class="buffer-control">
-          <label for="minimalBuffer">Minimal Buffer (ms):</label>
-          <input type="number" id="minimalBuffer" min="0" max="1000" step="10" value="200">
-        </div>
-        <div class="buffer-control">
-          <label for="targetLatency">Target Latency (ms):</label>
-          <input type="number" id="targetLatency" min="0" max="5000" step="50" value="300">
-        </div>
-      </div>
-    </div>
+      .info-card-title {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 500;
+        margin-bottom: 0.5rem;
+      }
 
-    <!-- Connection Section -->
-    <div class="connection-section">
-      <!-- Connection Card -->
-      <div class="card">
-        <h2>Connection</h2>
-        <div class="form-group">
-          <label for="serverUrl">MoQ Server URL</label>
-          <input type="text" id="serverUrl" value="https://moqlivemock.demo.osaas.io/moq" placeholder="Enter server URL">
-        </div>
-        <div class="connection-controls">
-          <div class="button-group">
-            <button id="connectBtn" class="btn btn-primary">Connect</button>
-            <button id="disconnectBtn" class="btn btn-danger" disabled>Disconnect</button>
-          </div>
-          <div id="status" class="status disconnected">
-            <span>●</span> Disconnected
-          </div>
-        </div>
-      </div>
+      .info-card-value {
+        font-size: 1.5rem;
+        font-weight: 600;
+        font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+      }
 
-      <!-- Playback Info Card -->
-      <div class="card">
-        <h2>Playback Information</h2>
-        <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem; text-align: center;">
-          Latency measurement assumes synchronized clocks (NTP)
-        </p>
-        <div class="info-grid">
-          <div class="info-card">
-            <div class="info-card-title">Video Buffer</div>
-            <div id="videoBufferLevel" class="info-card-value video">N/A</div>
-          </div>
-          <div class="info-card">
-            <div class="info-card-title">Audio Buffer</div>
-            <div id="audioBufferLevel" class="info-card-value audio">N/A</div>
-          </div>
-          <div class="info-card">
-            <div class="info-card-title">Latency</div>
-            <div id="playbackLatency" class="info-card-value latency">N/A</div>
-          </div>
-          <div class="info-card">
-            <div class="info-card-title">Playback Rate</div>
-            <div id="playbackRate" class="info-card-value rate">N/A</div>
-          </div>
-        </div>
-      </div>
-    </div>
+      .info-card-value.video {
+        color: var(--accent-blue);
+      }
 
-    <!-- Content Section -->
-    <div class="card" style="margin-bottom: 2rem;">
-      <h2>Content</h2>
-      <!-- Tracks Container -->
-      <div id="tracks-container" class="tracks-container"></div>
-    </div>
+      .info-card-value.audio {
+        color: var(--accent-green);
+      }
 
-    <!-- Logging Section -->
-    <div class="logging-section">
-      <div class="logging-header">
-        <h2>Debug Logs</h2>
-        <div class="logging-controls">
-          <div class="log-control">
-            <label for="logLevel">Log Level:</label>
-            <select id="logLevel">
-              <option value="NONE">None</option>
-              <option value="FATAL">Fatal</option>
-              <option value="ERROR">Error</option>
-              <option value="WARNING">Warning</option>
-              <option value="INFO" selected>Info</option>
-              <option value="DEBUG">Debug</option>
-            </select>
-          </div>
-          <div class="log-control">
-            <label for="componentFilter">Component:</label>
-            <select id="componentFilter">
-              <option value="All" selected>All Components</option>
-              <!-- Will be populated dynamically -->
-            </select>
-          </div>
-          <button id="clearLogs" class="btn btn-primary" style="padding: 0.5rem 1rem;">
-            Clear Logs
-          </button>
-        </div>
-      </div>
-      <div class="log-container" id="logContainer">
-        <!-- Logs will be displayed here -->
-      </div>
-    </div>
-  </div>
-  
-  <script>
-    // This script will be automatically replaced by webpack's bundled JS
-    // Adding a placeholder for log event handling that will be overridden
-    document.addEventListener('DOMContentLoaded', function() {
-      // Handle log level change
-      document.getElementById('logLevel').addEventListener('change', function(e) {
-        try {
-          const event = new CustomEvent('warp-log-level-change', {
-            detail: { level: e.target.value }
-          });
-          window.dispatchEvent(event);
-        } catch (error) {
-          console.error('Error dispatching log level change event:', error);
+      .info-card-value.latency {
+        color: var(--accent-orange);
+      }
+
+      .info-card-value.rate {
+        color: #e91e63;
+      }
+
+      /* Tracks Section */
+      .tracks-container {
+        margin-top: 0;
+      }
+
+      /* Announcement styles */
+      .announcement {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+
+      .announcement-title {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .announcement-namespace {
+        font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+        font-size: 0.875rem;
+        color: var(--accent-green);
+        word-break: break-all;
+      }
+
+      .track-selector {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+
+      .track-selector label {
+        display: block;
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.5rem;
+      }
+
+      .track-select {
+        width: 100%;
+        padding: 0.75rem;
+        background-color: var(--input-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        color: var(--text-primary);
+        font-size: 0.875rem;
+        cursor: pointer;
+      }
+
+      .track-select:focus {
+        outline: none;
+        border-color: var(--bg-button-primary);
+      }
+
+      /* Logging Section */
+      .logging-section {
+        background-color: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 2rem;
+        margin-top: 2rem;
+      }
+
+      .logging-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+        gap: 1rem;
+      }
+
+      .logging-controls {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .log-control {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .log-control label {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+      }
+
+      .log-control select {
+        padding: 0.5rem;
+        background-color: var(--input-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        color: var(--text-primary);
+        font-size: 0.875rem;
+        cursor: pointer;
+      }
+
+      .log-container {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        height: 400px;
+        overflow-y: auto;
+        font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+        font-size: 0.75rem;
+        line-height: 1.5;
+      }
+
+      .log-entry {
+        margin: 0.25rem 0;
+        padding: 0.25rem 0;
+        border-bottom: 1px solid rgba(55, 65, 81, 0.3);
+      }
+
+      .log-entry.debug {
+        color: #6b7280;
+      }
+      .log-entry.info {
+        color: #e5e7eb;
+      }
+      .log-entry.warning {
+        color: var(--accent-orange);
+      }
+      .log-entry.error {
+        color: #ef4444;
+      }
+      .log-entry.fatal {
+        color: #dc2626;
+      }
+
+      /* Responsive */
+      @media (max-width: 768px) {
+        .header-content {
+          padding: 1rem;
         }
+
+        .logo-text {
+          font-size: 1.25rem;
+        }
+
+        .nav-links {
+          display: none;
+        }
+
+        .main-container {
+          padding: 1rem;
+        }
+
+        .connection-section {
+          grid-template-columns: 1fr;
+        }
+
+        .controls-section {
+          flex-direction: column;
+        }
+
+        .logging-header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+
+        .connection-controls {
+          flex-direction: column;
+          gap: 1rem;
+        }
+
+        .connection-controls .status {
+          align-self: flex-start;
+        }
+
+        .info-grid {
+          grid-template-columns: 1fr;
+          gap: 0.75rem;
+        }
+
+        .info-card {
+          padding: 1rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <div class="logo">
+          <img
+            src="eyevinn-technology-logo-white-400px.png"
+            alt="Eyevinn Technology"
+          />
+          <span class="logo-text">WARP Player</span>
+        </div>
+        <nav class="nav-links">
+          <a href="https://github.com/Eyevinn/warp-player" class="nav-link"
+            >GitHub</a
+          >
+          <a
+            href="https://datatracker.ietf.org/doc/draft-ietf-moq-transport/"
+            class="nav-link"
+            >MoQ Spec</a
+          >
+          <a
+            href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-warp-00"
+            class="nav-link"
+            >WARP Spec</a
+          >
+          <a href="https://www.eyevinn.se" class="nav-link">About</a>
+        </nav>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="main-container">
+      <!-- WebTransport Browser Warning -->
+      <div id="browserWarning" class="browser-warning">
+        <h4>⚠️ WebTransport Not Supported</h4>
+        <p>
+          Your browser does not support WebTransport, which is required for this
+          application to function.
+        </p>
+        <p>Please use one of the following browsers:</p>
+        <ul>
+          <li>Google Chrome (version 97 or higher)</li>
+          <li>Microsoft Edge (version 97 or higher)</li>
+          <li>Opera (version 83 or higher)</li>
+        </ul>
+        <p>
+          For more information about WebTransport support, visit:
+          <a
+            href="https://caniuse.com/webtransport"
+            target="_blank"
+            rel="noopener"
+            >Can I Use WebTransport</a
+          >
+        </p>
+      </div>
+
+      <!-- Video Player Section -->
+      <div class="player-section">
+        <video id="videoPlayer" controls muted></video>
+        <div class="controls-section">
+          <button id="startBtn" class="btn btn-primary" disabled>
+            <span>▶</span> Start
+          </button>
+          <button id="stopBtn" class="btn btn-danger" disabled>
+            <span>■</span> Stop
+          </button>
+          <div class="buffer-control">
+            <label for="minimalBuffer">Minimal Buffer (ms):</label>
+            <input
+              type="number"
+              id="minimalBuffer"
+              min="0"
+              max="1000"
+              step="10"
+              value="200"
+            />
+          </div>
+          <div class="buffer-control">
+            <label for="targetLatency">Target Latency (ms):</label>
+            <input
+              type="number"
+              id="targetLatency"
+              min="0"
+              max="5000"
+              step="50"
+              value="300"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- Connection Section -->
+      <div class="connection-section">
+        <!-- Connection Card -->
+        <div class="card">
+          <h2>Connection</h2>
+          <div class="form-group">
+            <label for="serverUrl">MoQ Server URL</label>
+            <input
+              type="text"
+              id="serverUrl"
+              value="https://moqlivemock.demo.osaas.io/moq"
+              placeholder="Enter server URL"
+            />
+          </div>
+          <div class="connection-controls">
+            <div class="button-group">
+              <button id="connectBtn" class="btn btn-primary">Connect</button>
+              <button id="disconnectBtn" class="btn btn-danger" disabled>
+                Disconnect
+              </button>
+            </div>
+            <div id="status" class="status disconnected">
+              <span>●</span> Disconnected
+            </div>
+          </div>
+        </div>
+
+        <!-- Playback Info Card -->
+        <div class="card">
+          <h2>Playback Information</h2>
+          <p
+            style="
+              font-size: 0.75rem;
+              color: var(--text-secondary);
+              margin-bottom: 1rem;
+              text-align: center;
+            "
+          >
+            Latency measurement assumes synchronized clocks (NTP)
+          </p>
+          <div class="info-grid">
+            <div class="info-card">
+              <div class="info-card-title">Video Buffer</div>
+              <div id="videoBufferLevel" class="info-card-value video">N/A</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-title">Audio Buffer</div>
+              <div id="audioBufferLevel" class="info-card-value audio">N/A</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-title">Latency</div>
+              <div id="playbackLatency" class="info-card-value latency">
+                N/A
+              </div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-title">Playback Rate</div>
+              <div id="playbackRate" class="info-card-value rate">N/A</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Content Section -->
+      <div class="card" style="margin-bottom: 2rem">
+        <h2>Content</h2>
+        <!-- Tracks Container -->
+        <div id="tracks-container" class="tracks-container"></div>
+      </div>
+
+      <!-- Logging Section -->
+      <div class="logging-section">
+        <div class="logging-header">
+          <h2>Debug Logs</h2>
+          <div class="logging-controls">
+            <div class="log-control">
+              <label for="logLevel">Log Level:</label>
+              <select id="logLevel">
+                <option value="NONE">None</option>
+                <option value="FATAL">Fatal</option>
+                <option value="ERROR">Error</option>
+                <option value="WARNING">Warning</option>
+                <option value="INFO" selected>Info</option>
+                <option value="DEBUG">Debug</option>
+              </select>
+            </div>
+            <div class="log-control">
+              <label for="componentFilter">Component:</label>
+              <select id="componentFilter">
+                <option value="All" selected>All Components</option>
+                <!-- Will be populated dynamically -->
+              </select>
+            </div>
+            <button
+              id="clearLogs"
+              class="btn btn-primary"
+              style="padding: 0.5rem 1rem"
+            >
+              Clear Logs
+            </button>
+          </div>
+        </div>
+        <div class="log-container" id="logContainer">
+          <!-- Logs will be displayed here -->
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // This script will be automatically replaced by webpack's bundled JS
+      // Adding a placeholder for log event handling that will be overridden
+      document.addEventListener("DOMContentLoaded", function () {
+        // Handle log level change
+        document
+          .getElementById("logLevel")
+          .addEventListener("change", function (e) {
+            try {
+              const event = new CustomEvent("warp-log-level-change", {
+                detail: { level: e.target.value },
+              });
+              window.dispatchEvent(event);
+            } catch (error) {
+              console.error("Error dispatching log level change event:", error);
+            }
+          });
+
+        // Handle clear logs button
+        document
+          .getElementById("clearLogs")
+          .addEventListener("click", function () {
+            document.getElementById("logContainer").innerHTML = "";
+          });
       });
-      
-      // Handle clear logs button
-      document.getElementById('clearLogs').addEventListener('click', function() {
-        document.getElementById('logContainer').innerHTML = '';
-      });
-    });
-  </script>
-</body>
+    </script>
+  </body>
 </html>
