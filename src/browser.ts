@@ -18,6 +18,9 @@ let logContainerEl: HTMLDivElement;
 // Using a type assertion when needed instead of storing the element
 // let logLevelSelect: HTMLSelectElement;
 let componentFilterSelect: HTMLSelectElement;
+let startBtn: HTMLButtonElement;
+let stopBtn: HTMLButtonElement;
+let browserWarning: HTMLDivElement;
 
 // Player instance
 let player: Player | null = null;
@@ -38,6 +41,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Get log level select but don't store in variable to avoid linting error
   document.getElementById('logLevel');
   componentFilterSelect = document.getElementById('componentFilter') as HTMLSelectElement;
+  startBtn = document.getElementById('startBtn') as HTMLButtonElement;
+  stopBtn = document.getElementById('stopBtn') as HTMLButtonElement;
+  browserWarning = document.getElementById('browserWarning') as HTMLDivElement;
 
   // Setup logging
   setupLogging();
@@ -50,6 +56,20 @@ document.addEventListener('DOMContentLoaded', () => {
   if (typeof WebTransport === 'undefined') {
     logger.error('WebTransport is NOT supported in this browser. Please use Chrome or Edge.');
     connectBtn.disabled = true;
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+    serverUrlInput.disabled = true;
+    bufferDurationInput.disabled = true;
+    
+    // Show the browser warning
+    browserWarning.classList.add('show');
+    
+    // Update status to show the issue
+    statusEl.textContent = 'Status: WebTransport Not Supported';
+    statusEl.className = 'status disconnected';
+    
+    // Don't create player instance if WebTransport is not supported
+    return;
   } else {
     logger.info('WebTransport is supported in this browser.');
   }

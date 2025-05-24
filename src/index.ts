@@ -1,5 +1,5 @@
-import { Client } from './transport/client.js';
 import { LoggerFactory, LogLevel } from './logger';
+import { Client } from './transport/client.js';
 
 // Default server URL - can be changed via command line arguments
 const DEFAULT_SERVER_URL = 'https://localhost:4443';

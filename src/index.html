@@ -133,6 +133,37 @@
       color: #a94442;
     }
     
+    /* WebTransport warning styles */
+    .browser-warning {
+      background-color: #fff3cd;
+      border: 1px solid #ffecb5;
+      color: #856404;
+      padding: 15px;
+      margin-bottom: 20px;
+      border-radius: 4px;
+      display: none;
+    }
+    
+    .browser-warning.show {
+      display: block;
+    }
+    
+    .browser-warning h4 {
+      margin-top: 0;
+      margin-bottom: 10px;
+      font-size: 16px;
+    }
+    
+    .browser-warning p {
+      margin: 5px 0;
+      font-size: 14px;
+    }
+    
+    .browser-warning a {
+      color: #533f03;
+      text-decoration: underline;
+    }
+    
     /* Styles for tracks display */
     .tracks-section {
       margin-top: 20px;
@@ -294,6 +325,21 @@
   </div>
 
   <div class="container">
+    <!-- WebTransport Browser Warning -->
+    <div id="browserWarning" class="browser-warning">
+      <h4>⚠️ WebTransport Not Supported</h4>
+      <p>Your browser does not support WebTransport, which is required for this application to function.</p>
+      <p>Please use one of the following browsers:</p>
+      <ul style="margin: 10px 0; padding-left: 20px;">
+        <li>Google Chrome (version 97 or higher)</li>
+        <li>Microsoft Edge (version 97 or higher)</li>
+        <li>Opera (version 83 or higher)</li>
+      </ul>
+      <p>For more information about WebTransport support, visit: 
+        <a href="https://caniuse.com/webtransport" target="_blank" rel="noopener">Can I Use WebTransport</a>
+      </p>
+    </div>
+    
     <div class="form-group">
       <label for="serverUrl">MoQ Server URL:</label>
       <input type="text" id="serverUrl" value="https://172-234-110-95.ip.linodeusercontent.com:443/moq" placeholder="Enter server URL">

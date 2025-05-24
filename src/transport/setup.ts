@@ -1,6 +1,7 @@
+import { ILogger, LoggerFactory } from '../logger';
+
 import { BufferCtrlWriter } from "./bufferctrlwriter";
 import { KeyValuePair, Reader, Writer } from "./stream";
-import { ILogger, LoggerFactory } from '../logger';
 
 // Logger for setup message operations
 const setupLogger: ILogger = LoggerFactory.getInstance().getLogger('Setup');

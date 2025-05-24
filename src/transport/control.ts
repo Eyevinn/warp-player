@@ -1,6 +1,7 @@
+import { ILogger, LoggerFactory } from '../logger';
+
 import { BufferCtrlWriter } from "./bufferctrlwriter";
 import { Reader, Writer, KeyValuePair } from "./stream";
-import { ILogger, LoggerFactory } from '../logger';
 
 // Logger for control message operations
 const controlLogger: ILogger = LoggerFactory.getInstance().getLogger('Control');
