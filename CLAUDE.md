@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ### Development
+
 ```bash
 # Install dependencies
 npm install
@@ -74,13 +75,15 @@ warp-player/
 
 The codebase is organized into several key modules:
 
-1. **Transport Layer**: 
+1. **Transport Layer**:
+
    - Located in `src/transport/`
    - Handles WebTransport connection and MoQ protocol implementation
    - Manages bidirectional control streams and unidirectional data streams
    - Implements client-server setup messaging, track subscription, and data reception
 
 2. **Buffer Layer**:
+
    - Located in `src/buffer/`
    - Processes incoming media segments (CMAF format)
    - Parses segments and extracts timing information
@@ -94,18 +97,22 @@ The codebase is organized into several key modules:
 ### Key Components
 
 1. **Client** (`src/transport/client.ts`):
+
    - Main entry point for establishing WebTransport connections
    - Handles connection setup, track subscription, and message routing
 
 2. **TrackAliasRegistry** (`src/transport/trackaliasregistry.ts`):
+
    - Manages mappings between track namespaces, names, and aliases
    - Tracks registration of callbacks for data objects
 
 3. **TracksManager** (`src/transport/tracks.ts`):
+
    - Manages incoming unidirectional streams for data
    - Processes and routes incoming data objects to registered callbacks
 
 4. **MediaBuffer** (`src/buffer/mediaBuffer.ts`):
+
    - Parses CMAF initialization and media segments
    - Extracts timing information for media synchronization
 

@@ -7,10 +7,7 @@
       "name": "Debug warp-player",
       "skipFiles": ["<node_internals>/**"],
       "program": "${workspaceFolder}/src/index.ts",
-      "runtimeArgs": [
-        "--loader",
-        "ts-node/esm"
-      ],
+      "runtimeArgs": ["--loader", "ts-node/esm"],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
       "sourceMaps": true,
       "console": "integratedTerminal"

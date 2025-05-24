@@ -1,6 +1,6 @@
-import { ILogger, LoggerFactory } from '../logger';
+import { ILogger, LoggerFactory } from "../logger";
 
-import { MediaBuffer, MediaTrackInfo } from './mediaBuffer';
+import { MediaBuffer, MediaTrackInfo } from "./mediaBuffer";
 
 /**
  * Media segment with timing information
@@ -18,7 +18,7 @@ export interface MediaSegment {
 export interface MediaSegmentBufferOptions {
   maxBufferSize?: number; // Maximum number of segments to store
   onSegmentReady?: (segment: MediaSegment) => void;
-  mediaType?: 'video' | 'audio'; // Type of media this buffer will handle
+  mediaType?: "video" | "audio"; // Type of media this buffer will handle
 }
 
 /**
@@ -34,22 +34,23 @@ export class MediaSegmentBuffer {
   private pendingSegments: MediaSegment[] = [];
   private isAppending: boolean = false;
   private sourceBuffer: SourceBuffer | null = null;
-  private mediaType: 'video' | 'audio' | 'unknown' = 'unknown';
+  private mediaType: "video" | "audio" | "unknown" = "unknown";
   private logger: ILogger;
 
   constructor(options: MediaSegmentBufferOptions = {}) {
     // Set the media type if provided
-    this.mediaType = options.mediaType || 'unknown';
-    
+    this.mediaType = options.mediaType || "unknown";
+
     // Create logger with appropriate category
-    const loggerCategory = this.mediaType !== 'unknown' 
-      ? `MediaSegmentBuffer:${this.mediaType}` 
-      : 'MediaSegmentBuffer';
+    const loggerCategory =
+      this.mediaType !== "unknown"
+        ? `MediaSegmentBuffer:${this.mediaType}`
+        : "MediaSegmentBuffer";
     this.logger = LoggerFactory.getInstance().getLogger(loggerCategory);
-    
+
     // Create MediaBuffer with the same media type
     this.mediaBuffer = new MediaBuffer(this.mediaType as any);
-    
+
     // Set default options and merge with provided options
     this.options = {
       maxBufferSize: 30, // Default to 30 segments max
@@ -57,31 +58,35 @@ export class MediaSegmentBuffer {
         // No-op by default - will be overridden if provided in options
       },
       mediaType: this.mediaType as any,
-      ...options
+      ...options,
     };
-    
-    this.logger.info(`MediaSegmentBuffer initialized with type: ${this.mediaType}, maxBufferSize: ${this.options.maxBufferSize}`);
+
+    this.logger.info(
+      `MediaSegmentBuffer initialized with type: ${this.mediaType}, maxBufferSize: ${this.options.maxBufferSize}`
+    );
   }
 
   /**
    * Get the media type of this buffer
    */
-  public getMediaType(): 'video' | 'audio' | 'unknown' {
+  public getMediaType(): "video" | "audio" | "unknown" {
     return this.mediaType;
   }
-  
+
   /**
    * Set the media type for this buffer
    */
-  public setMediaType(mediaType: 'video' | 'audio'): void {
+  public setMediaType(mediaType: "video" | "audio"): void {
     this.mediaType = mediaType;
     this.options.mediaType = mediaType;
-    
+
     // Update MediaBuffer's media type
     this.mediaBuffer.setMediaType(mediaType);
-    
+
     // Update logger to use the new media type
-    this.logger = LoggerFactory.getInstance().getLogger(`MediaSegmentBuffer:${mediaType}`);
+    this.logger = LoggerFactory.getInstance().getLogger(
+      `MediaSegmentBuffer:${mediaType}`
+    );
     this.logger.info(`Media type set to ${mediaType}`);
   }
 
@@ -94,29 +99,35 @@ export class MediaSegmentBuffer {
     try {
       // Parse the init segment
       const trackInfo = this.mediaBuffer.parseInitSegment(data);
-      
+
       // If media type was unknown, update it from the parsed trackInfo
-      if (this.mediaType === 'unknown' && trackInfo.mediaType && trackInfo.mediaType !== 'unknown') {
+      if (
+        this.mediaType === "unknown" &&
+        trackInfo.mediaType &&
+        trackInfo.mediaType !== "unknown"
+      ) {
         this.setMediaType(trackInfo.mediaType);
       }
-      
+
       // Create a segment object
       const segment: MediaSegment = {
         data,
         trackInfo,
         timestamp: Date.now(),
-        isInitSegment: true
+        isInitSegment: true,
       };
-      
+
       // Store the init segment
       this.initSegment = segment;
       this.isInitialized = true;
-      
-      this.logger.info(`Added init segment with timescale: ${trackInfo.timescale}`);
-      
+
+      this.logger.info(
+        `Added init segment with timescale: ${trackInfo.timescale}`
+      );
+
       // Notify that the segment is ready
       this.options.onSegmentReady(segment);
-      
+
       return segment;
     } catch (error) {
       this.logger.error(`Error adding init segment: ${error}`);
@@ -131,40 +142,40 @@ export class MediaSegmentBuffer {
    */
   public addMediaSegment(data: ArrayBuffer): MediaSegment {
     if (!this.isInitialized) {
-      throw new Error('Buffer not initialized. Call addInitSegment first.');
+      throw new Error("Buffer not initialized. Call addInitSegment first.");
     }
 
     try {
       // Parse the media segment
       const trackInfo = this.mediaBuffer.parseMediaSegment(data);
-      
+
       // Create a segment object
       const segment: MediaSegment = {
         data,
         trackInfo,
         timestamp: Date.now(),
-        isInitSegment: false
+        isInitSegment: false,
       };
-      
+
       // Add the segment to the queue
       this.segments.push(segment);
-      
+
       // Check if we need to remove old segments
       if (this.segments.length > this.options.maxBufferSize) {
         this.segments.shift(); // Remove the oldest segment
       }
-      
+
       // Only log every 10th segment to reduce logging overhead
       if (this.segments.length % 10 === 0) {
         this.logger.debug(
           `Added media segment with baseMediaDecodeTime: ${trackInfo.baseMediaDecodeTime}, ` +
-          `timescale: ${trackInfo.timescale}, buffer size: ${this.segments.length}`
+            `timescale: ${trackInfo.timescale}, buffer size: ${this.segments.length}`
         );
       }
-      
+
       // Notify that the segment is ready
       this.options.onSegmentReady(segment);
-      
+
       return segment;
     } catch (error) {
       this.logger.error(`Error adding media segment: ${error}`);
@@ -180,7 +191,7 @@ export class MediaSegmentBuffer {
     if (this.segments.length === 0) {
       return null;
     }
-    
+
     return this.segments.shift() || null;
   }
 
@@ -216,18 +227,23 @@ export class MediaSegmentBuffer {
     if (!this.isInitialized || this.segments.length === 0) {
       return 0;
     }
-    
+
     const firstSegment = this.segments[0];
     const lastSegment = this.segments[this.segments.length - 1];
-    
-    if (!firstSegment.trackInfo.baseMediaDecodeTime || !lastSegment.trackInfo.baseMediaDecodeTime || 
-        !lastSegment.trackInfo.duration) {
+
+    if (
+      !firstSegment.trackInfo.baseMediaDecodeTime ||
+      !lastSegment.trackInfo.baseMediaDecodeTime ||
+      !lastSegment.trackInfo.duration
+    ) {
       return 0;
     }
-    
+
     const startTime = firstSegment.trackInfo.baseMediaDecodeTime;
-    const endTime = lastSegment.trackInfo.baseMediaDecodeTime + lastSegment.trackInfo.duration;
-    
+    const endTime =
+      lastSegment.trackInfo.baseMediaDecodeTime +
+      lastSegment.trackInfo.duration;
+
     return this.mediaBuffer.mediaTimeToSeconds(endTime - startTime);
   }
 
@@ -237,20 +253,20 @@ export class MediaSegmentBuffer {
    */
   public setSourceBuffer(sourceBuffer: SourceBuffer): void {
     this.sourceBuffer = sourceBuffer;
-    
+
     // Add event listeners to the source buffer
     if (this.sourceBuffer) {
-      this.sourceBuffer.addEventListener('updateend', () => {
+      this.sourceBuffer.addEventListener("updateend", () => {
         this.isAppending = false;
         this.processQueue();
       });
-      
-      this.sourceBuffer.addEventListener('error', (e) => {
+
+      this.sourceBuffer.addEventListener("error", (e) => {
         this.logger.error(`SourceBuffer error: ${e}`);
         this.isAppending = false;
       });
-      
-      this.logger.info('SourceBuffer set and event listeners attached');
+
+      this.logger.info("SourceBuffer set and event listeners attached");
     }
   }
 
@@ -260,13 +276,13 @@ export class MediaSegmentBuffer {
    */
   public appendToSourceBuffer(segment: MediaSegment): void {
     if (!this.sourceBuffer) {
-      this.logger.error('No source buffer set');
+      this.logger.error("No source buffer set");
       return;
     }
-    
+
     // Add to pending segments queue
     this.pendingSegments.push(segment);
-    
+
     // Process the queue if not already appending
     if (!this.isAppending) {
       this.processQueue();
@@ -277,36 +293,45 @@ export class MediaSegmentBuffer {
    * Process the pending segments queue
    */
   private processQueue(): void {
-    if (!this.sourceBuffer || this.isAppending || this.pendingSegments.length === 0) {
+    if (
+      !this.sourceBuffer ||
+      this.isAppending ||
+      this.pendingSegments.length === 0
+    ) {
       return;
     }
-    
+
     // Check if the source buffer is ready
     if (this.sourceBuffer.updating) {
       return;
     }
-    
+
     // Limit the number of segments to process at once to avoid overwhelming the browser
     const maxSegmentsToProcess = 5;
-    
+
     // Concatenate segments if there are multiple in the queue, but not too many
     if (this.pendingSegments.length > 1) {
       // If we have too many segments, only process a subset to avoid performance issues
       if (this.pendingSegments.length > maxSegmentsToProcess) {
-        const segmentsToProcess = this.pendingSegments.slice(0, maxSegmentsToProcess);
+        const segmentsToProcess = this.pendingSegments.slice(
+          0,
+          maxSegmentsToProcess
+        );
         this.pendingSegments = this.pendingSegments.slice(maxSegmentsToProcess);
-        
+
         // Create a temporary array for processing
         const tempPendingSegments = this.pendingSegments;
         this.pendingSegments = segmentsToProcess;
-        
+
         // Process the subset
         this.appendConcatenatedSegments();
-        
+
         // Restore the remaining segments
         this.pendingSegments = this.pendingSegments.concat(tempPendingSegments);
-        
-        this.logger.debug(`Processing ${segmentsToProcess.length} segments, ${tempPendingSegments.length} remaining`);
+
+        this.logger.debug(
+          `Processing ${segmentsToProcess.length} segments, ${tempPendingSegments.length} remaining`
+        );
       } else {
         // Process all segments if we don't have too many
         this.appendConcatenatedSegments();
@@ -325,15 +350,21 @@ export class MediaSegmentBuffer {
    * @param segment The segment to append
    */
   private appendSingleSegment(segment: MediaSegment): void {
-    if (!this.sourceBuffer) {return;}
-    
+    if (!this.sourceBuffer) {
+      return;
+    }
+
     try {
       this.isAppending = true;
       this.sourceBuffer.appendBuffer(segment.data);
-      
+
       // Only log for init segments or occasionally for media segments to reduce noise
       if (segment.isInitSegment || Math.random() < 0.1) {
-        this.logger.debug(`Appending ${segment.isInitSegment ? 'init' : 'media'} segment to SourceBuffer`);
+        this.logger.debug(
+          `Appending ${
+            segment.isInitSegment ? "init" : "media"
+          } segment to SourceBuffer`
+        );
       }
     } catch (e) {
       this.logger.error(`Error appending single segment: ${e}`);
@@ -345,36 +376,43 @@ export class MediaSegmentBuffer {
    * Concatenate and append multiple segments to the source buffer
    */
   private appendConcatenatedSegments(): void {
-    if (!this.sourceBuffer || this.pendingSegments.length === 0) {return;}
-    
+    if (!this.sourceBuffer || this.pendingSegments.length === 0) {
+      return;
+    }
+
     // Calculate total size
-    const totalLength = this.pendingSegments.reduce((sum, segment) => sum + segment.data.byteLength, 0);
-    
+    const totalLength = this.pendingSegments.reduce(
+      (sum, segment) => sum + segment.data.byteLength,
+      0
+    );
+
     // Create a new buffer to hold all segments
     const combined = new Uint8Array(totalLength);
     let offset = 0;
-    
+
     // Copy all segments into the combined buffer
     const segmentsToAppend = [...this.pendingSegments];
     this.pendingSegments = [];
-    
+
     for (const segment of segmentsToAppend) {
       combined.set(new Uint8Array(segment.data), offset);
       offset += segment.data.byteLength;
     }
-    
+
     try {
       this.isAppending = true;
       this.sourceBuffer.appendBuffer(combined.buffer);
-      this.logger.debug(`Appending concatenated segments (${segmentsToAppend.length} segments, ${totalLength} bytes)`);
+      this.logger.debug(
+        `Appending concatenated segments (${segmentsToAppend.length} segments, ${totalLength} bytes)`
+      );
     } catch (e) {
       this.logger.error(`Error appending concatenated segments: ${e}`);
       this.isAppending = false;
-      
+
       // If concatenation fails, try appending segments individually
       if (segmentsToAppend.length > 0) {
-        this.logger.info('Falling back to individual segment appending');
-        
+        this.logger.info("Falling back to individual segment appending");
+
         // Instead of calling processQueue (which would cause recursion),
         // append the first segment individually if possible
         if (segmentsToAppend.length > 0 && !this.sourceBuffer.updating) {
@@ -384,7 +422,9 @@ export class MediaSegmentBuffer {
             // Store remaining segments for later processing via updateend event
             this.pendingSegments = segmentsToAppend.slice(1);
           } catch (innerError) {
-            this.logger.error(`Error in fallback individual append: ${innerError}`);
+            this.logger.error(
+              `Error in fallback individual append: ${innerError}`
+            );
             // Store all segments for later processing
             this.pendingSegments = segmentsToAppend;
           }
@@ -406,6 +446,6 @@ export class MediaSegmentBuffer {
     this.isInitialized = false;
     this.isAppending = false;
     this.mediaBuffer.reset();
-    this.logger.info('MediaSegmentBuffer reset');
+    this.logger.info("MediaSegmentBuffer reset");
   }
 }

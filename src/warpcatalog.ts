@@ -2,7 +2,7 @@
  * WARP catalog interface definitions and helper functions
  * Based on the WARP specification
  */
-import { ILogger, LoggerFactory } from './logger';
+import { ILogger, LoggerFactory } from "./logger";
 
 // Types of callbacks used with catalogs
 type CatalogCallback = (catalog: WarpCatalog) => void;
@@ -48,8 +48,8 @@ export class WarpCatalogManager {
    */
   constructor() {
     // Get a logger for the Catalog component
-    this.logger = LoggerFactory.getInstance().getLogger('Catalog');
-    this.logger.info('WarpCatalogManager initialized');
+    this.logger = LoggerFactory.getInstance().getLogger("Catalog");
+    this.logger.info("WarpCatalogManager initialized");
   }
 
   /**
@@ -58,34 +58,40 @@ export class WarpCatalogManager {
    */
   public handleCatalogData(data: WarpCatalog): void {
     try {
-      this.logger.info('Received catalog data');
-      
+      this.logger.info("Received catalog data");
+
       // Validate that the data is a WARP catalog
-      if (!data || typeof data !== 'object' || !Array.isArray(data.tracks)) {
-        this.logger.error('Invalid catalog data format');
+      if (!data || typeof data !== "object" || !Array.isArray(data.tracks)) {
+        this.logger.error("Invalid catalog data format");
         return;
       }
-      
+
       // Store the catalog data
       this.catalogData = data;
-      
+
       // Log the catalog information
       this.logger.info(`Processing WARP catalog version ${data.version}`);
       this.logger.info(`Found ${data.tracks.length} tracks in catalog`);
-      
+
       // Separate tracks by type
-      const videoTracks = this.getTracksByType(data, 'video');
-      const audioTracks = this.getTracksByType(data, 'audio');
-      
+      const videoTracks = this.getTracksByType(data, "video");
+      const audioTracks = this.getTracksByType(data, "audio");
+
       // Log summary of found tracks
-      this.logger.info(`Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`);
-      
+      this.logger.info(
+        `Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`
+      );
+
       // Call the callback if set
       if (this.catalogCallback) {
         this.catalogCallback(data);
       }
     } catch (error) {
-      this.logger.error(`Error handling catalog data: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.error(
+        `Error handling catalog data: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 
@@ -112,15 +118,19 @@ export class WarpCatalogManager {
    * @param kind The kind of track (video or audio)
    * @returns The track, or undefined if not found
    */
-  public getTrackFromCatalog(namespace: string, name: string, kind: string): WarpTrack | undefined {
+  public getTrackFromCatalog(
+    namespace: string,
+    name: string,
+    kind: string
+  ): WarpTrack | undefined {
     if (!this.catalogData) {
       return undefined;
     }
     return this.catalogData.tracks.find(
-      (t: WarpTrack) => 
-        t.namespace === namespace && 
-        t.name === name && 
-        typeof t.mimeType === 'string' && 
+      (t: WarpTrack) =>
+        t.namespace === namespace &&
+        t.name === name &&
+        typeof t.mimeType === "string" &&
         t.mimeType.startsWith(kind)
     );
   }
@@ -131,21 +141,28 @@ export class WarpCatalogManager {
    * @param trackType The type of tracks to return ('video' or 'audio')
    * @returns Array of tracks matching the type
    */
-  public getTracksByType(catalog: WarpCatalog | null = null, trackType: 'video' | 'audio'): WarpTrack[] {
+  public getTracksByType(
+    catalog: WarpCatalog | null = null,
+    trackType: "video" | "audio"
+  ): WarpTrack[] {
     const data = catalog || this.catalogData;
     if (!data) {
       return [];
     }
 
-    return data.tracks.filter(track => {
-      if (trackType === 'video') {
-        return track.type === 'video' || 
-              (track.codec && this.isVideoCodec(track.codec)) ||
-              (track.mimeType && track.mimeType.startsWith('video/'));
+    return data.tracks.filter((track) => {
+      if (trackType === "video") {
+        return (
+          track.type === "video" ||
+          (track.codec && this.isVideoCodec(track.codec)) ||
+          (track.mimeType && track.mimeType.startsWith("video/"))
+        );
       } else {
-        return track.type === 'audio' || 
-              (track.codec && this.isAudioCodec(track.codec)) ||
-              (track.mimeType && track.mimeType.startsWith('audio/'));
+        return (
+          track.type === "audio" ||
+          (track.codec && this.isAudioCodec(track.codec)) ||
+          (track.mimeType && track.mimeType.startsWith("audio/"))
+        );
       }
     });
   }
@@ -156,8 +173,8 @@ export class WarpCatalogManager {
    * @returns True if the codec is a video codec
    */
   private isVideoCodec(codec: string): boolean {
-    const videoCodecPrefixes = ['avc1', 'hvc1', 'hev1', 'av01', 'vp8', 'vp9'];
-    return videoCodecPrefixes.some(prefix => codec.startsWith(prefix));
+    const videoCodecPrefixes = ["avc1", "hvc1", "hev1", "av01", "vp8", "vp9"];
+    return videoCodecPrefixes.some((prefix) => codec.startsWith(prefix));
   }
 
   /**
@@ -166,8 +183,8 @@ export class WarpCatalogManager {
    * @returns True if the codec is an audio codec
    */
   private isAudioCodec(codec: string): boolean {
-    const audioCodecs = ['opus', 'mp4a', 'flac', 'vorbis'];
-    return audioCodecs.some(ac => codec.includes(ac));
+    const audioCodecs = ["opus", "mp4a", "flac", "vorbis"];
+    return audioCodecs.some((ac) => codec.includes(ac));
   }
 
   /**

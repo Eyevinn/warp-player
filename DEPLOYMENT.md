@@ -37,6 +37,7 @@ chmod +x deploy.sh
 ```
 
 This interactive script will guide you through:
+
 1. Building for production
 2. Testing the build locally
 3. Deploying to your chosen hosting service
@@ -46,11 +47,13 @@ This interactive script will guide you through:
 If you prefer to deploy manually, you can follow these steps:
 
 1. Build the project for production:
+
    ```bash
    npm run build
    ```
 
 2. Test the build locally:
+
    ```bash
    npm run serve:dist
    ```
@@ -67,6 +70,7 @@ If you prefer to deploy manually, you can follow these steps:
 The WARP Player requires HTTPS and a server that supports WebTransport. Here are some compatible hosting options:
 
 ### GitHub Pages
+
 ```bash
 # Install gh-pages package
 npm install -g gh-pages
@@ -76,6 +80,7 @@ npx gh-pages -d dist
 ```
 
 ### Netlify
+
 ```bash
 # Install Netlify CLI
 npm install -g netlify-cli
@@ -85,6 +90,7 @@ netlify deploy --dir=dist --prod
 ```
 
 ### AWS S3 + CloudFront
+
 ```bash
 # Configure AWS CLI first
 aws s3 sync dist/ s3://your-bucket-name/ --delete
@@ -93,12 +99,14 @@ aws s3 sync dist/ s3://your-bucket-name/ --delete
 ```
 
 ### Azure Static Web Apps
+
 ```bash
 # Use Azure CLI
 az staticwebapp deploy --name your-app-name --resource-group your-resource-group --source dist
 ```
 
 ### Google Firebase Hosting
+
 ```bash
 # Install Firebase CLI
 npm install -g firebase-tools
