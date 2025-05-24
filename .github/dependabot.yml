@@ -9,6 +9,15 @@ updates:
       - "Eyevinn/maintainers"
     labels:
       - "dependencies"
+    commit-message:
+      # Use conventional commit format
+      prefix: "chore"
+      prefix-development: "chore"
+      # Include scope in commit message
+      include: "scope"
+      # Disable verbose commit body to avoid line length issues
+      # This will create simpler commit messages like:
+      # "chore(deps): bump webpack from 5.76.0 to 5.90.0"
     groups:
       development-dependencies:
         patterns:
@@ -42,3 +51,6 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
