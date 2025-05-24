@@ -13,7 +13,8 @@ let connectBtn: HTMLButtonElement;
 let disconnectBtn: HTMLButtonElement;
 let statusEl: HTMLDivElement;
 let tracksContainerEl: HTMLDivElement;
-let bufferDurationInput: HTMLInputElement;
+let minimalBufferInput: HTMLInputElement;
+let targetLatencyInput: HTMLInputElement;
 let logContainerEl: HTMLDivElement;
 // Using a type assertion when needed instead of storing the element
 // let logLevelSelect: HTMLSelectElement;
@@ -31,12 +32,14 @@ const logger = LoggerFactory.getInstance().getLogger('Browser');
 // Configuration
 interface Config {
   defaultServerUrl?: string;
-  targetBufferDuration?: number;
+  minimalBuffer?: number;
+  targetLatency?: number;
 }
 
 let config: Config = {
   defaultServerUrl: 'https://moqlivemock.demo.osaas.io/moq',
-  targetBufferDuration: 200
+  minimalBuffer: 200,
+  targetLatency: 300
 };
 
 // Load configuration from external file
@@ -65,7 +68,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   disconnectBtn = document.getElementById('disconnectBtn') as HTMLButtonElement;
   statusEl = document.getElementById('status') as HTMLDivElement;
   tracksContainerEl = document.getElementById('tracks-container') as HTMLDivElement;
-  bufferDurationInput = document.getElementById('bufferDuration') as HTMLInputElement;
+  minimalBufferInput = document.getElementById('minimalBuffer') as HTMLInputElement;
+  targetLatencyInput = document.getElementById('targetLatency') as HTMLInputElement;
   logContainerEl = document.getElementById('logContainer') as HTMLDivElement;
   // Get log level select but don't store in variable to avoid linting error
   document.getElementById('logLevel');
@@ -81,8 +85,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (config.defaultServerUrl) {
     serverUrlInput.value = config.defaultServerUrl;
   }
-  if (config.targetBufferDuration) {
-    bufferDurationInput.value = config.targetBufferDuration.toString();
+  if (config.minimalBuffer) {
+    minimalBufferInput.value = config.minimalBuffer.toString();
+  }
+  if (config.targetLatency) {
+    targetLatencyInput.value = config.targetLatency.toString();
   }
 
   // Add event listeners
@@ -96,7 +103,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     startBtn.disabled = true;
     stopBtn.disabled = true;
     serverUrlInput.disabled = true;
-    bufferDurationInput.disabled = true;
+    minimalBufferInput.disabled = true;
+    targetLatencyInput.disabled = true;
     
     // Show the browser warning
     browserWarning.classList.add('show');
@@ -130,16 +138,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
   
-  // Set initial buffer duration from config or input field
-  const initialBufferDuration = parseInt(bufferDurationInput.value) || config.targetBufferDuration || 200;
-  player.setTargetBufferDuration(initialBufferDuration);
+  // Set initial buffer parameters from config or defaults
+  const initialMinimalBuffer = parseInt(minimalBufferInput.value) || config.minimalBuffer || 200;
+  const initialTargetLatency = parseInt(targetLatencyInput.value) || config.targetLatency || 300;
+  player.setBufferParameters(initialMinimalBuffer, initialTargetLatency);
   
-  // Add event listener for buffer duration changes
-  bufferDurationInput.addEventListener('change', () => {
+  // Add event listener for minimal buffer changes
+  minimalBufferInput.addEventListener('change', () => {
     if (player) {
-      const newDuration = parseInt(bufferDurationInput.value) || 200;
-      player.setTargetBufferDuration(newDuration);
-      logger.info(`Target buffer duration set to ${newDuration}ms`);
+      const minBuffer = parseInt(minimalBufferInput.value) || 200;
+      const targetLat = parseInt(targetLatencyInput.value) || 300;
+      
+      // Validate that target latency is greater than minimal buffer
+      if (targetLat <= minBuffer) {
+        targetLatencyInput.value = (minBuffer + 100).toString();
+        logger.warn(`Target latency must be greater than minimal buffer. Adjusted to ${minBuffer + 100}ms`);
+      }
+      
+      player.setBufferParameters(minBuffer, parseInt(targetLatencyInput.value));
+      logger.info(`Minimal buffer set to ${minBuffer}ms`);
+    }
+  });
+  
+  // Add event listener for target latency changes
+  targetLatencyInput.addEventListener('change', () => {
+    if (player) {
+      const minBuffer = parseInt(minimalBufferInput.value) || 200;
+      const targetLat = parseInt(targetLatencyInput.value) || 300;
+      
+      // Validate that target latency is greater than minimal buffer
+      if (targetLat <= minBuffer) {
+        targetLatencyInput.value = (minBuffer + 100).toString();
+        logger.warn(`Target latency must be greater than minimal buffer. Adjusted to ${minBuffer + 100}ms`);
+      }
+      
+      player.setBufferParameters(minBuffer, parseInt(targetLatencyInput.value));
+      logger.info(`Target latency set to ${parseInt(targetLatencyInput.value)}ms`);
     }
   });
 
@@ -475,9 +509,10 @@ async function connect() {
     }
   });
   
-  // Set buffer duration from input field
-  const bufferDuration = parseInt(bufferDurationInput.value) || 200;
-  player.setTargetBufferDuration(bufferDuration);
+  // Set buffer parameters from input fields
+  const minimalBuffer = parseInt(minimalBufferInput.value) || 200;
+  const targetLatency = parseInt(targetLatencyInput.value) || 300;
+  player.setBufferParameters(minimalBuffer, targetLatency);
   
   // Disable connect button and enable disconnect button
   connectBtn.disabled = true;
