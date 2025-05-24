@@ -255,7 +255,7 @@ export class Player {
       this.logger.info(`Subscribing to catalog in namespace: ${namespaceStr}`);
 
       // Subscribe to the "catalog" track in the given namespace
-      const unregisterCallback = await this.client.subscribeTrack(
+      const trackAlias = await this.client.subscribeTrack(
         namespaceStr,
         "catalog",
         (obj: { data: ArrayBuffer }) => {
@@ -270,16 +270,24 @@ export class Player {
         }
       );
 
-      // Store the unregister function if provided
-      if (typeof unregisterCallback === 'function') {
+      // Store the track alias and create an unregister function
+      if (trackAlias !== undefined) {
+        // Create an unregister function that uses the track alias
+        const unregisterFunc = () => {
+          this.logger.info(`Unsubscribing from catalog track with alias ${trackAlias}`);
+          this.client?.unsubscribeTrack(trackAlias).catch(err => {
+            this.logger.error(`Failed to unsubscribe from catalog: ${err}`);
+          });
+        };
+        
         if (this.unregisterCatalogCallback) {
           this.logger.info('Unregistering previous catalog callback');
           this.unregisterCatalogCallback();
         }
-        this.unregisterCatalogCallback = unregisterCallback;
-        this.logger.info(`Successfully subscribed to catalog in namespace: ${namespaceStr}`);
+        this.unregisterCatalogCallback = unregisterFunc;
+        this.logger.info(`Successfully subscribed to catalog in namespace: ${namespaceStr} with track alias: ${trackAlias}`);
       } else {
-        this.logger.error(`Failed to subscribe to catalog in namespace: ${namespaceStr}`);
+        this.logger.error(`Failed to subscribe to catalog in namespace: ${namespaceStr} - no track alias returned`);
       }
     } catch (error) {
       this.logger.error(`Error subscribing to catalog: ${error instanceof Error ? error.message : String(error)}`);
