@@ -222,7 +222,12 @@ export class Client {
         }
       }
     } catch (error) {
-      this.logger.error("Error while listening for control messages:", error);
+      // Check if this is a WebTransportError due to session closure
+      if (error instanceof Error && error.message.includes("session is closed")) {
+        this.logger.debug("Control message listener stopped: connection closed");
+      } else {
+        this.logger.error("Error while listening for control messages:", error);
+      }
     }
   }
 

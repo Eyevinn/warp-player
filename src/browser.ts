@@ -119,6 +119,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     legacyLogMessage
   );
   
+  // Set connection state callback to manage button states
+  player.setConnectionStateCallback((connected: boolean) => {
+    if (connected) {
+      startBtn.disabled = false;
+      stopBtn.disabled = false;
+    } else {
+      startBtn.disabled = true;
+      stopBtn.disabled = true;
+    }
+  });
+  
   // Set initial buffer duration from config or input field
   const initialBufferDuration = parseInt(bufferDurationInput.value) || config.targetBufferDuration || 200;
   player.setTargetBufferDuration(initialBufferDuration);
@@ -453,6 +464,17 @@ async function connect() {
     legacyLogMessage
   );
   
+  // Set connection state callback to manage button states
+  player.setConnectionStateCallback((connected: boolean) => {
+    if (connected) {
+      startBtn.disabled = false;
+      stopBtn.disabled = false;
+    } else {
+      startBtn.disabled = true;
+      stopBtn.disabled = true;
+    }
+  });
+  
   // Set buffer duration from input field
   const bufferDuration = parseInt(bufferDurationInput.value) || 200;
   player.setTargetBufferDuration(bufferDuration);
@@ -469,6 +491,7 @@ async function connect() {
   try {
     // Connect to the server
     await player.connect();
+    // Start/Stop buttons will be enabled by the connection state callback
   } catch (error) {
     logger.error(`Connection error: ${error instanceof Error ? error.message : String(error)}`);
     resetUI();
@@ -488,6 +511,8 @@ function disconnect() {
 function resetUI() {
   connectBtn.disabled = false;
   disconnectBtn.disabled = true;
+  startBtn.disabled = true;
+  stopBtn.disabled = true;
 }
 
 // Legacy logger function for backward compatibility

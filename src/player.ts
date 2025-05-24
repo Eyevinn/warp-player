@@ -19,6 +19,8 @@ export class Player {
   private announcementsEl: HTMLElement | null = null;
   private logger: ILogger;
   private trackSubscriptions: Map<string, bigint> = new Map(); // Track name -> trackAlias
+  private isDisconnecting: boolean = false; // Flag to prevent recursive disconnect calls
+  private onConnectionStateChange: ((connected: boolean) => void) | null = null;
   
   // Shared media elements for synchronized playback
   private sharedMediaSource: MediaSource | null = null;
@@ -95,6 +97,14 @@ export class Player {
   }
 
   /**
+   * Set a callback to be notified when connection state changes
+   * @param callback Function called with true when connected, false when disconnected
+   */
+  public setConnectionStateCallback(callback: (connected: boolean) => void): void {
+    this.onConnectionStateChange = callback;
+  }
+
+  /**
    * Connect to the MoQ server
    */
   async connect(): Promise<void> {
@@ -103,7 +113,10 @@ export class Player {
       return;
     }
 
-    try {      
+    try {
+      // Reset the disconnecting flag
+      this.isDisconnecting = false;
+      
       // Create and connect the client
       this.client = new Client({
         url: this.serverUrl,
@@ -116,6 +129,11 @@ export class Player {
       this.statusEl.innerHTML = '<span>●</span> Connected';
       
       this.logger.info('Connected to MoQ server successfully!');
+      
+      // Notify connection state change
+      if (this.onConnectionStateChange) {
+        this.onConnectionStateChange(true);
+      }
       
       // Create the announcements section
       this.createAnnouncementsSection();
@@ -144,6 +162,16 @@ export class Player {
    * Disconnect from the MoQ server
    */
   disconnect(): void {
+    // Prevent recursive calls
+    if (this.isDisconnecting) {
+      this.logger.debug('Already disconnecting, skipping duplicate call');
+      return;
+    }
+    
+    // Set the flag immediately to prevent any callbacks from trying to use the connection
+    this.isDisconnecting = true;
+    this.logger.info('Starting disconnect process...');
+    
     // Unregister catalog callback if registered
     if (this.unregisterCatalogCallback) {
       this.unregisterCatalogCallback();
@@ -167,9 +195,21 @@ export class Player {
     
     if (this.connection) {
       this.logger.info('Disconnecting from server...');
-      this.connection.close();
+      
+      // Store references before clearing
+      const connection = this.connection;
+      
+      // Clear references first to prevent re-entry
       this.connection = null;
       this.client = null;
+      
+      // Try to close the connection if it's not already closed
+      try {
+        connection.close();
+      } catch (error) {
+        // If there's an error closing, it's likely already closed
+        this.logger.debug('Connection already closed or error during close:', error);
+      }
       
       // Clear catalog data
       this.catalogManager.clearCatalog();
@@ -187,6 +227,14 @@ export class Player {
     
     // Clear announcements
     this.announceNamespaces = [];
+    
+    // Notify connection state change
+    if (this.onConnectionStateChange) {
+      this.onConnectionStateChange(false);
+    }
+    
+    // Reset the flag
+    this.isDisconnecting = false;
   }
 
   /**
@@ -274,6 +322,11 @@ export class Player {
       if (trackAlias !== undefined) {
         // Create an unregister function that uses the track alias
         const unregisterFunc = () => {
+          // Don't try to unsubscribe if we're already disconnecting
+          if (this.isDisconnecting) {
+            this.logger.debug('Skipping catalog unsubscribe during disconnect');
+            return;
+          }
           this.logger.info(`Unsubscribing from catalog track with alias ${trackAlias}`);
           this.client?.unsubscribeTrack(trackAlias).catch(err => {
             this.logger.error(`Failed to unsubscribe from catalog: ${err}`);
