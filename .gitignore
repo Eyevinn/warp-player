@@ -26,3 +26,6 @@ build/
 # Logs
 logs
 *.log
+
+# Local Claude configuration
+CLAUDE.local.md

@@ -120,7 +120,8 @@ The codebase is organized into several key modules:
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is expected in CMAF format with ISO BMFF container structure.
 5. The client includes proper handling of bidirectional control streams for subscribing to content.
-6. The project follows the Eyevinn code quality standards with:
+6. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source
+7. The project follows the Eyevinn code quality standards with:
    - Conventional commits using commitlint
    - Prettier for code formatting
    - ESLint for code linting
