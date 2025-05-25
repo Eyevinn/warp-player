@@ -95,22 +95,6 @@ The client will:
 2. Parse it as a hex string
 3. Include it in the WebTransport connection options
 
-## Current UI Limitation
-
-Currently, the WARP Player UI only accepts the server URL. To use the fingerprint feature, you would need to modify the connection code in `browser.ts`:
-
-```typescript
-// In browser.ts, modify the connect function
-async function connect() {
-  // Add fingerprint URL based on server URL
-  const serverUrl = serverUrlInput.value;
-  const fingerprintUrl = serverUrl.replace("/moq", "/fingerprint");
-
-  player = new Player(serverUrl /* other params */);
-  // The Player class would need to be modified to accept and pass the fingerprint URL
-}
-```
-
 ## Alternative: Browser Trust
 
 For development, you can also:

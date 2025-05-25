@@ -82,7 +82,7 @@ warp-player/
 
 When using self-signed certificates for development, you have two options:
 
-1. **Using certificate fingerprint (fingerprint branch)**:
+1. **Using certificate fingerprint**:
 
    - Enter the server URL: `https://localhost:4443/moq`
    - Enter the fingerprint URL: `http://localhost:8081/fingerprint`
@@ -263,7 +263,7 @@ Without proper NTP synchronization on both client and server, latency measuremen
 ## Notes
 
 - WebTransport is only supported in some modern browsers, not in Node.js or Safari
-- For development with self-signed certificates on the fingerprint branch, see [FINGERPRINT.md](FINGERPRINT.md) for detailed instructions
+- For development with self-signed certificates, see [FINGERPRINT.md](FINGERPRINT.md) for detailed instructions
 - Alternatively, you may need to accept the self-signed certificate warning in your browser
 - The UI includes controls for adjusting both minimal buffer and target latency
 
