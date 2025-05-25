@@ -292,7 +292,7 @@ describe("BufferCtrlWriter", () => {
 
       console.log(
         "SubscribeDone without final values bytes:",
-        bytesToHex(bytes)
+        bytesToHex(bytes),
       );
 
       // Verify the message type and basic structure

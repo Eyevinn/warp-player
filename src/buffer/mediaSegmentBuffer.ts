@@ -62,7 +62,7 @@ export class MediaSegmentBuffer {
     };
 
     this.logger.info(
-      `MediaSegmentBuffer initialized with type: ${this.mediaType}, maxBufferSize: ${this.options.maxBufferSize}`
+      `MediaSegmentBuffer initialized with type: ${this.mediaType}, maxBufferSize: ${this.options.maxBufferSize}`,
     );
   }
 
@@ -85,7 +85,7 @@ export class MediaSegmentBuffer {
 
     // Update logger to use the new media type
     this.logger = LoggerFactory.getInstance().getLogger(
-      `MediaSegmentBuffer:${mediaType}`
+      `MediaSegmentBuffer:${mediaType}`,
     );
     this.logger.info(`Media type set to ${mediaType}`);
   }
@@ -122,7 +122,7 @@ export class MediaSegmentBuffer {
       this.isInitialized = true;
 
       this.logger.info(
-        `Added init segment with timescale: ${trackInfo.timescale}`
+        `Added init segment with timescale: ${trackInfo.timescale}`,
       );
 
       // Notify that the segment is ready
@@ -169,7 +169,7 @@ export class MediaSegmentBuffer {
       if (this.segments.length % 10 === 0) {
         this.logger.debug(
           `Added media segment with baseMediaDecodeTime: ${trackInfo.baseMediaDecodeTime}, ` +
-            `timescale: ${trackInfo.timescale}, buffer size: ${this.segments.length}`
+            `timescale: ${trackInfo.timescale}, buffer size: ${this.segments.length}`,
         );
       }
 
@@ -315,7 +315,7 @@ export class MediaSegmentBuffer {
       if (this.pendingSegments.length > maxSegmentsToProcess) {
         const segmentsToProcess = this.pendingSegments.slice(
           0,
-          maxSegmentsToProcess
+          maxSegmentsToProcess,
         );
         this.pendingSegments = this.pendingSegments.slice(maxSegmentsToProcess);
 
@@ -330,7 +330,7 @@ export class MediaSegmentBuffer {
         this.pendingSegments = this.pendingSegments.concat(tempPendingSegments);
 
         this.logger.debug(
-          `Processing ${segmentsToProcess.length} segments, ${tempPendingSegments.length} remaining`
+          `Processing ${segmentsToProcess.length} segments, ${tempPendingSegments.length} remaining`,
         );
       } else {
         // Process all segments if we don't have too many
@@ -363,7 +363,7 @@ export class MediaSegmentBuffer {
         this.logger.debug(
           `Appending ${
             segment.isInitSegment ? "init" : "media"
-          } segment to SourceBuffer`
+          } segment to SourceBuffer`,
         );
       }
     } catch (e) {
@@ -383,7 +383,7 @@ export class MediaSegmentBuffer {
     // Calculate total size
     const totalLength = this.pendingSegments.reduce(
       (sum, segment) => sum + segment.data.byteLength,
-      0
+      0,
     );
 
     // Create a new buffer to hold all segments
@@ -403,7 +403,7 @@ export class MediaSegmentBuffer {
       this.isAppending = true;
       this.sourceBuffer.appendBuffer(combined.buffer);
       this.logger.debug(
-        `Appending concatenated segments (${segmentsToAppend.length} segments, ${totalLength} bytes)`
+        `Appending concatenated segments (${segmentsToAppend.length} segments, ${totalLength} bytes)`,
       );
     } catch (e) {
       this.logger.error(`Error appending concatenated segments: ${e}`);
@@ -423,7 +423,7 @@ export class MediaSegmentBuffer {
             this.pendingSegments = segmentsToAppend.slice(1);
           } catch (innerError) {
             this.logger.error(
-              `Error in fallback individual append: ${innerError}`
+              `Error in fallback individual append: ${innerError}`,
             );
             // Store all segments for later processing
             this.pendingSegments = segmentsToAppend;

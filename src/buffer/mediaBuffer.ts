@@ -31,7 +31,7 @@ export class MediaBuffer {
     if (mediaType) {
       this.trackInfo.mediaType = mediaType;
       this.logger = LoggerFactory.getInstance().getLogger(
-        `MediaBuffer:${mediaType}`
+        `MediaBuffer:${mediaType}`,
       );
     }
   }
@@ -50,7 +50,7 @@ export class MediaBuffer {
     this.trackInfo.mediaType = mediaType;
     // Update logger to use the new media type
     this.logger = LoggerFactory.getInstance().getLogger(
-      `MediaBuffer:${mediaType}`
+      `MediaBuffer:${mediaType}`,
     );
     this.logger.info(`Media type set to ${mediaType}`);
   }
@@ -178,7 +178,7 @@ export class MediaBuffer {
             ? initSegment.constructor?.name
             : "unknown";
           throw new TypeError(
-            `Init segment must be an ArrayBuffer, but got ${type} (${constructor})`
+            `Init segment must be an ArrayBuffer, but got ${type} (${constructor})`,
           );
         }
       }
@@ -231,11 +231,11 @@ export class MediaBuffer {
         this.trackInfo.timescale =
           this.trackInfo.mediaType === "audio" ? 48000 : 90000; // Default timescales
         this.logger.warn(
-          `No timescale found in mdhd box, using default value of ${this.trackInfo.timescale}`
+          `No timescale found in mdhd box, using default value of ${this.trackInfo.timescale}`,
         );
       } else {
         this.logger.info(
-          `Parsed init segment with timescale: ${this.trackInfo.timescale}`
+          `Parsed init segment with timescale: ${this.trackInfo.timescale}`,
         );
       }
 
@@ -255,7 +255,7 @@ export class MediaBuffer {
     try {
       if (!this.initSegment) {
         throw new Error(
-          "Init segment must be parsed before parsing media segments"
+          "Init segment must be parsed before parsing media segments",
         );
       }
 
@@ -271,7 +271,7 @@ export class MediaBuffer {
             ? mediaSegment.constructor?.name
             : "unknown";
           throw new TypeError(
-            `Media segment must be an ArrayBuffer, but got ${type} (${constructor})`
+            `Media segment must be an ArrayBuffer, but got ${type} (${constructor})`,
           );
         }
       }
@@ -350,7 +350,7 @@ export class MediaBuffer {
 
       // Log segment info at debug level to avoid excessive logs
       this.logger.debug(
-        `Parsed media segment with baseMediaDecodeTime: ${this.trackInfo.baseMediaDecodeTime}, timescale: ${this.trackInfo.timescale}`
+        `Parsed media segment with baseMediaDecodeTime: ${this.trackInfo.baseMediaDecodeTime}, timescale: ${this.trackInfo.timescale}`,
       );
 
       return { ...this.trackInfo };

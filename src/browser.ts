@@ -68,19 +68,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   disconnectBtn = document.getElementById("disconnectBtn") as HTMLButtonElement;
   statusEl = document.getElementById("status") as HTMLDivElement;
   tracksContainerEl = document.getElementById(
-    "tracks-container"
+    "tracks-container",
   ) as HTMLDivElement;
   minimalBufferInput = document.getElementById(
-    "minimalBuffer"
+    "minimalBuffer",
   ) as HTMLInputElement;
   targetLatencyInput = document.getElementById(
-    "targetLatency"
+    "targetLatency",
   ) as HTMLInputElement;
   logContainerEl = document.getElementById("logContainer") as HTMLDivElement;
   // Get log level select but don't store in variable to avoid linting error
   document.getElementById("logLevel");
   componentFilterSelect = document.getElementById(
-    "componentFilter"
+    "componentFilter",
   ) as HTMLSelectElement;
   startBtn = document.getElementById("startBtn") as HTMLButtonElement;
   stopBtn = document.getElementById("stopBtn") as HTMLButtonElement;
@@ -107,7 +107,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Check WebTransport support
   if (typeof WebTransport === "undefined") {
     logger.error(
-      "WebTransport is NOT supported in this browser. Please use Chrome or Edge."
+      "WebTransport is NOT supported in this browser. Please use Chrome or Edge.",
     );
     connectBtn.disabled = true;
     startBtn.disabled = true;
@@ -134,7 +134,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     serverUrlInput.value,
     tracksContainerEl,
     statusEl,
-    legacyLogMessage
+    legacyLogMessage,
   );
 
   // Set connection state callback to manage button states
@@ -167,7 +167,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         logger.warn(
           `Target latency must be greater than minimal buffer. Adjusted to ${
             minBuffer + 100
-          }ms`
+          }ms`,
         );
       }
 
@@ -188,13 +188,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         logger.warn(
           `Target latency must be greater than minimal buffer. Adjusted to ${
             minBuffer + 100
-          }ms`
+          }ms`,
         );
       }
 
       player.setBufferParameters(minBuffer, parseInt(targetLatencyInput.value));
       logger.info(
-        `Target latency set to ${parseInt(targetLatencyInput.value)}ms`
+        `Target latency set to ${parseInt(targetLatencyInput.value)}ms`,
       );
     }
   });
@@ -296,7 +296,7 @@ function setupLogging() {
   // Insert the container after the component filter
   componentFilterSelect.parentNode?.parentNode?.insertBefore(
     componentLevelSelectContainer,
-    componentFilterSelect.parentNode?.nextSibling
+    componentFilterSelect.parentNode?.nextSibling,
   );
 
   // Add event listener for the set level button
@@ -312,11 +312,11 @@ function setupLogging() {
       logger.info(
         `Log level set to ${
           levelOptions.find((o) => parseInt(o.value) === selectedLevel)?.text
-        } for component: ${selectedComponent}`
+        } for component: ${selectedComponent}`,
       );
     } else {
       logger.warn(
-        "Cannot set level: Please select a specific component first."
+        "Cannot set level: Please select a specific component first.",
       );
     }
   });
@@ -372,7 +372,7 @@ function setupLogging() {
   const logSettingsParent = componentLevelSelectContainer.parentNode;
   logSettingsParent?.insertBefore(
     consoleOnlyContainer,
-    componentLevelSelectContainer.nextSibling
+    componentLevelSelectContainer.nextSibling,
   );
 
   // Add event listener for the console-only checkbox
@@ -402,7 +402,7 @@ function registerLoggerEvents() {
       logData.timestamp,
       logData.category,
       logData.level, // Changed from type to level to match what Logger.dispatchEvent sends
-      logData.message
+      logData.message,
     );
   });
 }
@@ -452,7 +452,7 @@ function displayLogEntry(
   timestamp: string,
   category: string,
   level: string,
-  message: string
+  message: string,
 ) {
   // Skip if console-only mode is enabled
   if (LoggerFactory.getInstance().isConsoleOnly()) {
@@ -517,8 +517,8 @@ function displayLogEntry(
     <span style="color: #666;">[${formattedTime}]</span>
     <span style="color: #0066cc;">[${category}]</span>
     <span style="color: ${color};">[${
-    level ? level.toUpperCase() : "INFO"
-  }]</span>
+      level ? level.toUpperCase() : "INFO"
+    }]</span>
     ${message}
   `;
 
@@ -541,7 +541,7 @@ async function connect() {
     serverUrlInput.value,
     tracksContainerEl,
     statusEl,
-    legacyLogMessage
+    legacyLogMessage,
   );
 
   // Set connection state callback to manage button states
@@ -577,7 +577,7 @@ async function connect() {
     logger.error(
       `Connection error: ${
         error instanceof Error ? error.message : String(error)
-      }`
+      }`,
     );
     resetUI();
   }
@@ -603,7 +603,7 @@ function resetUI() {
 // Legacy logger function for backward compatibility
 function legacyLogMessage(
   message: string,
-  type: "info" | "success" | "error" | "warn" = "info"
+  type: "info" | "success" | "error" | "warn" = "info",
 ) {
   switch (type) {
     case "error":

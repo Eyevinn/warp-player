@@ -79,7 +79,7 @@ export class WarpCatalogManager {
 
       // Log summary of found tracks
       this.logger.info(
-        `Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`
+        `Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`,
       );
 
       // Call the callback if set
@@ -90,7 +90,7 @@ export class WarpCatalogManager {
       this.logger.error(
         `Error handling catalog data: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       );
     }
   }
@@ -121,7 +121,7 @@ export class WarpCatalogManager {
   public getTrackFromCatalog(
     namespace: string,
     name: string,
-    kind: string
+    kind: string,
   ): WarpTrack | undefined {
     if (!this.catalogData) {
       return undefined;
@@ -131,7 +131,7 @@ export class WarpCatalogManager {
         t.namespace === namespace &&
         t.name === name &&
         typeof t.mimeType === "string" &&
-        t.mimeType.startsWith(kind)
+        t.mimeType.startsWith(kind),
     );
   }
 
@@ -143,7 +143,7 @@ export class WarpCatalogManager {
    */
   public getTracksByType(
     catalog: WarpCatalog | null = null,
-    trackType: "video" | "audio"
+    trackType: "video" | "audio",
   ): WarpTrack[] {
     const data = catalog || this.catalogData;
     if (!data) {

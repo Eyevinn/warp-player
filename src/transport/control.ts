@@ -229,7 +229,7 @@ export class Decoder {
     const lengthBytes = await this.r.read(2);
     const messageLength = (lengthBytes[0] << 8) | lengthBytes[1]; // MSB format
     controlLogger.debug(
-      `Message length (16-bit MSB): ${messageLength} bytes, actual length: ${this.r.getByteLength()}`
+      `Message length (16-bit MSB): ${messageLength} bytes, actual length: ${this.r.getByteLength()}`,
     );
 
     let msgType: Msg;
@@ -268,7 +268,7 @@ export class Decoder {
     }
 
     controlLogger.debug(
-      `Parsed message type: ${msgType} (0x${t.toString(16)})`
+      `Parsed message type: ${msgType} (0x${t.toString(16)})`,
     );
     return msgType;
   }
@@ -452,7 +452,7 @@ export class Decoder {
     if (content_exists) {
       largest = await this.location();
       controlLogger.debug(
-        `Largest: group ${largest.group}, object ${largest.object}`
+        `Largest: group ${largest.group}, object ${largest.object}`,
       );
     }
 
@@ -645,7 +645,7 @@ export class Encoder {
     // Get the marshaled bytes and write them to the output stream
     const bytes = writer.getBytes();
     controlLogger.debug(
-      `Marshaled ${bytes.length} bytes for message type: ${msg.kind}`
+      `Marshaled ${bytes.length} bytes for message type: ${msg.kind}`,
     );
 
     // Write the bytes directly to the output stream

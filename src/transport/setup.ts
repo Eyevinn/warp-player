@@ -52,8 +52,8 @@ export class Decoder {
     const type: SetupType = await this.r.u53();
     setupLogger.debug(
       `Setup message type: 0x${type.toString(
-        16
-      )} (expected 0x${SetupType.Client.toString(16)})`
+        16,
+      )} (expected 0x${SetupType.Client.toString(16)})`,
     );
 
     if (type !== SetupType.Client) {
@@ -74,13 +74,13 @@ export class Decoder {
       const version = await this.r.u53();
       versions.push(version);
       setupLogger.debug(
-        `Supported version ${i + 1}: 0x${version.toString(16)}`
+        `Supported version ${i + 1}: 0x${version.toString(16)}`,
       );
     }
 
     const params = await this.parameters();
     setupLogger.debug(
-      `Parameters: ${params ? `${params.length} parameters` : "none"}`
+      `Parameters: ${params ? `${params.length} parameters` : "none"}`,
     );
 
     // Log each parameter in detail
@@ -88,13 +88,13 @@ export class Decoder {
       params.forEach((param) => {
         if (typeof param.value === "bigint") {
           setupLogger.debug(
-            `Parameter ID: ${param.type}, value: ${param.value} (bigint)`
+            `Parameter ID: ${param.type}, value: ${param.value} (bigint)`,
           );
         } else {
           setupLogger.debug(
             `Parameter ID: ${param.type}, length: ${
               param.value.byteLength
-            } bytes, value: ${this.formatBytes(param.value)}`
+            } bytes, value: ${this.formatBytes(param.value)}`,
           );
         }
       });
@@ -115,8 +115,8 @@ export class Decoder {
     const type: SetupType = await this.r.u53();
     setupLogger.debug(
       `Setup message type: 0x${type.toString(
-        16
-      )} (expected 0x${SetupType.Server.toString(16)})`
+        16,
+      )} (expected 0x${SetupType.Server.toString(16)})`,
     );
 
     if (type !== SetupType.Server) {
@@ -138,7 +138,7 @@ export class Decoder {
 
     const params = await this.parameters();
     setupLogger.debug(
-      `Parameters: ${params ? `${params.length} parameters` : "none"}`
+      `Parameters: ${params ? `${params.length} parameters` : "none"}`,
     );
 
     // Log each parameter in detail
@@ -146,13 +146,13 @@ export class Decoder {
       params.forEach((param) => {
         if (typeof param.value === "bigint") {
           setupLogger.debug(
-            `Parameter ID: ${param.type}, value: ${param.value} (bigint)`
+            `Parameter ID: ${param.type}, value: ${param.value} (bigint)`,
           );
         } else {
           setupLogger.debug(
             `Parameter ID: ${param.type}, length: ${
               param.value.byteLength
-            } bytes, value: ${this.formatBytes(param.value)}`
+            } bytes, value: ${this.formatBytes(param.value)}`,
           );
         }
       });
@@ -198,7 +198,7 @@ export class Decoder {
     const count = countResult.value;
 
     setupLogger.debug(
-      `Parameter count: ${count}, count field: ${countResult.bytesRead} bytes`
+      `Parameter count: ${count}, count field: ${countResult.bytesRead} bytes`,
     );
 
     if (count === 0) {
@@ -224,14 +224,14 @@ export class Decoder {
             i + 1
           }/${count}: Type ${paramType} (even), Value: ${value} (${
             valueResult.bytesRead
-          } bytes)`
+          } bytes)`,
         );
 
         // Check for duplicates
         const existingIndex = params.findIndex((p) => p.type === paramType);
         if (existingIndex !== -1) {
           setupLogger.warn(
-            `Duplicate parameter type: ${paramType}, overwriting previous value`
+            `Duplicate parameter type: ${paramType}, overwriting previous value`,
           );
           params.splice(existingIndex, 1);
         }
@@ -256,15 +256,15 @@ export class Decoder {
           `Parameter ${
             i + 1
           }/${count}: Type ${paramType} (odd), Length: ${length}, Value: ${this.formatBytes(
-            value
-          )}`
+            value,
+          )}`,
         );
 
         // Check for duplicates
         const existingIndex = params.findIndex((p) => p.type === paramType);
         if (existingIndex !== -1) {
           setupLogger.warn(
-            `Duplicate parameter type: ${paramType}, overwriting previous value`
+            `Duplicate parameter type: ${paramType}, overwriting previous value`,
           );
           params.splice(existingIndex, 1);
         }
@@ -336,7 +336,7 @@ export class Encoder {
     versionPayload.push(versionLength);
     versionBytes += versionLength.length;
     setupLogger.debug(
-      `Version count: ${versions.length}, ${versionLength.length} bytes`
+      `Version count: ${versions.length}, ${versionLength.length} bytes`,
     );
 
     for (const v of versions) {
@@ -344,7 +344,7 @@ export class Encoder {
       versionPayload.push(version);
       versionBytes += version.length;
       setupLogger.debug(
-        `Version: 0x${v.toString(16)}, ${version.length} bytes`
+        `Version: 0x${v.toString(16)}, ${version.length} bytes`,
       );
     }
     return { versionBytes, versionPayload };
@@ -364,7 +364,7 @@ export class Encoder {
     if (!params || params.length === 0) {
       await w.u53(0);
       setupLogger.debug(
-        "No parameters to encode, setting parameter count to 0"
+        "No parameters to encode, setting parameter count to 0",
       );
       // Release the writer and combine the chunks
       w.release();
@@ -385,25 +385,25 @@ export class Encoder {
         // Even type: value is a single varint
         if (typeof param.value !== "bigint") {
           throw new Error(
-            `Even parameter type ${param.type} requires a bigint value`
+            `Even parameter type ${param.type} requires a bigint value`,
           );
         }
         await w.u62(param.value);
         setupLogger.debug(
-          `Encoded parameter: Type ${param.type} (even), Value: ${param.value}`
+          `Encoded parameter: Type ${param.type} (even), Value: ${param.value}`,
         );
       } else {
         // Odd type: value is a byte sequence with length
         if (!(param.value instanceof Uint8Array)) {
           throw new Error(
-            `Odd parameter type ${param.type} requires a Uint8Array value`
+            `Odd parameter type ${param.type} requires a Uint8Array value`,
           );
         }
 
         // Check maximum length (2^16-1)
         if (param.value.byteLength > 65535) {
           throw new Error(
-            `Parameter value length exceeds maximum: ${param.value.byteLength} > 65535`
+            `Parameter value length exceeds maximum: ${param.value.byteLength} > 65535`,
           );
         }
 
@@ -413,7 +413,7 @@ export class Encoder {
         setupLogger.debug(
           `Encoded parameter: Type ${param.type} (odd), Length: ${
             param.value.byteLength
-          }, Value: ${this.formatBytes(param.value)}`
+          }, Value: ${this.formatBytes(param.value)}`,
         );
       }
     }

@@ -9,7 +9,7 @@ describe("ISO Box Parsing", () => {
     const buffer = fs.readFileSync(filePath);
     return buffer.buffer.slice(
       buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength
+      buffer.byteOffset + buffer.byteLength,
     );
   }
 
@@ -44,8 +44,8 @@ describe("ISO Box Parsing", () => {
     const moov = parsed.boxes
       ? parsed.boxes.find((box: any) => box.type === "moov")
       : parsed.type === "moov"
-      ? parsed
-      : undefined;
+        ? parsed
+        : undefined;
     expect(moov).toBeDefined();
     if (!moov || !moov.boxes) {
       fail("moov box or moov.boxes not found");
@@ -95,8 +95,8 @@ describe("ISO Box Parsing", () => {
     const moof = parsed.boxes
       ? parsed.boxes.find((box: any) => box.type === "moof")
       : parsed.type === "moof"
-      ? parsed
-      : undefined;
+        ? parsed
+        : undefined;
     expect(moof).toBeDefined();
     if (!moof || !moof.boxes) {
       fail("moof box or moof.boxes not found");
