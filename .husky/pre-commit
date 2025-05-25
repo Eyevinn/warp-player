@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "Running pre-commit checks..."
+
+# Run prettier on staged files
+echo "Running prettier..."
+npx prettier --write --ignore-unknown $(git diff --cached --name-only --diff-filter=ACMR)
+
+# Add formatted files back to staging
+git add $(git diff --cached --name-only --diff-filter=ACMR)
+
+echo "Pre-commit checks passed!"

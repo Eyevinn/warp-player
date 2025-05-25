@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --ext .ts --fix",
     "pretty": "prettier --check --ignore-unknown .",
+    "pretty:fix": "prettier --write --ignore-unknown .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "webpack serve",
     "start": "webpack serve",
