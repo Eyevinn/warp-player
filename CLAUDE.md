@@ -45,6 +45,7 @@ npm run typecheck
 ### Git Hooks
 
 The project has pre-push hooks that automatically run before pushing:
+
 - TypeScript type checking
 - ESLint
 - Jest tests
@@ -95,7 +96,7 @@ warp-player/
 The transport used is MoQ Transport, currently
 [draft-11](https://www.ietf.org/archive/id/draft-ietf-moq-transport-11.txt)
 
-For the WARP catalog, the specification is 
+For the WARP catalog, the specification is
 [draft-0](https://www.ietf.org/archive/id/draft-ietf-moq-warp-00.txt)
 but with some modifications added later like updates to Catalog.
 CMAF is used as packaging instead of LOC.
@@ -179,6 +180,7 @@ Note: The fingerprint feature was added to the Player class but the UI has been 
 The project uses GitHub Actions for continuous integration:
 
 1. **CI Workflow** (`ci.yml`):
+
    - Runs on push to main and pull requests
    - Tests on Node.js 20.x and 22.x
    - Runs ESLint, Prettier checks, TypeScript type checking
@@ -186,6 +188,7 @@ The project uses GitHub Actions for continuous integration:
    - Uploads test coverage to Codecov
 
 2. **Commit Linting** (`commitlint.yml`):
+
    - Validates commit messages follow conventional commit format
    - Runs on pull requests
 
@@ -195,6 +198,6 @@ The project uses GitHub Actions for continuous integration:
 
 # Extra instructions
 
-* Use git add -u instead of git add -A to avoid accidentally adding extra files
-* Don't mention Claude in commit messages
-* When fixing linting issues in PRs, use `npx prettier --write` for formatting fixes
+- Use git add -u instead of git add -A to avoid accidentally adding extra files
+- Don't mention Claude in commit messages
+- When fixing linting issues in PRs, use `npx prettier --write` for formatting fixes
