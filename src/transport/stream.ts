@@ -66,11 +66,11 @@ export class Reader {
     const result = new Uint8Array(
       this.#buffer.buffer,
       this.#buffer.byteOffset,
-      size
+      size,
     );
     this.#buffer = new Uint8Array(
       this.#buffer.buffer,
-      this.#buffer.byteOffset + size
+      this.#buffer.byteOffset + size,
     );
 
     return result;
@@ -112,7 +112,7 @@ export class Reader {
     const length = await this.u53();
     if (maxLength !== undefined && length > maxLength) {
       throw new Error(
-        `string length ${length} exceeds max length ${maxLength}`
+        `string length ${length} exceeds max length ${maxLength}`,
       );
     }
 
@@ -165,7 +165,7 @@ export class Reader {
       const view = new DataView(
         slice.buffer,
         slice.byteOffset,
-        slice.byteLength
+        slice.byteLength,
       );
 
       return BigInt(view.getInt16(0)) & 0x3fffn;
@@ -175,7 +175,7 @@ export class Reader {
       const view = new DataView(
         slice.buffer,
         slice.byteOffset,
-        slice.byteLength
+        slice.byteLength,
       );
 
       return BigInt(view.getUint32(0)) & 0x3fffffffn;
@@ -185,7 +185,7 @@ export class Reader {
       const view = new DataView(
         slice.buffer,
         slice.byteOffset,
-        slice.byteLength
+        slice.byteLength,
       );
 
       return BigInt(view.getBigUint64(0)) & 0x3fffffffffffffffn;
@@ -208,7 +208,7 @@ export class Reader {
       const view = new DataView(
         slice.buffer,
         slice.byteOffset,
-        slice.byteLength
+        slice.byteLength,
       );
 
       return { value: BigInt(view.getInt16(0)) & 0x3fffn, bytesRead: 2 };
@@ -218,7 +218,7 @@ export class Reader {
       const view = new DataView(
         slice.buffer,
         slice.byteOffset,
-        slice.byteLength
+        slice.byteLength,
       );
 
       return { value: BigInt(view.getUint32(0)) & 0x3fffffffn, bytesRead: 4 };
@@ -228,7 +228,7 @@ export class Reader {
       const view = new DataView(
         slice.buffer,
         slice.byteOffset,
-        slice.byteLength
+        slice.byteLength,
       );
 
       return {

@@ -177,7 +177,7 @@ export class TracksManager {
         if (isFirstObject && subgroupId === null) {
           subgroupId = objectId;
           this.logger.debug(
-            `Subgroup ID set to first Object ID: ${subgroupId}`
+            `Subgroup ID set to first Object ID: ${subgroupId}`,
           );
         }
         isFirstObject = false;
@@ -191,7 +191,7 @@ export class TracksManager {
             const extensionLength = Number(extensionHeadersLength);
             extensions = await reader.read(extensionLength);
             this.logger.debug(
-              `Read ${extensionLength} bytes of extension headers`
+              `Read ${extensionLength} bytes of extension headers`,
             );
           }
         }
@@ -237,7 +237,7 @@ export class TracksManager {
       }
 
       this.logger.debug(
-        `Finished processing SUBGROUP_HEADER stream for track ${trackAlias}`
+        `Finished processing SUBGROUP_HEADER stream for track ${trackAlias}`,
       );
     } catch (error) {
       this.logger.error("Error processing SUBGROUP_HEADER stream:", error);
@@ -249,11 +249,11 @@ export class TracksManager {
    */
   public registerObjectCallback(
     trackAlias: bigint,
-    callback: ObjectCallback
+    callback: ObjectCallback,
   ): void {
     const key = trackAlias.toString();
     this.logger.info(
-      `Registering object callback for track ${trackAlias} (key: ${key})`
+      `Registering object callback for track ${trackAlias} (key: ${key})`,
     );
 
     // Register the callback in the track registry
@@ -261,7 +261,7 @@ export class TracksManager {
     if (trackInfo) {
       this.trackRegistry.registerCallback(trackAlias, callback);
       this.logger.info(
-        `Registered callback in track registry for ${trackInfo.namespace}:${trackInfo.trackName} (alias: ${trackAlias})`
+        `Registered callback in track registry for ${trackInfo.namespace}:${trackInfo.trackName} (alias: ${trackAlias})`,
       );
     }
 
@@ -273,7 +273,7 @@ export class TracksManager {
       const callbacks = this.objectCallbacks.get(key);
       if (callbacks) {
         this.logger.info(
-          `Adding to existing callback array for track ${trackAlias}, current count: ${callbacks.length}`
+          `Adding to existing callback array for track ${trackAlias}, current count: ${callbacks.length}`,
         );
       }
     }
@@ -281,13 +281,13 @@ export class TracksManager {
     const callbacksAfterAdd = this.objectCallbacks.get(key);
     if (!callbacksAfterAdd) {
       throw new Error(
-        `Callback array for track ${trackAlias} not found despite being created`
+        `Callback array for track ${trackAlias} not found despite being created`,
       );
     }
 
     callbacksAfterAdd.push(callback);
     this.logger.info(
-      `Successfully registered object callback for track ${trackAlias}, new count: ${callbacksAfterAdd.length}`
+      `Successfully registered object callback for track ${trackAlias}, new count: ${callbacksAfterAdd.length}`,
     );
 
     // Log all current callback keys for debugging
@@ -300,7 +300,7 @@ export class TracksManager {
    */
   public unregisterObjectCallback(
     trackAlias: bigint,
-    callback: ObjectCallback
+    callback: ObjectCallback,
   ): void {
     const key = trackAlias.toString();
 
@@ -312,7 +312,7 @@ export class TracksManager {
       const callbacks = this.objectCallbacks.get(key);
       if (!callbacks) {
         this.logger.warn(
-          `Callback array for track ${trackAlias} was null despite being registered`
+          `Callback array for track ${trackAlias} was null despite being registered`,
         );
         return;
       }
@@ -321,7 +321,7 @@ export class TracksManager {
       if (index !== -1) {
         callbacks.splice(index, 1);
         this.logger.warn(
-          `Unregistered object callback for track ${trackAlias} from legacy map`
+          `Unregistered object callback for track ${trackAlias} from legacy map`,
         );
       }
 
@@ -333,7 +333,7 @@ export class TracksManager {
     const trackInfo = this.trackRegistry.getTrackInfoFromAlias(trackAlias);
     if (trackInfo) {
       this.logger.warn(
-        `Unregistered callback for ${trackInfo.namespace}:${trackInfo.trackName} (alias: ${trackAlias})`
+        `Unregistered callback for ${trackInfo.namespace}:${trackInfo.trackName} (alias: ${trackAlias})`,
       );
     }
   }
@@ -344,33 +344,33 @@ export class TracksManager {
   private notifyObjectCallbacks(trackAlias: bigint, obj: MoQObject) {
     const key = trackAlias.toString();
     this.logger.debug(
-      `Notifying callbacks for track ${trackAlias} (key: ${key}), object ID: ${obj.location.object}`
+      `Notifying callbacks for track ${trackAlias} (key: ${key}), object ID: ${obj.location.object}`,
     );
 
     // First check the track registry for callbacks
     const trackInfo = this.trackRegistry.getTrackInfoFromAlias(trackAlias);
     if (trackInfo && trackInfo.callbacks.length > 0) {
       this.logger.debug(
-        `Found ${trackInfo.callbacks.length} callbacks in registry for track ${trackAlias}`
+        `Found ${trackInfo.callbacks.length} callbacks in registry for track ${trackAlias}`,
       );
 
       for (let i = 0; i < trackInfo.callbacks.length; i++) {
         try {
           this.logger.debug(
-            `Executing registry callback #${i + 1} for track ${trackAlias}`
+            `Executing registry callback #${i + 1} for track ${trackAlias}`,
           );
           trackInfo.callbacks[i](obj);
           this.logger.debug(
             `Successfully executed registry callback #${
               i + 1
-            } for track ${trackAlias}`
+            } for track ${trackAlias}`,
           );
         } catch (error) {
           this.logger.error(
             `Error in registry object callback #${
               i + 1
             } for track ${trackAlias}:`,
-            error
+            error,
           );
         }
       }
@@ -381,37 +381,37 @@ export class TracksManager {
       const callbacks = this.objectCallbacks.get(key);
       if (!callbacks) {
         this.logger.warn(
-          `Callback array for track ${trackAlias} was null despite being registered`
+          `Callback array for track ${trackAlias} was null despite being registered`,
         );
         return;
       }
       this.logger.debug(
-        `Found ${callbacks.length} callbacks in legacy map for track ${trackAlias}`
+        `Found ${callbacks.length} callbacks in legacy map for track ${trackAlias}`,
       );
 
       for (let i = 0; i < callbacks.length; i++) {
         try {
           this.logger.debug(
-            `Executing legacy callback #${i + 1} for track ${trackAlias}`
+            `Executing legacy callback #${i + 1} for track ${trackAlias}`,
           );
           callbacks[i](obj);
           this.logger.debug(
             `Successfully executed legacy callback #${
               i + 1
-            } for track ${trackAlias}`
+            } for track ${trackAlias}`,
           );
         } catch (error) {
           this.logger.error(
             `Error in legacy object callback #${
               i + 1
             } for track ${trackAlias}:`,
-            error
+            error,
           );
         }
       }
     } else if (!trackInfo || trackInfo.callbacks.length === 0) {
       this.logger.warn(
-        `No callbacks found for track ${trackAlias} (key: ${key})`
+        `No callbacks found for track ${trackAlias} (key: ${key})`,
       );
 
       // Log all current callback keys for debugging
@@ -438,7 +438,7 @@ export class TracksManager {
   public async subscribeTrack(
     namespace: string,
     trackName: string,
-    callback: ObjectCallback
+    callback: ObjectCallback,
   ): Promise<bigint> {
     this.logger.info(`Subscribing to track ${namespace}:${trackName}`);
 
@@ -457,7 +457,7 @@ export class TracksManager {
     const trackAlias = this.trackRegistry.registerTrack(
       namespace,
       trackName,
-      requestId
+      requestId,
     );
 
     // Register the callback for this track alias
@@ -478,7 +478,7 @@ export class TracksManager {
     };
 
     this.logger.info(
-      `Sending subscribe message for ${namespace}:${trackName} with alias ${trackAlias} and requestId ${requestId}`
+      `Sending subscribe message for ${namespace}:${trackName} with alias ${trackAlias} and requestId ${requestId}`,
     );
 
     try {
@@ -494,10 +494,10 @@ export class TracksManager {
           requestId,
           (_response: Message) => {
             this.logger.info(
-              `Received SubscribeOk for ${namespace}:${trackName} with requestId ${requestId}`
+              `Received SubscribeOk for ${namespace}:${trackName} with requestId ${requestId}`,
             );
             resolve();
-          }
+          },
         );
 
         // Set a timeout to reject the promise if we don't receive a response in time
@@ -505,8 +505,8 @@ export class TracksManager {
           unregisterHandler(); // Clean up the handler
           reject(
             new Error(
-              `Subscribe timeout for ${namespace}:${trackName} with requestId ${requestId}`
-            )
+              `Subscribe timeout for ${namespace}:${trackName} with requestId ${requestId}`,
+            ),
           );
         }, 10000); // 10 second timeout
 
@@ -520,13 +520,13 @@ export class TracksManager {
               unregisterHandler(); // Clean up the success handler
               this.logger.error(
                 `Received SubscribeError for ${namespace}:${trackName}: ${JSON.stringify(
-                  response
-                )}`
+                  response,
+                )}`,
               );
               reject(
-                new Error(`Subscribe failed: ${JSON.stringify(response)}`)
+                new Error(`Subscribe failed: ${JSON.stringify(response)}`),
               );
-            }
+            },
           );
         }
       });
@@ -538,12 +538,12 @@ export class TracksManager {
       await subscribePromise;
 
       this.logger.info(
-        `Successfully subscribed to track ${namespace}:${trackName} with alias ${trackAlias}`
+        `Successfully subscribed to track ${namespace}:${trackName} with alias ${trackAlias}`,
       );
     } catch (error) {
       this.logger.error(
         `Error subscribing to track ${namespace}:${trackName}:`,
-        error
+        error,
       );
       // We'll keep the registration in the registry even if the subscription fails
       // This allows for retry attempts without creating new aliases
@@ -573,7 +573,7 @@ export class TracksManager {
     const trackInfo = this.trackRegistry.getTrackInfoFromAlias(trackAlias);
     if (!trackInfo) {
       throw new Error(
-        `Cannot unsubscribe: No track info found for alias ${trackAlias}`
+        `Cannot unsubscribe: No track info found for alias ${trackAlias}`,
       );
     }
 
@@ -590,7 +590,7 @@ export class TracksManager {
     } as Message;
 
     this.logger.info(
-      `Sending unsubscribe message for track ${trackDescription} with original requestId ${requestId}`
+      `Sending unsubscribe message for track ${trackDescription} with original requestId ${requestId}`,
     );
 
     try {
@@ -613,12 +613,12 @@ export class TracksManager {
       this.trackRegistry.unregisterAllCallbacks(trackAlias);
 
       this.logger.info(
-        `Successfully unsubscribed from track ${trackDescription}`
+        `Successfully unsubscribed from track ${trackDescription}`,
       );
     } catch (error) {
       this.logger.error(
         `Error unsubscribing from track ${trackDescription}:`,
-        error
+        error,
       );
       throw error;
     }

@@ -92,10 +92,10 @@ describe("TrackAliasRegistry", () => {
     registry.clear();
 
     expect(
-      registry.getTrackInfoFromName("test-namespace", "track1")
+      registry.getTrackInfoFromName("test-namespace", "track1"),
     ).toBeUndefined();
     expect(
-      registry.getTrackInfoFromName("test-namespace", "track2")
+      registry.getTrackInfoFromName("test-namespace", "track2"),
     ).toBeUndefined();
 
     // After clearing, should start with fresh aliases

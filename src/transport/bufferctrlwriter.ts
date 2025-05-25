@@ -273,7 +273,7 @@ export class BufferCtrlWriter {
           throw new Error(
             `Invalid value type for even key ${
               pair.type
-            }: expected bigint, got ${typeof pair.value}`
+            }: expected bigint, got ${typeof pair.value}`,
           );
         }
         this.writeVarInt62(pair.value);
@@ -283,7 +283,7 @@ export class BufferCtrlWriter {
           throw new Error(
             `Invalid value type for odd key ${
               pair.type
-            }: expected Uint8Array, got ${typeof pair.value}`
+            }: expected Uint8Array, got ${typeof pair.value}`,
           );
         }
         this.writeVarInt53(pair.value.byteLength);

@@ -40,7 +40,7 @@ export class Client {
       (e) => {
         this.logger.warn(`Failed to fetch fingerprint: ${e}`);
         return undefined;
-      }
+      },
     );
   }
 
@@ -91,7 +91,7 @@ export class Client {
     // Create tracks manager for handling data streams
     this.#tracksManager = new TracksManager(wt, control, this);
     this.logger.info(
-      "Tracks manager created with control stream and client reference"
+      "Tracks manager created with control stream and client reference",
     );
 
     // Create a Connection object with the client instance to access request ID management
@@ -145,10 +145,10 @@ export class Client {
   registerMessageHandler(
     kind: Msg,
     requestId: bigint,
-    handler: MessageHandler
+    handler: MessageHandler,
   ): () => void {
     this.logger.debug(
-      `Registering handler for message kind ${kind} with requestId ${requestId}`
+      `Registering handler for message kind ${kind} with requestId ${requestId}`,
     );
 
     // Initialize the map for this message kind if it doesn't exist
@@ -170,7 +170,7 @@ export class Client {
     // Return a function to unregister the handler
     return () => {
       this.logger.debug(
-        `Unregistering handler for message kind ${kind} with requestId ${requestId}`
+        `Unregistering handler for message kind ${kind} with requestId ${requestId}`,
       );
       const handlersMap = this.#messageHandlers.get(kind);
       if (handlersMap) {
@@ -191,8 +191,8 @@ export class Client {
         if (msg.kind === Msg.Announce) {
           this.logger.info(
             `Received announce message with namespace: ${msg.namespace.join(
-              "/"
-            )}`
+              "/",
+            )}`,
           );
 
           // Notify all registered announce callbacks
@@ -203,7 +203,7 @@ export class Client {
               this.logger.error(
                 `Error in announce callback: ${
                   error instanceof Error ? error.message : String(error)
-                }`
+                }`,
               );
             }
           });
@@ -214,7 +214,7 @@ export class Client {
 
           if (handlersForKind && handlersForKind.has(requestId)) {
             this.logger.debug(
-              `Found handler for message kind ${msg.kind} with requestId ${requestId}`
+              `Found handler for message kind ${msg.kind} with requestId ${requestId}`,
             );
             try {
               // Call the handler with the message
@@ -223,7 +223,7 @@ export class Client {
                 handler(msg);
               } else {
                 this.logger.warn(
-                  `Handler for message kind ${msg.kind} with requestId ${requestId} was null`
+                  `Handler for message kind ${msg.kind} with requestId ${requestId} was null`,
                 );
               }
 
@@ -235,17 +235,17 @@ export class Client {
                   msg.kind
                 } with requestId ${requestId}: ${
                   error instanceof Error ? error.message : String(error)
-                }`
+                }`,
               );
             }
           } else {
             this.logger.debug(
-              `No handler found for message kind ${msg.kind} with requestId ${requestId}`
+              `No handler found for message kind ${msg.kind} with requestId ${requestId}`,
             );
           }
         } else {
           this.logger.debug(
-            `Received message of kind ${msg.kind} without a request ID`
+            `Received message of kind ${msg.kind} without a request ID`,
           );
         }
       }
@@ -256,7 +256,7 @@ export class Client {
         error.message.includes("session is closed")
       ) {
         this.logger.debug(
-          "Control message listener stopped: connection closed"
+          "Control message listener stopped: connection closed",
         );
       } else {
         this.logger.error("Error while listening for control messages:", error);
@@ -310,7 +310,7 @@ export class Client {
     };
 
     this.logger.info(
-      `Subscribing to track: ${subscribeParams.track_namespace}/${subscribeParams.track_name}`
+      `Subscribing to track: ${subscribeParams.track_namespace}/${subscribeParams.track_name}`,
     );
 
     // Send the subscribe message
@@ -336,7 +336,7 @@ export class Client {
   registerObjectCallback(trackAlias: bigint, callback: ObjectCallback): void {
     if (!this.#tracksManager) {
       throw new Error(
-        "Cannot register object callback: Tracks manager not initialized"
+        "Cannot register object callback: Tracks manager not initialized",
       );
     }
 
@@ -352,7 +352,7 @@ export class Client {
   unregisterObjectCallback(trackAlias: bigint, callback: ObjectCallback): void {
     if (!this.#tracksManager) {
       throw new Error(
-        "Cannot unregister object callback: Tracks manager not initialized"
+        "Cannot unregister object callback: Tracks manager not initialized",
       );
     }
 
@@ -370,7 +370,7 @@ export class Client {
   async subscribeTrack(
     namespace: string,
     trackName: string,
-    callback: ObjectCallback
+    callback: ObjectCallback,
   ): Promise<bigint> {
     if (!this.#tracksManager) {
       throw new Error("Cannot subscribe: Tracks manager not initialized");
@@ -391,7 +391,7 @@ export class Client {
     }
 
     this.logger.info(
-      `Client unsubscribing from track with alias ${trackAlias}`
+      `Client unsubscribing from track with alias ${trackAlias}`,
     );
     await this.#tracksManager.unsubscribeTrack(trackAlias);
   }
@@ -402,7 +402,7 @@ export class Client {
    * @returns A function to unregister the callback
    */
   registerAnnounceCallback(
-    callback: (namespace: string[]) => void
+    callback: (namespace: string[]) => void,
   ): () => void {
     this.logger.info("Registering announce callback");
     this.#announceCallbacks.add(callback);

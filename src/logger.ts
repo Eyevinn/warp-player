@@ -118,7 +118,7 @@ export class Logger implements ILogger {
               args,
               timestamp: performance.now(),
             },
-          })
+          }),
         );
       } catch (e) {
         console.error(`Error dispatching log event: ${e}`);
