@@ -64,7 +64,7 @@ module.exports = (env, argv) => {
       },
       compress: true,
       port: 8080,
-      https: true, // WebTransport requires HTTPS
+      server: "http", // Changed from https to http
       client: {
         overlay: true,
       },

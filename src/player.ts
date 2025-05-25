@@ -10,6 +10,7 @@ export class Player {
   private client: Client | null = null;
   private connection: any = null;
   private serverUrl: string;
+  private fingerprintUrl?: string;
   private catalogManager: WarpCatalogManager;
   private unregisterCatalogCallback: (() => void) | null = null;
   private unregisterAnnounceCallback: (() => void) | null = null;
@@ -62,6 +63,7 @@ export class Player {
    * @param tracksContainerEl The HTML element to display tracks in
    * @param statusEl The HTML element to display connection status
    * @param uiLogger Optional function to log messages to the UI
+   * @param fingerprintUrl Optional URL to fetch certificate fingerprint for self-signed certificates
    */
   constructor(
     serverUrl: string,
@@ -71,8 +73,10 @@ export class Player {
       message: string,
       type?: "info" | "success" | "error" | "warn",
     ) => void,
+    fingerprintUrl?: string,
   ) {
     this.serverUrl = serverUrl;
+    this.fingerprintUrl = fingerprintUrl;
     this.tracksContainerEl = tracksContainerEl;
     this.statusEl = statusEl;
 
@@ -147,6 +151,7 @@ export class Player {
       // Create and connect the client
       this.client = new Client({
         url: this.serverUrl,
+        fingerprint: this.fingerprintUrl,
       });
 
       this.connection = await this.client.connect();
