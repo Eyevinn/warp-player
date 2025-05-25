@@ -33,9 +33,23 @@ npm run lint:fix
 # Check code styling
 npm run pretty
 
+# Fix code formatting issues
+npx prettier --write <files>
+# or for all files:
+npx prettier --write --ignore-unknown .
+
 # Type checking
 npm run typecheck
 ```
+
+### Git Hooks
+
+The project has pre-push hooks that automatically run before pushing:
+- TypeScript type checking
+- ESLint
+- Jest tests
+
+These ensure code quality before changes are pushed to the repository.
 
 ## Project Overview
 
@@ -63,15 +77,28 @@ warp-player/
 │   ├── player.ts         # Core player implementation with MSE integration
 │   ├── browser.ts        # Browser entry point and UI handling
 │   └── index.html        # HTML template and UI components
-├── references/           # MoQ and WARP specification references
+├── FINGERPRINT.md        # Documentation for fingerprint feature
 ├── tsconfig.json         # TypeScript configuration
 ├── tsconfig.base.json    # Base TypeScript configuration
 ├── webpack.config.js     # Webpack configuration
 ├── jest.config.js        # Jest test configuration
-└── package.json          # Project dependencies and scripts
+├── package.json          # Project dependencies and scripts
+└── .github/              # GitHub Actions workflows
+    └── workflows/
+        ├── ci.yml              # Main CI workflow (lint, test, build)
+        ├── commitlint.yml      # Commit message linting
+        └── dependency-review.yml # Security checks for dependencies
 ```
 
 ### Core Architecture
+
+The transport used is MoQ Transport, currently
+[draft-11](https://www.ietf.org/archive/id/draft-ietf-moq-transport-11.txt)
+
+For the WARP catalog, the specification is 
+[draft-0](https://www.ietf.org/archive/id/draft-ietf-moq-warp-00.txt)
+but with some modifications added later like updates to Catalog.
+CMAF is used as packaging instead of LOC.
 
 The codebase is organized into several key modules:
 
@@ -133,3 +160,41 @@ The codebase is organized into several key modules:
    - Prettier for code formatting
    - ESLint for code linting
    - TypeScript strict type checking
+
+## Recent Features
+
+### Fingerprint Support for Self-Signed Certificates
+
+The player now supports connecting to servers with self-signed certificates by providing a fingerprint URL:
+
+- The `Player` constructor accepts an optional `fingerprintUrl` parameter
+- The fingerprint is fetched from the URL and used for WebTransport connection
+- This feature is useful for development environments
+- See `FINGERPRINT.md` for detailed documentation
+
+Note: The fingerprint feature was added to the Player class but the UI has been simplified to only show the server URL field.
+
+## CI/CD
+
+The project uses GitHub Actions for continuous integration:
+
+1. **CI Workflow** (`ci.yml`):
+   - Runs on push to main and pull requests
+   - Tests on Node.js 20.x and 22.x
+   - Runs ESLint, Prettier checks, TypeScript type checking
+   - Builds the project and uploads artifacts
+   - Uploads test coverage to Codecov
+
+2. **Commit Linting** (`commitlint.yml`):
+   - Validates commit messages follow conventional commit format
+   - Runs on pull requests
+
+3. **Dependency Review** (`dependency-review.yml`):
+   - Security checks for dependencies
+   - Runs on pull requests
+
+# Extra instructions
+
+* Use git add -u instead of git add -A to avoid accidentally adding extra files
+* Don't mention Claude in commit messages
+* When fixing linting issues in PRs, use `npx prettier --write` for formatting fixes
