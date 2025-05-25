@@ -53,7 +53,7 @@ async function loadConfig(): Promise<void> {
     } else {
       logger.info("Using default configuration (config.json not found)");
     }
-  } catch (error) {
+  } catch {
     logger.info("Using default configuration (error loading config.json)");
   }
 }
@@ -484,7 +484,7 @@ function displayLogEntry(
             "." +
             date.getMilliseconds().toString().padStart(3, "0")
           );
-        } catch (e) {
+        } catch {
           return "unknown";
         }
       })()

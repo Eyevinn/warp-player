@@ -2099,7 +2099,7 @@ export class Player {
                     constructorName = dataObj.constructor.name;
                   }
                 }
-              } catch (e) {
+              } catch {
                 // Ignore any errors when trying to access constructor
               }
               this.logger.error(
@@ -2658,7 +2658,7 @@ export class Player {
                 constructorName = dataObj.constructor.name;
               }
             }
-          } catch (e) {
+          } catch {
             // Ignore any errors when trying to access constructor
           }
           this.logger.info(
