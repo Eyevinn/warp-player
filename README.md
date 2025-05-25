@@ -78,6 +78,24 @@ warp-player/
 
 4. Enter the MoQ server URL (e.g., `https://localhost:4443/moq`) and click "Connect"
 
+### Connecting with Self-Signed Certificates
+
+When using self-signed certificates for development, you have two options:
+
+1. **Using certificate fingerprint (fingerprint branch)**:
+
+   - Enter the server URL: `https://localhost:4443/moq`
+   - Enter the fingerprint URL: `http://localhost:8081/fingerprint`
+   - The player will fetch the certificate fingerprint and use it to authenticate the connection
+   - **Important**: Certificates must be ECDSA, valid for ≤14 days, and self-signed
+   - See [FINGERPRINT.md](FINGERPRINT.md) for detailed requirements
+
+2. **Installing the certificate**:
+   - Use mkcert to install the certificate in your system trust store
+   - Or manually accept the certificate warning in your browser
+
+For the easiest setup, use [moqlivemock](https://github.com/Eyevinn/moqlivemock) with `-fingerprintport 8081` which automatically generates compatible certificates.
+
 ## Development
 
 The development server includes:
@@ -245,7 +263,8 @@ Without proper NTP synchronization on both client and server, latency measuremen
 ## Notes
 
 - WebTransport is only supported in some modern browsers, not in Node.js or Safari
-- For development, you may need to accept the self-signed certificate warning in your browser
+- For development with self-signed certificates on the fingerprint branch, see [FINGERPRINT.md](FINGERPRINT.md) for detailed instructions
+- Alternatively, you may need to accept the self-signed certificate warning in your browser
 - The UI includes controls for adjusting both minimal buffer and target latency
 
 ## Acknowledgments

@@ -9,6 +9,7 @@ import { Player } from "./player";
 
 // DOM Elements
 let serverUrlInput: HTMLInputElement;
+let fingerprintUrlInput: HTMLInputElement;
 let connectBtn: HTMLButtonElement;
 let disconnectBtn: HTMLButtonElement;
 let statusEl: HTMLDivElement;
@@ -64,6 +65,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadConfig();
   // Get DOM elements
   serverUrlInput = document.getElementById("serverUrl") as HTMLInputElement;
+  fingerprintUrlInput = document.getElementById(
+    "fingerprintUrl",
+  ) as HTMLInputElement;
   connectBtn = document.getElementById("connectBtn") as HTMLButtonElement;
   disconnectBtn = document.getElementById("disconnectBtn") as HTMLButtonElement;
   statusEl = document.getElementById("status") as HTMLDivElement;
@@ -113,6 +117,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     startBtn.disabled = true;
     stopBtn.disabled = true;
     serverUrlInput.disabled = true;
+    fingerprintUrlInput.disabled = true;
     minimalBufferInput.disabled = true;
     targetLatencyInput.disabled = true;
 
@@ -135,6 +140,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     tracksContainerEl,
     statusEl,
     legacyLogMessage,
+    fingerprintUrlInput.value || undefined,
   );
 
   // Set connection state callback to manage button states
@@ -542,6 +548,7 @@ async function connect() {
     tracksContainerEl,
     statusEl,
     legacyLogMessage,
+    fingerprintUrlInput.value || undefined,
   );
 
   // Set connection state callback to manage button states

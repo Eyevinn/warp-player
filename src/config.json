@@ -1,5 +1,5 @@
 {
-  "defaultServerUrl": "https://moqlivemock.demo.osaas.io/moq",
+  "defaultServerUrl": "https://localhost:4443/moq",
   "minimalBuffer": 200,
   "targetLatency": 300,
   "comment": "This configuration file can be modified after build to change default settings"

@@ -54,6 +54,17 @@ export class Client {
     const fingerprint = await this.#fingerprint;
     if (fingerprint) {
       options.serverCertificateHashes = [fingerprint];
+      const valueArray =
+        fingerprint.value instanceof Uint8Array
+          ? fingerprint.value
+          : new Uint8Array(fingerprint.value as ArrayBuffer);
+      this.logger.debug(
+        `Using certificate fingerprint: algorithm=${fingerprint.algorithm}, value=${Array.from(
+          valueArray,
+        )
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("")}`,
+      );
     }
 
     this.logger.info(`Connecting to ${this.config.url}...`);
@@ -121,18 +132,32 @@ export class Client {
     }
 
     this.logger.info(`Fetching server certificate fingerprint from ${url}`);
-    const response = await fetch(url);
-    const hexString = await response.text();
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch fingerprint: ${response.status} ${response.statusText}`,
+        );
+      }
+      const hexString = await response.text();
+      this.logger.debug(`Fetched fingerprint hex: ${hexString}`);
 
-    const hexBytes = new Uint8Array(hexString.length / 2);
-    for (let i = 0; i < hexBytes.length; i += 1) {
-      hexBytes[i] = parseInt(hexString.slice(2 * i, 2 * i + 2), 16);
+      // Remove any whitespace
+      const cleanHex = hexString.trim();
+
+      const hexBytes = new Uint8Array(cleanHex.length / 2);
+      for (let i = 0; i < hexBytes.length; i += 1) {
+        hexBytes[i] = parseInt(cleanHex.slice(2 * i, 2 * i + 2), 16);
+      }
+
+      return {
+        algorithm: "sha-256",
+        value: hexBytes,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to fetch fingerprint: ${error}`);
+      throw error;
     }
-
-    return {
-      algorithm: "sha-256",
-      value: hexBytes,
-    };
   }
 
   /**
