@@ -22,6 +22,7 @@ export class Client {
   // Track the next request ID to use (client IDs are even, starting at 0)
   #nextRequestId: bigint = 0n;
   // Store the trackAlias used for catalog subscription
+  // eslint-disable-next-line no-unused-private-class-members
   #catalogTrackAlias: bigint | null = null;
   // Reference to the tracks manager
   #tracksManager: TracksManager | null = null;

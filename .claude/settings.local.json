@@ -7,7 +7,8 @@
       "Bash(npm run typecheck:*)",
       "Bash(grep:*)",
       "Bash(npm test)",
-      "Bash(npm run pretty:*)"
+      "Bash(npm run pretty:*)",
+      "Bash(rg:*)"
     ],
     "deny": []
   }
