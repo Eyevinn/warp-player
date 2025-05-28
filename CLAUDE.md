@@ -93,11 +93,9 @@ warp-player/
 
 ### Core Architecture
 
-The transport used is MoQ Transport, currently
-[draft-11](https://www.ietf.org/archive/id/draft-ietf-moq-transport-11.txt)
+The transport used is MoQ Transport, currently draft-11.
 
-For the WARP catalog, the specification is
-[draft-0](https://www.ietf.org/archive/id/draft-ietf-moq-warp-00.txt)
+For the WARP catalog, the specification is draft-0
 but with some modifications added later like updates to Catalog.
 CMAF is used as packaging instead of LOC.
 
