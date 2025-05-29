@@ -57,6 +57,17 @@ export default typescriptEslint.config(
       "no-constant-condition": "off", // Allow constant conditions like while(true)
       "no-case-declarations": "off", // Allow lexical declarations in case blocks
       "no-unused-vars": "off", // Using TypeScript's no-unused-vars instead
+      "max-len": [
+        "error",
+        {
+          code: 120,
+          ignoreComments: true,
+          ignoreStrings: true,
+          ignoreTemplateLiterals: true,
+          ignoreUrls: true,
+          ignoreRegExpLiterals: true,
+        },
+      ],
 
       // Import rules
       "import/no-unresolved": "off", // Turning off as TypeScript handles this
