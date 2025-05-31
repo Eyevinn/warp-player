@@ -1,4 +1,4 @@
-module.exports = {
+export default {
   extends: ["@commitlint/config-conventional"],
   rules: {
     // Explicitly include some rules to avoid empty-rules error
