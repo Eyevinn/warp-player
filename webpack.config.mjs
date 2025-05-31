@@ -1,8 +1,11 @@
-const path = require("path");
-const HtmlWebpackPlugin = require("html-webpack-plugin");
-const CopyWebpackPlugin = require("copy-webpack-plugin");
+import path from "path";
+import { fileURLToPath } from "url";
+import HtmlWebpackPlugin from "html-webpack-plugin";
+import CopyWebpackPlugin from "copy-webpack-plugin";
 
-module.exports = (env, argv) => {
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export default (env, argv) => {
   const isProduction = argv.mode === "production";
 
   return {
