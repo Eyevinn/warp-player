@@ -22,4 +22,11 @@ export default {
     "header-max-length": [2, "always", 120],
     "body-max-line-length": [2, "always", 120],
   },
+  // Ignore Dependabot commit messages
+  ignores: [
+    (message) =>
+      message.includes("bump") &&
+      message.includes("from") &&
+      message.includes("to"),
+  ],
 };
