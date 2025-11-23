@@ -27,6 +27,7 @@ enum Id {
   AnnounceOk = 0x7,
   AnnounceError = 0x8,
   Unannounce = 0x9,
+  RequestsBlocked = 0x1a,
   ClientSetup = 0x20,
   ServerSetup = 0x21,
 }
