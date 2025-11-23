@@ -85,6 +85,12 @@ export class Client {
     this.logger.info("Sending client setup message");
     await setup.send.client({
       versions: [Setup.Version.DRAFT_11],
+      params: [
+        {
+          type: 0x02n, // MAX_REQUEST_ID parameter type (draft-11 Section 8.3.2.2)
+          value: 64n, // Allow server to send up to 64 concurrent request-type messages
+        },
+      ],
     });
 
     // Receive the server setup message
