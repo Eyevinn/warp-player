@@ -26,7 +26,8 @@ export type Publisher =
   | SubscribeError
   | SubscribeDone
   | Announce
-  | Unannounce;
+  | Unannounce
+  | RequestsBlocked;
 
 export function isPublisher(m: Message): m is Publisher {
   return (
@@ -34,7 +35,8 @@ export function isPublisher(m: Message): m is Publisher {
     m.kind === Msg.SubscribeError ||
     m.kind === Msg.SubscribeDone ||
     m.kind === Msg.Announce ||
-    m.kind === Msg.Unannounce
+    m.kind === Msg.Unannounce ||
+    m.kind === Msg.RequestsBlocked
   );
 }
 
@@ -49,6 +51,7 @@ export enum Msg {
   AnnounceOk = "announce_ok",
   AnnounceError = "announce_error",
   Unannounce = "unannounce",
+  RequestsBlocked = "requests_blocked",
 }
 
 enum Id {
@@ -62,6 +65,7 @@ enum Id {
   AnnounceOk = 0x7,
   AnnounceError = 0x8,
   Unannounce = 0x9,
+  RequestsBlocked = 0x1a,
 }
 
 export interface Subscribe {
@@ -166,6 +170,11 @@ export interface Unannounce {
   namespace: string[];
 }
 
+export interface RequestsBlocked {
+  kind: Msg.RequestsBlocked;
+  maximumRequestId: bigint;
+}
+
 export class CtrlStream {
   private decoder: Decoder;
   private encoder: Encoder;
@@ -261,6 +270,9 @@ export class Decoder {
       case Id.Unannounce:
         msgType = Msg.Unannounce;
         break;
+      case Id.RequestsBlocked:
+        msgType = Msg.RequestsBlocked;
+        break;
       default:
         const errorMsg = `Unknown message type: 0x${t.toString(16)}`;
         controlLogger.error(errorMsg);
@@ -305,6 +317,9 @@ export class Decoder {
         break;
       case Msg.Unannounce:
         result = await this.unannounce();
+        break;
+      case Msg.RequestsBlocked:
+        result = await this.requests_blocked();
         break;
       default:
         const errorMsg = `Unsupported message type: ${(t as any).kind}`;
@@ -588,6 +603,19 @@ export class Decoder {
     return {
       kind: Msg.Unannounce,
       namespace,
+    };
+  }
+
+  private async requests_blocked(): Promise<RequestsBlocked> {
+    controlLogger.debug("Parsing REQUESTS_BLOCKED message...");
+    const maximumRequestId = await this.r.u62();
+    controlLogger.warn(
+      `Server sent REQUESTS_BLOCKED: maximum request ID is ${maximumRequestId}`,
+    );
+
+    return {
+      kind: Msg.RequestsBlocked,
+      maximumRequestId,
     };
   }
 }
