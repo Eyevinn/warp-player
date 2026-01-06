@@ -2,31 +2,31 @@ import {
   Subscribe,
   SubscribeOk,
   SubscribeError,
-  SubscribeDone,
+  PublishDone,
   Unsubscribe,
-  Announce,
-  AnnounceOk,
-  AnnounceError,
-  Unannounce,
+  PublishNamespace,
+  PublishNamespaceOk,
+  PublishNamespaceError,
+  UnpublishNamespace,
   Location,
   FilterType,
 } from "./control";
 import { KeyValuePair } from "./stream";
 
 /**
- * Enum for message type IDs, matching the draft-11 specification
+ * Enum for message type IDs, matching the draft-14 specification
  */
 enum Id {
   Subscribe = 0x3,
   SubscribeOk = 0x4,
   SubscribeError = 0x5,
   SubscribeUpdate = 0x2,
-  SubscribeDone = 0xb,
+  PublishDone = 0xb, // draft-14: renamed from SubscribeDone
   Unsubscribe = 0xa,
-  Announce = 0x6,
-  AnnounceOk = 0x7,
-  AnnounceError = 0x8,
-  Unannounce = 0x9,
+  PublishNamespace = 0x6, // draft-14: renamed from Announce
+  PublishNamespaceOk = 0x7, // draft-14: renamed from AnnounceOk
+  PublishNamespaceError = 0x8, // draft-14: renamed from AnnounceError
+  UnpublishNamespace = 0x9, // draft-14: renamed from Unannounce
   RequestsBlocked = 0x1a,
   ClientSetup = 0x20,
   ServerSetup = 0x21,
@@ -34,7 +34,7 @@ enum Id {
 
 /**
  * BufferCtrlWriter class for writing control messages to a buffer
- * following the draft-11 specification.
+ * following the draft-14 specification.
  *
  * The typical pattern is to instantiate the class and call one of the
  * marshal methods to write a message to the buffer. The format is always:
@@ -332,8 +332,7 @@ export class BufferCtrlWriter {
       // Write the subscription ID
       this.writeVarInt62(msg.requestId);
 
-      // Write the track alias
-      this.writeVarInt62(msg.trackAlias);
+      // trackAlias removed in draft-14 - publisher assigns it in SUBSCRIBE_OK
 
       // Write the namespace
       this.writeTuple(msg.namespace);
@@ -435,12 +434,12 @@ export class BufferCtrlWriter {
   }
 
   /**
-   * Marshals a SubscribeDone message to the buffer
-   * @param msg The SubscribeDone message to marshal
+   * Marshals a PublishDone message to the buffer (draft-14: renamed from SubscribeDone)
+   * @param msg The PublishDone message to marshal
    * @returns The BufferCtrlWriter instance for chaining
    */
-  public marshalSubscribeDone(msg: SubscribeDone): BufferCtrlWriter {
-    this.marshalWithLength(Id.SubscribeDone, () => {
+  public marshalPublishDone(msg: PublishDone): BufferCtrlWriter {
+    this.marshalWithLength(Id.PublishDone, () => {
       // Write the request ID
       this.writeVarInt62(msg.requestId);
 
@@ -452,20 +451,18 @@ export class BufferCtrlWriter {
 
       // Write the stream count
       this.writeVarInt53(msg.streamCount);
-
-      // Note: reason is already written above, no need to write it twice
     });
 
     return this;
   }
 
   /**
-   * Marshals an Announce message to the buffer
-   * @param msg The Announce message to marshal
+   * Marshals a PublishNamespace message to the buffer (draft-14: renamed from Announce)
+   * @param msg The PublishNamespace message to marshal
    * @returns The BufferCtrlWriter instance for chaining
    */
-  public marshalAnnounce(msg: Announce): BufferCtrlWriter {
-    this.marshalWithLength(Id.Announce, () => {
+  public marshalPublishNamespace(msg: PublishNamespace): BufferCtrlWriter {
+    this.marshalWithLength(Id.PublishNamespace, () => {
       // Write the request ID
       this.writeVarInt62(msg.requestId);
 
@@ -480,12 +477,12 @@ export class BufferCtrlWriter {
   }
 
   /**
-   * Marshals an AnnounceOk message to the buffer
-   * @param msg The AnnounceOk message to marshal
+   * Marshals a PublishNamespaceOk message to the buffer (draft-14: renamed from AnnounceOk)
+   * @param msg The PublishNamespaceOk message to marshal
    * @returns The BufferCtrlWriter instance for chaining
    */
-  public marshalAnnounceOk(msg: AnnounceOk): BufferCtrlWriter {
-    this.marshalWithLength(Id.AnnounceOk, () => {
+  public marshalPublishNamespaceOk(msg: PublishNamespaceOk): BufferCtrlWriter {
+    this.marshalWithLength(Id.PublishNamespaceOk, () => {
       // Write the request ID
       this.writeVarInt62(msg.requestId);
     });
@@ -507,12 +504,14 @@ export class BufferCtrlWriter {
   }
 
   /**
-   * Marshals an AnnounceError message to the buffer
-   * @param msg The AnnounceError message to marshal
+   * Marshals a PublishNamespaceError message to the buffer (draft-14: renamed from AnnounceError)
+   * @param msg The PublishNamespaceError message to marshal
    * @returns The BufferCtrlWriter instance for chaining
    */
-  public marshalAnnounceError(msg: AnnounceError): BufferCtrlWriter {
-    this.marshalWithLength(Id.AnnounceError, () => {
+  public marshalPublishNamespaceError(
+    msg: PublishNamespaceError,
+  ): BufferCtrlWriter {
+    this.marshalWithLength(Id.PublishNamespaceError, () => {
       // Write the request ID
       this.writeVarInt62(msg.requestId);
 
@@ -527,12 +526,12 @@ export class BufferCtrlWriter {
   }
 
   /**
-   * Marshals an Unannounce message to the buffer
-   * @param msg The Unannounce message to marshal
+   * Marshals an UnpublishNamespace message to the buffer (draft-14: renamed from Unannounce)
+   * @param msg The UnpublishNamespace message to marshal
    * @returns The BufferCtrlWriter instance for chaining
    */
-  public marshalUnannounce(msg: Unannounce): BufferCtrlWriter {
-    this.marshalWithLength(Id.Unannounce, () => {
+  public marshalUnpublishNamespace(msg: UnpublishNamespace): BufferCtrlWriter {
+    this.marshalWithLength(Id.UnpublishNamespace, () => {
       // Write the namespace
       this.writeTuple(msg.namespace);
     });

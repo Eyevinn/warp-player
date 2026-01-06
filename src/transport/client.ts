@@ -1,6 +1,13 @@
 import { ILogger, LoggerFactory } from "../logger";
 
-import { Msg, FilterType, Subscribe, CtrlStream, Message } from "./control";
+import {
+  Msg,
+  FilterType,
+  Subscribe,
+  SubscribeOk,
+  CtrlStream,
+  Message,
+} from "./control";
 import * as Setup from "./setup";
 import * as Stream from "./stream";
 import { TracksManager, ObjectCallback } from "./tracks";
@@ -45,8 +52,8 @@ export class Client {
     );
   }
 
-  // Store announce callbacks
-  #announceCallbacks: Set<(namespace: string[]) => void> = new Set();
+  // Store publish namespace callbacks (draft-14: renamed from announce callbacks)
+  #publishNamespaceCallbacks: Set<(namespace: string[]) => void> = new Set();
 
   async connect(): Promise<Connection> {
     // Create WebTransport options
@@ -84,11 +91,11 @@ export class Client {
     // Send the client setup message
     this.logger.info("Sending client setup message");
     await setup.send.client({
-      versions: [Setup.Version.DRAFT_11],
+      versions: [Setup.Version.DRAFT_14],
       params: [
         {
-          type: 0x02n, // MAX_REQUEST_ID parameter type (draft-11 Section 8.3.2.2)
-          value: 64n, // Allow server to send up to 64 concurrent request-type messages
+          type: 0x02n, // MAX_REQUEST_ID parameter type
+          value: 64n, // Allow server to send up to 64 request-type messages
         },
       ],
     });
@@ -98,7 +105,7 @@ export class Client {
     const server = await setup.recv.server();
     this.logger.info("Received server setup:", server);
 
-    if (server.version !== Setup.Version.DRAFT_11) {
+    if (server.version !== Setup.Version.DRAFT_14) {
       throw new Error(`Unsupported server version: ${server.version}`);
     }
 
@@ -220,20 +227,20 @@ export class Client {
       while (true) {
         const msg = await control.recv();
 
-        if (msg.kind === Msg.Announce) {
+        if (msg.kind === Msg.PublishNamespace) {
           this.logger.info(
-            `Received announce message with namespace: ${msg.namespace.join(
+            `Received publish namespace message with namespace: ${msg.namespace.join(
               "/",
             )}`,
           );
 
-          // Notify all registered announce callbacks
-          this.#announceCallbacks.forEach((callback) => {
+          // Notify all registered publish namespace callbacks
+          this.#publishNamespaceCallbacks.forEach((callback) => {
             try {
               callback(msg.namespace);
             } catch (error) {
               this.logger.error(
-                `Error in announce callback: ${
+                `Error in publish namespace callback: ${
                   error instanceof Error ? error.message : String(error)
                 }`,
               );
@@ -322,17 +329,13 @@ export class Client {
     // Create a subscribe message
     const requestId = connection.getNextRequestId();
 
-    // In the MoQ Transport protocol, the client assigns the track alias
-    // We'll use the requestId as the track alias for simplicity
-    const trackAlias = requestId;
-
+    // draft-14: trackAlias is assigned by server in SUBSCRIBE_OK
     const subscribeMsg: Subscribe = {
       kind: Msg.Subscribe,
       requestId,
-      trackAlias, // Client assigns the track alias
-      namespace: [subscribeParams.track_namespace], // Namespace is an array of strings
+      namespace: [subscribeParams.track_namespace],
       name: subscribeParams.track_name,
-      subscriber_priority: 0, // Default priority
+      subscriber_priority: 0,
       group_order: subscribeParams.group_order,
       forward: subscribeParams.forward,
       filterType: subscribeParams.filterType,
@@ -354,6 +357,10 @@ export class Client {
     if (response.kind !== Msg.SubscribeOk) {
       throw new Error(`Subscribe failed: ${JSON.stringify(response)}`);
     }
+
+    // draft-14: get trackAlias from SUBSCRIBE_OK response
+    const subscribeOk = response as SubscribeOk;
+    const trackAlias = subscribeOk.trackAlias;
 
     this.logger.info(`Subscribed to track with alias: ${trackAlias}`);
 
@@ -429,20 +436,21 @@ export class Client {
   }
 
   /**
-   * Register a callback to be notified when an announce message is received
-   * @param callback Function that will be called with the namespace when an announce message is received
+   * Register a callback to be notified when a publish namespace message is received
+   * (draft-14: renamed from announce)
+   * @param callback Function that will be called with the namespace when a publish namespace message is received
    * @returns A function to unregister the callback
    */
-  registerAnnounceCallback(
+  registerPublishNamespaceCallback(
     callback: (namespace: string[]) => void,
   ): () => void {
-    this.logger.info("Registering announce callback");
-    this.#announceCallbacks.add(callback);
+    this.logger.info("Registering publish namespace callback");
+    this.#publishNamespaceCallbacks.add(callback);
 
     // Return a function to unregister the callback
     return () => {
-      this.logger.info("Unregistering announce callback");
-      this.#announceCallbacks.delete(callback);
+      this.logger.info("Unregistering publish namespace callback");
+      this.#publishNamespaceCallbacks.delete(callback);
     };
   }
 
@@ -452,7 +460,7 @@ export class Client {
   close(): void {
     this.logger.info("Closing client connection");
     // Clear all callbacks
-    this.#announceCallbacks.clear();
+    this.#publishNamespaceCallbacks.clear();
 
     if (this.#tracksManager) {
       this.#tracksManager.close();

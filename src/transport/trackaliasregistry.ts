@@ -101,6 +101,46 @@ export class TrackAliasRegistry {
   }
 
   /**
+   * Register a track with a specific alias (draft-14: server assigns the alias)
+   * @param namespace The namespace of the track
+   * @param trackName The name of the track
+   * @param requestId The request ID used in the subscribe message
+   * @param trackAlias The track alias assigned by the server
+   */
+  public registerTrackWithAlias(
+    namespace: string,
+    trackName: string,
+    requestId: bigint,
+    trackAlias: bigint,
+  ): void {
+    const key = this.getNamespaceTrackKey(namespace, trackName);
+
+    // Check if the track is already registered
+    if (this.trackNameToInfo.has(key)) {
+      this.logger.warn(
+        `Track ${namespace}:${trackName} already registered, updating with new alias ${trackAlias}`,
+      );
+    }
+
+    // Create track info with server-assigned alias
+    const info: TrackInfo = {
+      namespace,
+      trackName,
+      trackAlias,
+      requestId,
+      callbacks: [],
+    };
+
+    // Store in both maps
+    this.trackNameToInfo.set(key, info);
+    this.trackAliasToInfo.set(trackAlias.toString(), info);
+
+    this.logger.info(
+      `Registered track ${namespace}:${trackName} with server-assigned alias ${trackAlias} and request ID ${requestId}`,
+    );
+  }
+
+  /**
    * Get track info from namespace+trackName
    */
   public getTrackInfoFromName(

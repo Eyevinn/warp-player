@@ -9,14 +9,18 @@ const controlLogger: ILogger = LoggerFactory.getInstance().getLogger("Control");
 export type Message = Subscriber | Publisher;
 
 // Sent by subscriber
-export type Subscriber = Subscribe | Unsubscribe | AnnounceOk | AnnounceError;
+export type Subscriber =
+  | Subscribe
+  | Unsubscribe
+  | PublishNamespaceOk
+  | PublishNamespaceError;
 
 export function isSubscriber(m: Message): m is Subscriber {
   return (
     m.kind === Msg.Subscribe ||
     m.kind === Msg.Unsubscribe ||
-    m.kind === Msg.AnnounceOk ||
-    m.kind === Msg.AnnounceError
+    m.kind === Msg.PublishNamespaceOk ||
+    m.kind === Msg.PublishNamespaceError
   );
 }
 
@@ -24,18 +28,18 @@ export function isSubscriber(m: Message): m is Subscriber {
 export type Publisher =
   | SubscribeOk
   | SubscribeError
-  | SubscribeDone
-  | Announce
-  | Unannounce
+  | PublishDone
+  | PublishNamespace
+  | UnpublishNamespace
   | RequestsBlocked;
 
 export function isPublisher(m: Message): m is Publisher {
   return (
     m.kind === Msg.SubscribeOk ||
     m.kind === Msg.SubscribeError ||
-    m.kind === Msg.SubscribeDone ||
-    m.kind === Msg.Announce ||
-    m.kind === Msg.Unannounce ||
+    m.kind === Msg.PublishDone ||
+    m.kind === Msg.PublishNamespace ||
+    m.kind === Msg.UnpublishNamespace ||
     m.kind === Msg.RequestsBlocked
   );
 }
@@ -45,12 +49,12 @@ export enum Msg {
   SubscribeOk = "subscribe_ok",
   SubscribeError = "subscribe_error",
   SubscribeUpdate = "subscribe_update",
-  SubscribeDone = "subscribe_done",
+  PublishDone = "publish_done", // draft-14: renamed from subscribe_done
   Unsubscribe = "unsubscribe",
-  Announce = "announce",
-  AnnounceOk = "announce_ok",
-  AnnounceError = "announce_error",
-  Unannounce = "unannounce",
+  PublishNamespace = "publish_namespace", // draft-14: renamed from announce
+  PublishNamespaceOk = "publish_namespace_ok", // draft-14: renamed from announce_ok
+  PublishNamespaceError = "publish_namespace_error", // draft-14: renamed from announce_error
+  UnpublishNamespace = "unpublish_namespace", // draft-14: renamed from unannounce
   RequestsBlocked = "requests_blocked",
 }
 
@@ -59,19 +63,19 @@ enum Id {
   SubscribeOk = 0x4,
   SubscribeError = 0x5,
   SubscribeUpdate = 0x2,
-  SubscribeDone = 0xb,
+  PublishDone = 0xb, // draft-14: renamed from SubscribeDone
   Unsubscribe = 0xa,
-  Announce = 0x6,
-  AnnounceOk = 0x7,
-  AnnounceError = 0x8,
-  Unannounce = 0x9,
+  PublishNamespace = 0x6, // draft-14: renamed from Announce
+  PublishNamespaceOk = 0x7, // draft-14: renamed from AnnounceOk
+  PublishNamespaceError = 0x8, // draft-14: renamed from AnnounceError
+  UnpublishNamespace = 0x9, // draft-14: renamed from Unannounce
   RequestsBlocked = 0x1a,
 }
 
 export interface Subscribe {
   kind: Msg.Subscribe;
   requestId: bigint;
-  trackAlias: bigint;
+  // trackAlias removed in draft-14 - publisher assigns it in SUBSCRIBE_OK
   namespace: string[];
   name: string;
   subscriber_priority: number;
@@ -107,6 +111,7 @@ export type Parameters = Map<bigint, Uint8Array | bigint>;
 export interface SubscribeOk {
   kind: Msg.SubscribeOk;
   requestId: bigint;
+  trackAlias: bigint; // Added in draft-14 - publisher assigns track alias
   expires: bigint;
   group_order: GroupOrder;
   content_exists: boolean;
@@ -137,36 +142,36 @@ export interface Unsubscribe {
   requestId: bigint;
 }
 
-export interface SubscribeDone {
-  kind: Msg.SubscribeDone;
+export interface PublishDone {
+  kind: Msg.PublishDone;
   requestId: bigint;
   code: bigint;
   streamCount: number;
   reason: string;
 }
 
-export interface Announce {
-  kind: Msg.Announce;
+export interface PublishNamespace {
+  kind: Msg.PublishNamespace;
   requestId: bigint;
   namespace: string[];
   params: KeyValuePair[];
 }
 
-export interface AnnounceOk {
-  kind: Msg.AnnounceOk;
+export interface PublishNamespaceOk {
+  kind: Msg.PublishNamespaceOk;
   requestId: bigint;
   namespace: string[];
 }
 
-export interface AnnounceError {
-  kind: Msg.AnnounceError;
+export interface PublishNamespaceError {
+  kind: Msg.PublishNamespaceError;
   requestId: bigint;
   code: bigint;
   reason: string;
 }
 
-export interface Unannounce {
-  kind: Msg.Unannounce;
+export interface UnpublishNamespace {
+  kind: Msg.UnpublishNamespace;
   namespace: string[];
 }
 
@@ -249,8 +254,8 @@ export class Decoder {
       case Id.SubscribeOk:
         msgType = Msg.SubscribeOk;
         break;
-      case Id.SubscribeDone:
-        msgType = Msg.SubscribeDone;
+      case Id.PublishDone:
+        msgType = Msg.PublishDone;
         break;
       case Id.SubscribeError:
         msgType = Msg.SubscribeError;
@@ -258,17 +263,17 @@ export class Decoder {
       case Id.Unsubscribe:
         msgType = Msg.Unsubscribe;
         break;
-      case Id.Announce:
-        msgType = Msg.Announce;
+      case Id.PublishNamespace:
+        msgType = Msg.PublishNamespace;
         break;
-      case Id.AnnounceOk:
-        msgType = Msg.AnnounceOk;
+      case Id.PublishNamespaceOk:
+        msgType = Msg.PublishNamespaceOk;
         break;
-      case Id.AnnounceError:
-        msgType = Msg.AnnounceError;
+      case Id.PublishNamespaceError:
+        msgType = Msg.PublishNamespaceError;
         break;
-      case Id.Unannounce:
-        msgType = Msg.Unannounce;
+      case Id.UnpublishNamespace:
+        msgType = Msg.UnpublishNamespace;
         break;
       case Id.RequestsBlocked:
         msgType = Msg.RequestsBlocked;
@@ -300,23 +305,23 @@ export class Decoder {
       case Msg.SubscribeError:
         result = await this.subscribe_error();
         break;
-      case Msg.SubscribeDone:
-        result = await this.subscribe_done();
+      case Msg.PublishDone:
+        result = await this.publish_done();
         break;
       case Msg.Unsubscribe:
         result = await this.unsubscribe();
         break;
-      case Msg.Announce:
-        result = await this.announce();
+      case Msg.PublishNamespace:
+        result = await this.publish_namespace();
         break;
-      case Msg.AnnounceOk:
-        result = await this.announce_ok();
+      case Msg.PublishNamespaceOk:
+        result = await this.publish_namespace_ok();
         break;
-      case Msg.AnnounceError:
-        result = await this.announce_error();
+      case Msg.PublishNamespaceError:
+        result = await this.publish_namespace_error();
         break;
-      case Msg.Unannounce:
-        result = await this.unannounce();
+      case Msg.UnpublishNamespace:
+        result = await this.unpublish_namespace();
         break;
       case Msg.RequestsBlocked:
         result = await this.requests_blocked();
@@ -336,8 +341,7 @@ export class Decoder {
     const requestId = await this.r.u62();
     controlLogger.debug(`RequestID: ${requestId}`);
 
-    const trackAlias = await this.r.u62();
-    controlLogger.debug(`TrackAlias: ${trackAlias}`);
+    // draft-14: trackAlias removed from SUBSCRIBE (assigned by publisher in SUBSCRIBE_OK)
 
     const namespace = await this.r.tuple();
     controlLogger.debug(`Namespace: ${namespace.join("/")}`);
@@ -378,7 +382,6 @@ export class Decoder {
     return {
       kind: Msg.Subscribe,
       requestId,
-      trackAlias,
       namespace,
       name,
       subscriber_priority,
@@ -454,6 +457,10 @@ export class Decoder {
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
 
+    // draft-14: trackAlias is now in SUBSCRIBE_OK (assigned by publisher)
+    const trackAlias = await this.r.u62();
+    controlLogger.debug(`Track Alias: ${trackAlias}`);
+
     const expires = await this.r.u62();
     controlLogger.debug(`Expires: ${expires}`);
 
@@ -476,6 +483,7 @@ export class Decoder {
     return {
       kind: Msg.SubscribeOk,
       requestId,
+      trackAlias,
       expires,
       group_order,
       content_exists,
@@ -507,10 +515,10 @@ export class Decoder {
     };
   }
 
-  private async subscribe_done(): Promise<SubscribeDone> {
-    controlLogger.debug("Parsing SubscribeDone message...");
+  private async publish_done(): Promise<PublishDone> {
+    controlLogger.debug("Parsing PublishDone message...");
     const requestId = await this.r.u62();
-    controlLogger.debug(`Subscribe ID: ${requestId}`);
+    controlLogger.debug(`Request ID: ${requestId}`);
 
     const code = await this.r.u62();
     controlLogger.debug(`Code: ${code}`);
@@ -523,7 +531,7 @@ export class Decoder {
     controlLogger.debug(`Stream count: ${streamCount}`);
 
     return {
-      kind: Msg.SubscribeDone,
+      kind: Msg.PublishDone,
       requestId,
       code,
       streamCount,
@@ -542,8 +550,8 @@ export class Decoder {
     };
   }
 
-  private async announce(): Promise<Announce> {
-    controlLogger.debug("Parsing Announce message...");
+  private async publish_namespace(): Promise<PublishNamespace> {
+    controlLogger.debug("Parsing PublishNamespace message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
 
@@ -554,15 +562,15 @@ export class Decoder {
     controlLogger.debug(`Parameters: ${params.length}`);
 
     return {
-      kind: Msg.Announce,
+      kind: Msg.PublishNamespace,
       requestId,
       namespace,
       params,
     };
   }
 
-  private async announce_ok(): Promise<AnnounceOk> {
-    controlLogger.debug("Parsing AnnounceOk message...");
+  private async publish_namespace_ok(): Promise<PublishNamespaceOk> {
+    controlLogger.debug("Parsing PublishNamespaceOk message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
 
@@ -570,14 +578,14 @@ export class Decoder {
     controlLogger.debug(`Namespace: ${namespace.join("/")}`);
 
     return {
-      kind: Msg.AnnounceOk,
+      kind: Msg.PublishNamespaceOk,
       requestId,
       namespace,
     };
   }
 
-  private async announce_error(): Promise<AnnounceError> {
-    controlLogger.debug("Parsing AnnounceError message...");
+  private async publish_namespace_error(): Promise<PublishNamespaceError> {
+    controlLogger.debug("Parsing PublishNamespaceError message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
 
@@ -588,20 +596,20 @@ export class Decoder {
     controlLogger.debug(`Error reason: ${reason}`);
 
     return {
-      kind: Msg.AnnounceError,
+      kind: Msg.PublishNamespaceError,
       requestId,
       code,
       reason,
     };
   }
 
-  private async unannounce(): Promise<Unannounce> {
-    controlLogger.debug("Parsing Unannounce message...");
+  private async unpublish_namespace(): Promise<UnpublishNamespace> {
+    controlLogger.debug("Parsing UnpublishNamespace message...");
     const namespace = await this.r.tuple();
     controlLogger.debug(`Namespace: ${namespace.join("/")}`);
 
     return {
-      kind: Msg.Unannounce,
+      kind: Msg.UnpublishNamespace,
       namespace,
     };
   }
@@ -644,23 +652,23 @@ export class Encoder {
       case Msg.SubscribeError:
         writer.marshalSubscribeError(msg as SubscribeError);
         break;
-      case Msg.SubscribeDone:
-        writer.marshalSubscribeDone(msg as SubscribeDone);
+      case Msg.PublishDone:
+        writer.marshalPublishDone(msg as PublishDone);
         break;
       case Msg.Unsubscribe:
         writer.marshalUnsubscribe(msg as Unsubscribe);
         break;
-      case Msg.Announce:
-        writer.marshalAnnounce(msg as Announce);
+      case Msg.PublishNamespace:
+        writer.marshalPublishNamespace(msg as PublishNamespace);
         break;
-      case Msg.AnnounceOk:
-        writer.marshalAnnounceOk(msg as AnnounceOk);
+      case Msg.PublishNamespaceOk:
+        writer.marshalPublishNamespaceOk(msg as PublishNamespaceOk);
         break;
-      case Msg.AnnounceError:
-        writer.marshalAnnounceError(msg as AnnounceError);
+      case Msg.PublishNamespaceError:
+        writer.marshalPublishNamespaceError(msg as PublishNamespaceError);
         break;
-      case Msg.Unannounce:
-        writer.marshalUnannounce(msg as Unannounce);
+      case Msg.UnpublishNamespace:
+        writer.marshalUnpublishNamespace(msg as UnpublishNamespace);
         break;
       default:
         const errorMsg = `Unsupported message type for encoding: ${
