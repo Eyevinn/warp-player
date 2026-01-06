@@ -3,15 +3,15 @@ import {
   Msg,
   Subscribe,
   SubscribeOk,
-  Announce,
-  AnnounceOk,
+  PublishNamespace,
+  PublishNamespaceOk,
   GroupOrder,
   FilterType,
   SubscribeError,
-  SubscribeDone,
+  PublishDone,
   Unsubscribe,
-  AnnounceError,
-  Unannounce,
+  PublishNamespaceError,
+  UnpublishNamespace,
 } from "./control";
 import { Version } from "./setup";
 import { KeyValuePair } from "./stream";
@@ -34,7 +34,7 @@ describe("BufferCtrlWriter", () => {
       const msg: Subscribe = {
         kind: Msg.Subscribe,
         requestId: 42n,
-        trackAlias: 1n,
+        // trackAlias removed in draft-14
         namespace: ["example", "namespace"],
         name: "test-track",
         subscriber_priority: 10,
@@ -61,11 +61,10 @@ describe("BufferCtrlWriter", () => {
       // Verify the requestId (42) is encoded correctly
       expect(bytes[3]).toBe(42); // Simple varint for 42
 
-      // Verify the trackAlias (1) is encoded correctly
-      expect(bytes[4]).toBe(1); // Simple varint for 1
+      // draft-14: no trackAlias in SUBSCRIBE
 
       // Verify the namespace count (2)
-      expect(bytes[5]).toBe(2);
+      expect(bytes[4]).toBe(2);
 
       // Verify location mode (0 for latest_group)
       const locationIndex = bytes.length - 2; // Location is near the end, before the 0 params
@@ -81,6 +80,7 @@ describe("BufferCtrlWriter", () => {
       const msg: SubscribeOk = {
         kind: Msg.SubscribeOk,
         requestId: 42n,
+        trackAlias: 1n, // Added in draft-14
         expires: 3600n, // 1 hour expiry
         group_order: GroupOrder.Publisher,
         content_exists: true,
@@ -114,19 +114,19 @@ describe("BufferCtrlWriter", () => {
     });
   });
 
-  describe("Announce message", () => {
-    it("should correctly marshal an Announce message", () => {
-      const msg: Announce = {
-        kind: Msg.Announce,
+  describe("PublishNamespace message", () => {
+    it("should correctly marshal a PublishNamespace message", () => {
+      const msg: PublishNamespace = {
+        kind: Msg.PublishNamespace,
         requestId: 100n,
         namespace: ["video", "stream"],
         params: [],
       };
 
-      writer.marshalAnnounce(msg);
+      writer.marshalPublishNamespace(msg);
       const bytes = writer.getBytes();
 
-      // Verify the message type (0x06 for Announce)
+      // Verify the message type (0x06 for PublishNamespace)
       expect(bytes[0]).toBe(0x06);
 
       // Verify the length field (16-bit, big-endian)
@@ -134,7 +134,7 @@ describe("BufferCtrlWriter", () => {
       expect(length).toBe(bytes.length - 3); // Total length minus type and length fields
 
       // Log the full byte array for debugging
-      console.log("Announce message bytes:", bytesToHex(bytes));
+      console.log("PublishNamespace message bytes:", bytesToHex(bytes));
 
       // Verify the requestId (100) is encoded correctly
       // For larger values, the varint encoding might use a different format (0x40 = 64 is the first byte)
@@ -148,18 +148,18 @@ describe("BufferCtrlWriter", () => {
     });
   });
 
-  describe("AnnounceOk message", () => {
-    it("should correctly marshal an AnnounceOk message", () => {
-      const msg: AnnounceOk = {
-        kind: Msg.AnnounceOk,
+  describe("PublishNamespaceOk message", () => {
+    it("should correctly marshal a PublishNamespaceOk message", () => {
+      const msg: PublishNamespaceOk = {
+        kind: Msg.PublishNamespaceOk,
         requestId: 100n,
         namespace: ["video", "stream"],
       };
 
-      writer.marshalAnnounceOk(msg);
+      writer.marshalPublishNamespaceOk(msg);
       const bytes = writer.getBytes();
 
-      // Verify the message type (0x07 for AnnounceOk)
+      // Verify the message type (0x07 for PublishNamespaceOk)
       expect(bytes[0]).toBe(0x07);
 
       // Verify the length field (16-bit, big-endian)
@@ -167,7 +167,7 @@ describe("BufferCtrlWriter", () => {
       expect(length).toBe(bytes.length - 3); // Total length minus type and length fields
 
       // Log the full byte array for debugging
-      console.log("AnnounceOk message bytes:", bytesToHex(bytes));
+      console.log("PublishNamespaceOk message bytes:", bytesToHex(bytes));
 
       // Verify the requestId (100) is encoded correctly
       // For larger values, the varint encoding might use a different format (0x40 = 64 is the first byte)
@@ -177,27 +177,30 @@ describe("BufferCtrlWriter", () => {
       expect(bytes[4]).toBe(100);
     });
 
-    it("should only include method, length, and requestId according to draft-11 spec", () => {
-      // Create a simple AnnounceOk with just the required fields
-      const msg: AnnounceOk = {
-        kind: Msg.AnnounceOk,
+    it("should only include method, length, and requestId according to draft-14 spec", () => {
+      // Create a simple PublishNamespaceOk with just the required fields
+      const msg: PublishNamespaceOk = {
+        kind: Msg.PublishNamespaceOk,
         requestId: 42n,
         namespace: [], // Empty namespace, should not be included per spec
       };
 
-      writer.marshalAnnounceOk(msg);
+      writer.marshalPublishNamespaceOk(msg);
       const bytes = writer.getBytes();
 
-      // Verify the message type (0x07 for AnnounceOk)
+      // Verify the message type (0x07 for PublishNamespaceOk)
       expect(bytes[0]).toBe(0x07);
 
       // Verify the length field
       const length = (bytes[1] << 8) | bytes[2];
 
       // Log the full byte array for debugging
-      console.log("Draft-11 compliant AnnounceOk bytes:", bytesToHex(bytes));
+      console.log(
+        "Draft-14 compliant PublishNamespaceOk bytes:",
+        bytesToHex(bytes),
+      );
 
-      // According to draft-11, AnnounceOk should only have:
+      // According to draft-14, PublishNamespaceOk should only have:
       // - Type (1 byte)
       // - Length (2 bytes)
       // - RequestId (variable length, but for 42 it's 1 byte)
@@ -246,20 +249,20 @@ describe("BufferCtrlWriter", () => {
     });
   });
 
-  describe("SubscribeDone message", () => {
-    it("should correctly marshal a SubscribeDone message", () => {
-      const msg: SubscribeDone = {
-        kind: Msg.SubscribeDone,
+  describe("PublishDone message", () => {
+    it("should correctly marshal a PublishDone message", () => {
+      const msg: PublishDone = {
+        kind: Msg.PublishDone,
         requestId: 42n,
         code: 0n,
         reason: "Completed normally",
         streamCount: 10,
       };
 
-      writer.marshalSubscribeDone(msg);
+      writer.marshalPublishDone(msg);
       const bytes = writer.getBytes();
 
-      // Verify the message type (0x0B for SubscribeDone)
+      // Verify the message type (0x0B for PublishDone)
       expect(bytes[0]).toBe(0x0b);
 
       // Verify the length field (16-bit, big-endian)
@@ -267,7 +270,7 @@ describe("BufferCtrlWriter", () => {
       expect(length).toBe(bytes.length - 3); // Total length minus type and length fields
 
       // Log the full byte array for debugging
-      console.log("SubscribeDone message bytes:", bytesToHex(bytes));
+      console.log("PublishDone message bytes:", bytesToHex(bytes));
 
       // Verify the requestId (42) is encoded correctly
       expect(bytes[3]).toBe(42); // Simple varint for 42
@@ -278,22 +281,19 @@ describe("BufferCtrlWriter", () => {
       expect(bytes.length).toBeGreaterThan(15); // Should include type, length, requestId, code, reason, and final values
     });
 
-    it("should handle SubscribeDone without final values", () => {
-      const msg: SubscribeDone = {
-        kind: Msg.SubscribeDone,
+    it("should handle PublishDone without final values", () => {
+      const msg: PublishDone = {
+        kind: Msg.PublishDone,
         requestId: 42n,
         code: 0n,
         reason: "Completed normally",
         streamCount: 0,
       };
 
-      writer.marshalSubscribeDone(msg);
+      writer.marshalPublishDone(msg);
       const bytes = writer.getBytes();
 
-      console.log(
-        "SubscribeDone without final values bytes:",
-        bytesToHex(bytes),
-      );
+      console.log("PublishDone without final values bytes:", bytesToHex(bytes));
 
       // Verify the message type and basic structure
       expect(bytes[0]).toBe(0x0b);
@@ -329,19 +329,19 @@ describe("BufferCtrlWriter", () => {
     });
   });
 
-  describe("AnnounceError message", () => {
-    it("should correctly marshal an AnnounceError message", () => {
-      const msg: AnnounceError = {
-        kind: Msg.AnnounceError,
+  describe("PublishNamespaceError message", () => {
+    it("should correctly marshal a PublishNamespaceError message", () => {
+      const msg: PublishNamespaceError = {
+        kind: Msg.PublishNamespaceError,
         requestId: 42n,
         code: 403n,
         reason: "Not authorized",
       };
 
-      writer.marshalAnnounceError(msg);
+      writer.marshalPublishNamespaceError(msg);
       const bytes = writer.getBytes();
 
-      // Verify the message type (0x08 for AnnounceError)
+      // Verify the message type (0x08 for PublishNamespaceError)
       expect(bytes[0]).toBe(0x08);
 
       // Verify the length field (16-bit, big-endian)
@@ -349,7 +349,7 @@ describe("BufferCtrlWriter", () => {
       expect(length).toBe(bytes.length - 3); // Total length minus type and length fields
 
       // Log the full byte array for debugging
-      console.log("AnnounceError message bytes:", bytesToHex(bytes));
+      console.log("PublishNamespaceError message bytes:", bytesToHex(bytes));
 
       // Check that the message contains the namespace, code, and reason
       // The exact byte positions depend on the varint encoding, but we can verify
@@ -358,17 +358,17 @@ describe("BufferCtrlWriter", () => {
     });
   });
 
-  describe("Unannounce message", () => {
-    it("should correctly marshal an Unannounce message", () => {
-      const msg: Unannounce = {
-        kind: Msg.Unannounce,
+  describe("UnpublishNamespace message", () => {
+    it("should correctly marshal an UnpublishNamespace message", () => {
+      const msg: UnpublishNamespace = {
+        kind: Msg.UnpublishNamespace,
         namespace: ["video", "stream"],
       };
 
-      writer.marshalUnannounce(msg);
+      writer.marshalUnpublishNamespace(msg);
       const bytes = writer.getBytes();
 
-      // Verify the message type (0x09 for Unannounce)
+      // Verify the message type (0x09 for UnpublishNamespace)
       expect(bytes[0]).toBe(0x09);
 
       // Verify the length field (16-bit, big-endian)
@@ -376,7 +376,7 @@ describe("BufferCtrlWriter", () => {
       expect(length).toBe(bytes.length - 3); // Total length minus type and length fields
 
       // Log the full byte array for debugging
-      console.log("Unannounce message bytes:", bytesToHex(bytes));
+      console.log("UnpublishNamespace message bytes:", bytesToHex(bytes));
 
       // Check that the message contains the namespace
       // The exact byte positions depend on the varint encoding, but we can verify
@@ -388,7 +388,7 @@ describe("BufferCtrlWriter", () => {
   describe("ClientSetup message", () => {
     it("should correctly marshal a ClientSetup message", () => {
       const msg = {
-        versions: [Version.DRAFT_11],
+        versions: [Version.DRAFT_14],
         params: [] as KeyValuePair[],
       };
 
@@ -408,7 +408,7 @@ describe("BufferCtrlWriter", () => {
       // Verify the version count (1)
       expect(bytes[3]).toBe(1);
 
-      // Verify the version (DRAFT_11 = 0xff00000b)
+      // Verify the version (DRAFT_14 = 0xff00000e)
       // This will be encoded as a varint, so we need to check the bytes carefully
       // For this large value, it will use multiple bytes
       // Check that the message contains the version
@@ -426,7 +426,7 @@ describe("BufferCtrlWriter", () => {
       };
 
       const msg = {
-        versions: [Version.DRAFT_11],
+        versions: [Version.DRAFT_14],
         params: [testParam],
       };
 
@@ -452,7 +452,7 @@ describe("BufferCtrlWriter", () => {
   describe("ServerSetup message", () => {
     it("should correctly marshal a ServerSetup message", () => {
       const msg = {
-        version: Version.DRAFT_11,
+        version: Version.DRAFT_14,
         params: [] as KeyValuePair[],
       };
 
@@ -469,7 +469,7 @@ describe("BufferCtrlWriter", () => {
       // Log the full byte array for debugging
       console.log("ServerSetup message bytes:", bytesToHex(bytes));
 
-      // Verify the version (DRAFT_11 = 0xff00000b)
+      // Verify the version (DRAFT_14 = 0xff00000e)
       // This will be encoded as a varint, so we need to check the bytes carefully
       // Check that the message contains the version
       expect(bytes.length).toBeGreaterThan(7); // Should include type, length, version, and params count
@@ -486,7 +486,7 @@ describe("BufferCtrlWriter", () => {
       };
 
       const msg = {
-        version: Version.DRAFT_11,
+        version: Version.DRAFT_14,
         params: [testParam],
       };
 
@@ -516,7 +516,6 @@ describe("BufferCtrlWriter", () => {
       const msg: Subscribe = {
         kind: Msg.Subscribe,
         requestId: 42n,
-        trackAlias: 1n,
         namespace: [
           "example",
           "namespace",
@@ -547,13 +546,13 @@ describe("BufferCtrlWriter", () => {
     });
 
     it("should reset the buffer correctly", () => {
-      const msg1: AnnounceOk = {
-        kind: Msg.AnnounceOk,
+      const msg1: PublishNamespaceOk = {
+        kind: Msg.PublishNamespaceOk,
         requestId: 100n,
         namespace: ["video", "stream"],
       };
 
-      writer.marshalAnnounceOk(msg1);
+      writer.marshalPublishNamespaceOk(msg1);
       const bytes1 = writer.getBytes();
       expect(bytes1.length).toBeGreaterThan(0);
 
@@ -563,7 +562,6 @@ describe("BufferCtrlWriter", () => {
       const msg2: Subscribe = {
         kind: Msg.Subscribe,
         requestId: 42n,
-        trackAlias: 1n,
         namespace: ["example"],
         name: "test",
         subscriber_priority: 0,

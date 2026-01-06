@@ -6,6 +6,7 @@ import {
   CtrlStream,
   Msg,
   Subscribe,
+  SubscribeOk,
   FilterType,
   GroupOrder,
   Message,
@@ -453,37 +454,29 @@ export class TracksManager {
     // Generate a request ID for this subscription
     const requestId = this.getNextRequestId();
 
-    // Register the track in the registry and get its alias
-    const trackAlias = this.trackRegistry.registerTrack(
-      namespace,
-      trackName,
-      requestId,
-    );
-
-    // Register the callback for this track alias
-    this.trackRegistry.registerCallback(trackAlias, callback);
-
-    // Create the subscribe message
+    // Create the subscribe message (draft-14: no trackAlias - publisher assigns it)
     const subscribeMsg: Subscribe = {
       kind: Msg.Subscribe,
       requestId,
-      trackAlias, // Include the track alias
-      namespace: [namespace], // Namespace is an array of strings in the Subscribe interface
+      namespace: [namespace],
       name: trackName,
-      subscriber_priority: 0, // Default priority
-      group_order: GroupOrder.Publisher, // Use publisher's order by default
-      forward: true, // Forward mode by default
-      filterType: FilterType.NextGroupStart, // No filtering by default
+      subscriber_priority: 0,
+      group_order: GroupOrder.Publisher,
+      forward: true,
+      filterType: FilterType.NextGroupStart,
       params: [] as KeyValuePair[],
     };
 
     this.logger.info(
-      `Sending subscribe message for ${namespace}:${trackName} with alias ${trackAlias} and requestId ${requestId}`,
+      `Sending subscribe message for ${namespace}:${trackName} with requestId ${requestId}`,
     );
+
+    // Variable to capture the server-assigned trackAlias
+    let trackAlias: bigint = 0n;
 
     try {
       // Create a Promise that will be resolved when we receive the SubscribeOk response
-      const subscribePromise = new Promise<void>((resolve, reject) => {
+      const subscribePromise = new Promise<bigint>((resolve, reject) => {
         if (!this.client) {
           throw new Error("Cannot subscribe: Client not set");
         }
@@ -492,23 +485,25 @@ export class TracksManager {
         const unregisterHandler = this.client.registerMessageHandler(
           Msg.SubscribeOk,
           requestId,
-          (_response: Message) => {
+          (response: Message) => {
+            // Extract trackAlias from SUBSCRIBE_OK (draft-14)
+            const subscribeOk = response as SubscribeOk;
             this.logger.info(
-              `Received SubscribeOk for ${namespace}:${trackName} with requestId ${requestId}`,
+              `Received SubscribeOk for ${namespace}:${trackName} with requestId ${requestId}, trackAlias ${subscribeOk.trackAlias}`,
             );
-            resolve();
+            resolve(subscribeOk.trackAlias);
           },
         );
 
         // Set a timeout to reject the promise if we don't receive a response in time
         const timeoutId = setTimeout(() => {
-          unregisterHandler(); // Clean up the handler
+          unregisterHandler();
           reject(
             new Error(
               `Subscribe timeout for ${namespace}:${trackName} with requestId ${requestId}`,
             ),
           );
-        }, 10000); // 10 second timeout
+        }, 10000);
 
         // Also register a handler for SubscribeError
         if (this.client) {
@@ -516,8 +511,8 @@ export class TracksManager {
             Msg.SubscribeError,
             requestId,
             (response: Message) => {
-              clearTimeout(timeoutId); // Clear the timeout
-              unregisterHandler(); // Clean up the success handler
+              clearTimeout(timeoutId);
+              unregisterHandler();
               this.logger.error(
                 `Received SubscribeError for ${namespace}:${trackName}: ${JSON.stringify(
                   response,
@@ -534,19 +529,28 @@ export class TracksManager {
       // Send the subscribe message
       await this.controlStream.send(subscribeMsg);
 
-      // Wait for the subscribe response
-      await subscribePromise;
+      // Wait for the subscribe response and get the server-assigned trackAlias
+      trackAlias = await subscribePromise;
+
+      // Now register the track with the server-assigned alias (draft-14)
+      this.trackRegistry.registerTrackWithAlias(
+        namespace,
+        trackName,
+        requestId,
+        trackAlias,
+      );
+
+      // Register the callback for this track alias
+      this.trackRegistry.registerCallback(trackAlias, callback);
 
       this.logger.info(
-        `Successfully subscribed to track ${namespace}:${trackName} with alias ${trackAlias}`,
+        `Successfully subscribed to track ${namespace}:${trackName} with server-assigned alias ${trackAlias}`,
       );
     } catch (error) {
       this.logger.error(
         `Error subscribing to track ${namespace}:${trackName}:`,
         error,
       );
-      // We'll keep the registration in the registry even if the subscription fails
-      // This allows for retry attempts without creating new aliases
       throw error;
     }
 
@@ -579,7 +583,7 @@ export class TracksManager {
 
     const trackDescription = `${trackInfo.namespace}:${trackInfo.trackName}`;
 
-    // According to MoQ Transport draft 11, the unsubscribe message must use the same
+    // According to MoQ Transport draft-14, the unsubscribe message must use the same
     // request ID that was used in the original subscribe message
     const requestId = trackInfo.requestId;
 

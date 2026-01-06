@@ -10,6 +10,7 @@ export type Message = Client | Server;
 
 export enum Version {
   DRAFT_11 = 0xff00000b,
+  DRAFT_14 = 0xff00000e,
 }
 
 enum SetupType {

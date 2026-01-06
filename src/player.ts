@@ -13,7 +13,7 @@ export class Player {
   private fingerprintUrl?: string;
   private catalogManager: WarpCatalogManager;
   private unregisterCatalogCallback: (() => void) | null = null;
-  private unregisterAnnounceCallback: (() => void) | null = null;
+  private unregisterPublishNamespaceCallback: (() => void) | null = null;
   private announceNamespaces: string[][] = [];
   private tracksContainerEl: HTMLElement;
   private statusEl: HTMLElement;
@@ -215,9 +215,9 @@ export class Player {
     }
 
     // Unregister announce callback if registered
-    if (this.unregisterAnnounceCallback) {
-      this.unregisterAnnounceCallback();
-      this.unregisterAnnounceCallback = null;
+    if (this.unregisterPublishNamespaceCallback) {
+      this.unregisterPublishNamespaceCallback();
+      this.unregisterPublishNamespaceCallback = null;
     }
 
     // Unsubscribe from all tracks
@@ -294,7 +294,7 @@ export class Player {
       }
 
       // Subscribe to announcements
-      const unregister = this.client.registerAnnounceCallback(
+      const unregister = this.client.registerPublishNamespaceCallback(
         (namespace: string[]) => {
           // Log that we received an announcement for debugging
           this.logger.info(
@@ -330,7 +330,7 @@ export class Player {
       );
 
       // Save the unregister function
-      this.unregisterAnnounceCallback = unregister;
+      this.unregisterPublishNamespaceCallback = unregister;
 
       // Log that we've registered the callback
       this.logger.info("Announcement listener registered successfully");

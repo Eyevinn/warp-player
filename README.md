@@ -35,7 +35,7 @@ This project implements a media player that:
 ## Requirements
 
 - A modern browser that supports WebTransport (Chrome 87+ or Edge 87+)
-- A MoQ server that supports draft-11 such as moqlivemock
+- A MoQ server that supports draft-14 such as moqlivemock
 - Node.js version 20+
 
 ## Project Structure
@@ -195,7 +195,7 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 
 ## Features
 
-- Complete MoQ client implementation based on draft-11 of the specification
+- Complete MoQ client implementation based on draft-14 of the specification
 - Full WARP catalog support for discovering available media streams
 - Media Source Extensions (MSE) integration for seamless playback in browsers
 - CMAF/ISO-BMFF media segment parsing and playback

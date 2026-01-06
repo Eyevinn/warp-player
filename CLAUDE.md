@@ -93,7 +93,7 @@ warp-player/
 
 ### Core Architecture
 
-The transport used is MoQ Transport, currently draft-11.
+The transport used is MoQ Transport, currently draft-14.
 
 For the WARP catalog, the specification is draft-0
 but with some modifications added later like updates to Catalog.

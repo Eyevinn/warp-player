@@ -67,11 +67,11 @@ development:
     - HTTPS support (required for WebTransport)
 
 notes:
-  - Implementation follows MoQ Transport protocol draft-11
-  - Draft 11 available as references/draft-ietf-moq-transport-11.txt
+  - Implementation follows MoQ Transport protocol draft-14
+  - Draft 14 available as references/draft-ietf-moq-transport-14.txt
   - Catalog definition in references/draft-ietf-moq-warp.md
   - Includes proper handling of bidirectional control streams
   - Uses 16-bit MSB length fields for server setup and control messages
   - WebTransport is only supported in some modern browsers (Chrome 87+, Edge 87+)
   - Not supported in Node.js or Safari
-  - Requires a MoQ server that supports draft-11 (e.g., moqlivemock)
+  - Requires a MoQ server that supports draft-14 (e.g., moqlivemock)
