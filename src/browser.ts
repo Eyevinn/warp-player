@@ -61,6 +61,12 @@ async function loadConfig(): Promise<void> {
 
 // Initialize the application when the DOM is loaded
 document.addEventListener("DOMContentLoaded", async () => {
+  // Set version in the header
+  const appVersionEl = document.getElementById("appVersion");
+  if (appVersionEl) {
+    appVersionEl.textContent = `v${__APP_VERSION__}`;
+  }
+
   // Load configuration first
   await loadConfig();
   // Get DOM elements
