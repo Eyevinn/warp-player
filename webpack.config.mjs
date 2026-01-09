@@ -2,8 +2,13 @@ import path from "path";
 import { fileURLToPath } from "url";
 import HtmlWebpackPlugin from "html-webpack-plugin";
 import CopyWebpackPlugin from "copy-webpack-plugin";
+import webpack from "webpack";
+import { readFileSync } from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const packageJson = JSON.parse(
+  readFileSync(path.join(__dirname, "package.json"), "utf-8"),
+);
 
 export default (env, argv) => {
   const isProduction = argv.mode === "production";
@@ -59,6 +64,9 @@ export default (env, argv) => {
           },
           { from: "src/config.json", to: "config.json" },
         ],
+      }),
+      new webpack.DefinePlugin({
+        __APP_VERSION__: JSON.stringify(packageJson.version),
       }),
     ],
     devServer: {
