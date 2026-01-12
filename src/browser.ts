@@ -33,6 +33,7 @@ const logger = LoggerFactory.getInstance().getLogger("Browser");
 // Configuration
 interface Config {
   defaultServerUrl?: string;
+  fingerprintUrl?: string;
   minimalBuffer?: number;
   targetLatency?: number;
 }
@@ -56,6 +57,43 @@ async function loadConfig(): Promise<void> {
     }
   } catch {
     logger.info("Using default configuration (error loading config.json)");
+  }
+}
+
+// Get URL parameters
+function getUrlParams(): URLSearchParams {
+  return new URLSearchParams(window.location.search);
+}
+
+// Save connection settings to localStorage
+function saveConnectionSettings(
+  serverUrl: string,
+  fingerprintUrl: string,
+): void {
+  try {
+    localStorage.setItem("warp-player-serverUrl", serverUrl);
+    localStorage.setItem("warp-player-fingerprintUrl", fingerprintUrl);
+    logger.debug("Connection settings saved to localStorage");
+  } catch (error) {
+    logger.warn("Failed to save connection settings to localStorage:", error);
+  }
+}
+
+// Load connection settings from localStorage
+function loadConnectionSettings(): {
+  serverUrl?: string;
+  fingerprintUrl?: string;
+} {
+  try {
+    const serverUrl = localStorage.getItem("warp-player-serverUrl");
+    const fingerprintUrl = localStorage.getItem("warp-player-fingerprintUrl");
+    return {
+      serverUrl: serverUrl || undefined,
+      fingerprintUrl: fingerprintUrl || undefined,
+    };
+  } catch (error) {
+    logger.warn("Failed to load connection settings from localStorage:", error);
+    return {};
   }
 }
 
@@ -99,10 +137,37 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Setup logging
   setupLogging();
 
-  // Apply configuration to UI elements
-  if (config.defaultServerUrl) {
-    serverUrlInput.value = config.defaultServerUrl;
+  // Load connection settings from multiple sources (priority: URL params > localStorage > config.json > defaults)
+  const urlParams = getUrlParams();
+  const savedSettings = loadConnectionSettings();
+
+  // Server URL: URL param > localStorage > config.json > default
+  const serverUrl =
+    urlParams.get("serverUrl") ||
+    savedSettings.serverUrl ||
+    config.defaultServerUrl ||
+    "https://moqlivemock.demo.osaas.io/moq";
+
+  // Fingerprint URL: URL param > localStorage > config.json > empty
+  const fingerprintUrl =
+    urlParams.get("fingerprintUrl") ||
+    savedSettings.fingerprintUrl ||
+    config.fingerprintUrl ||
+    "";
+
+  // Apply to UI elements
+  serverUrlInput.value = serverUrl;
+  fingerprintUrlInput.value = fingerprintUrl;
+
+  // Log source of configuration
+  if (urlParams.get("serverUrl")) {
+    logger.info("Server URL loaded from URL parameters");
+  } else if (savedSettings.serverUrl) {
+    logger.info("Server URL loaded from localStorage");
+  } else if (config.defaultServerUrl) {
+    logger.info("Server URL loaded from config.json");
   }
+
   if (config.minimalBuffer) {
     minimalBufferInput.value = config.minimalBuffer.toString();
   }
@@ -113,6 +178,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Add event listeners
   connectBtn.addEventListener("click", connect);
   disconnectBtn.addEventListener("click", disconnect);
+
+  // Save connection settings when they change
+  serverUrlInput.addEventListener("change", () => {
+    saveConnectionSettings(serverUrlInput.value, fingerprintUrlInput.value);
+  });
+  fingerprintUrlInput.addEventListener("change", () => {
+    saveConnectionSettings(serverUrlInput.value, fingerprintUrlInput.value);
+  });
 
   // Check WebTransport support
   if (typeof WebTransport === "undefined") {
@@ -586,6 +659,9 @@ async function connect() {
     // Connect to the server
     await player.connect();
     // Start/Stop buttons will be enabled by the connection state callback
+
+    // Save connection settings to localStorage for future sessions
+    saveConnectionSettings(serverUrlInput.value, fingerprintUrlInput.value);
   } catch (error) {
     logger.error(
       `Connection error: ${
