@@ -132,7 +132,8 @@ export class TracksManager {
   }
 
   /**
-   * Handle a SUBGROUP_HEADER stream according to section 9.4.2 of the MoQ transport draft
+   * Handle a SUBGROUP_HEADER stream with automatic buffering and retry
+   * Inspired by moqtail's RecvDataStream buffering approach
    */
   private async handleSubgroupStream(reader: Reader, streamType: bigint) {
     try {
@@ -165,6 +166,12 @@ export class TracksManager {
       // Read the Publisher Priority (as specified in the SUBGROUP_HEADER format)
       const publisherPriority = await reader.u8();
       this.logger.debug(`Publisher Priority: ${publisherPriority}`);
+
+      // Buffer for objects while waiting for track registration
+      const bufferedObjects: MoQObject[] = [];
+      const RETRY_INTERVAL_MS = 100;
+      const MAX_RETRIES = 5; // 500ms total
+      const MAX_BUFFERED_OBJECTS = 50;
 
       // Process objects in the stream
       let isFirstObject = true;
@@ -233,8 +240,72 @@ export class TracksManager {
           ...(objectStatus !== null && { status: objectStatus }),
         };
 
-        // Notify callbacks
-        this.notifyObjectCallbacks(trackAlias, obj);
+        // Try to deliver immediately with retry logic
+        let delivered = false;
+        let retryCount = 0;
+
+        while (!delivered && retryCount < MAX_RETRIES) {
+          const trackInfo =
+            this.trackRegistry.getTrackInfoFromAlias(trackAlias);
+
+          if (trackInfo && trackInfo.callbacks.length > 0) {
+            // Track registered! Deliver buffered objects first
+            if (bufferedObjects.length > 0) {
+              this.logger.info(
+                `Track ${trackAlias} now registered, delivering ${bufferedObjects.length} buffered objects`,
+              );
+              for (const bufferedObj of bufferedObjects) {
+                for (const callback of trackInfo.callbacks) {
+                  callback(bufferedObj);
+                }
+              }
+              bufferedObjects.length = 0; // Clear buffer
+            }
+
+            // Deliver current object
+            for (const callback of trackInfo.callbacks) {
+              callback(obj);
+            }
+            delivered = true;
+          } else {
+            // Track not registered yet, buffer and retry
+            if (retryCount === 0) {
+              this.logger.debug(
+                `Track ${trackAlias} not registered yet, buffering object (group=${groupId}, obj=${objectId})`,
+              );
+              bufferedObjects.push(obj);
+
+              // Enforce buffer size limit
+              if (bufferedObjects.length > MAX_BUFFERED_OBJECTS) {
+                this.logger.warn(
+                  `Buffer overflow for track ${trackAlias}, dropping oldest object ` +
+                    `(buffered: ${bufferedObjects.length})`,
+                );
+                bufferedObjects.shift();
+              }
+            }
+
+            retryCount++;
+            if (retryCount < MAX_RETRIES) {
+              this.logger.debug(
+                `Retry ${retryCount}/${MAX_RETRIES} for track ${trackAlias} ` +
+                  `(buffered: ${bufferedObjects.length})`,
+              );
+              await new Promise((resolve) =>
+                setTimeout(resolve, RETRY_INTERVAL_MS),
+              );
+            } else {
+              // Timeout after 500ms - connection is broken, fail the stream
+              const errorMsg =
+                `Track ${trackAlias} not registered after ${MAX_RETRIES * RETRY_INTERVAL_MS}ms. ` +
+                `SUBSCRIBE_OK not received in time. Connection may be broken. ` +
+                `(buffered ${bufferedObjects.length} objects that will be discarded)`;
+
+              this.logger.error(errorMsg);
+              throw new Error(errorMsg);
+            }
+          }
+        }
       }
 
       this.logger.debug(
@@ -242,6 +313,7 @@ export class TracksManager {
       );
     } catch (error) {
       this.logger.error("Error processing SUBGROUP_HEADER stream:", error);
+      throw error;
     }
   }
 
@@ -471,22 +543,17 @@ export class TracksManager {
       `Sending subscribe message for ${namespace}:${trackName} with requestId ${requestId}`,
     );
 
-    // Variable to capture the server-assigned trackAlias
-    let trackAlias: bigint = 0n;
-
     try {
-      // Create a Promise that will be resolved when we receive the SubscribeOk response
-      const subscribePromise = new Promise<bigint>((resolve, reject) => {
-        if (!this.client) {
-          throw new Error("Cannot subscribe: Client not set");
-        }
+      // Store client reference for use in Promise callbacks
+      const client = this.client;
 
-        // Register a handler for the SubscribeOk message with this request ID
-        const unregisterHandler = this.client.registerMessageHandler(
+      // Set up Promise for SUBSCRIBE_OK response
+      const subscribePromise = new Promise<bigint>((resolve, reject) => {
+        // Register handler for SUBSCRIBE_OK
+        const unregisterOk = client.registerMessageHandler(
           Msg.SubscribeOk,
           requestId,
           (response: Message) => {
-            // Extract trackAlias from SUBSCRIBE_OK (draft-14)
             const subscribeOk = response as SubscribeOk;
             this.logger.info(
               `Received SubscribeOk for ${namespace}:${trackName} with requestId ${requestId}, trackAlias ${subscribeOk.trackAlias}`,
@@ -495,57 +562,52 @@ export class TracksManager {
           },
         );
 
-        // Set a timeout to reject the promise if we don't receive a response in time
-        const timeoutId = setTimeout(() => {
-          unregisterHandler();
+        // Register handler for SUBSCRIBE_ERROR
+        const unregisterErr = client.registerMessageHandler(
+          Msg.SubscribeError,
+          requestId,
+          (response: Message) => {
+            unregisterOk();
+            this.logger.error(
+              `Received SubscribeError for ${namespace}:${trackName}: ${JSON.stringify(response)}`,
+            );
+            reject(new Error(`Subscribe failed: ${JSON.stringify(response)}`));
+          },
+        );
+
+        // Timeout after 2 seconds
+        setTimeout(() => {
+          unregisterOk();
+          unregisterErr();
           reject(
             new Error(
-              `Subscribe timeout for ${namespace}:${trackName} with requestId ${requestId}`,
+              `Subscribe timeout (2000ms) for ${namespace}:${trackName} with requestId ${requestId}`,
             ),
           );
-        }, 10000);
-
-        // Also register a handler for SubscribeError
-        if (this.client) {
-          this.client.registerMessageHandler(
-            Msg.SubscribeError,
-            requestId,
-            (response: Message) => {
-              clearTimeout(timeoutId);
-              unregisterHandler();
-              this.logger.error(
-                `Received SubscribeError for ${namespace}:${trackName}: ${JSON.stringify(
-                  response,
-                )}`,
-              );
-              reject(
-                new Error(`Subscribe failed: ${JSON.stringify(response)}`),
-              );
-            },
-          );
-        }
+        }, 2000);
       });
 
       // Send the subscribe message
       await this.controlStream.send(subscribeMsg);
 
-      // Wait for the subscribe response and get the server-assigned trackAlias
-      trackAlias = await subscribePromise;
+      // Wait for SUBSCRIBE_OK (with timeout)
+      const trackAlias = await subscribePromise;
 
-      // Now register the track with the server-assigned alias (draft-14)
+      // Register the callback
+      // Stream handler will immediately find it and deliver any buffered objects
       this.trackRegistry.registerTrackWithAlias(
         namespace,
         trackName,
         requestId,
         trackAlias,
       );
-
-      // Register the callback for this track alias
       this.trackRegistry.registerCallback(trackAlias, callback);
 
       this.logger.info(
-        `Successfully subscribed to track ${namespace}:${trackName} with server-assigned alias ${trackAlias}`,
+        `Successfully subscribed to ${namespace}:${trackName} with trackAlias ${trackAlias}`,
       );
+
+      return trackAlias;
     } catch (error) {
       this.logger.error(
         `Error subscribing to track ${namespace}:${trackName}:`,
@@ -553,8 +615,6 @@ export class TracksManager {
       );
       throw error;
     }
-
-    return trackAlias;
   }
 
   /**
