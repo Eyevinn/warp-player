@@ -38,6 +38,7 @@ export class TracksManager {
   private nextRequestId: bigint = 0n;
   private client: Client | null = null;
   private logger: ILogger;
+  private isClosing: boolean = false;
 
   constructor(wt: WebTransport, controlStream?: CtrlStream, client?: Client) {
     this.wt = wt;
@@ -125,7 +126,12 @@ export class TracksManager {
         this.logger.warn(`Unknown stream type: ${streamType}`);
       }
     } catch (error) {
-      this.logger.error("Error processing incoming stream:", error);
+      // Suppress errors during shutdown - they are expected
+      if (!this.isClosing) {
+        this.logger.error("Error processing incoming stream:", error);
+      } else {
+        this.logger.debug("Stream processing ended during shutdown");
+      }
     } finally {
       reader.close();
     }
@@ -245,6 +251,15 @@ export class TracksManager {
         let retryCount = 0;
 
         while (!delivered && retryCount < MAX_RETRIES) {
+          // Check if closing early to exit gracefully
+          if (this.isClosing) {
+            this.logger.debug(
+              `Track ${trackAlias} data discarded during shutdown ` +
+                `(buffered ${bufferedObjects.length} objects)`,
+            );
+            return; // Exit gracefully during shutdown
+          }
+
           const trackInfo =
             this.trackRegistry.getTrackInfoFromAlias(trackAlias);
 
@@ -294,15 +309,33 @@ export class TracksManager {
               await new Promise((resolve) =>
                 setTimeout(resolve, RETRY_INTERVAL_MS),
               );
+              // Check again after waiting in case close() was called during sleep
+              if (this.isClosing) {
+                this.logger.debug(
+                  `Track ${trackAlias} data discarded during shutdown ` +
+                    `(buffered ${bufferedObjects.length} objects)`,
+                );
+                return; // Exit gracefully during shutdown
+              }
             } else {
-              // Timeout after 500ms - connection is broken, fail the stream
-              const errorMsg =
-                `Track ${trackAlias} not registered after ${MAX_RETRIES * RETRY_INTERVAL_MS}ms. ` +
-                `SUBSCRIBE_OK not received in time. Connection may be broken. ` +
-                `(buffered ${bufferedObjects.length} objects that will be discarded)`;
+              // Timeout after 500ms
+              if (this.isClosing) {
+                // During shutdown, this is expected - just log and discard
+                this.logger.debug(
+                  `Track ${trackAlias} data discarded during shutdown ` +
+                    `(buffered ${bufferedObjects.length} objects)`,
+                );
+                return; // Exit gracefully during shutdown
+              } else {
+                // Connection is broken, fail the stream
+                const errorMsg =
+                  `Track ${trackAlias} not registered after ${MAX_RETRIES * RETRY_INTERVAL_MS}ms. ` +
+                  `SUBSCRIBE_OK not received in time. Connection may be broken. ` +
+                  `(buffered ${bufferedObjects.length} objects that will be discarded)`;
 
-              this.logger.error(errorMsg);
-              throw new Error(errorMsg);
+                this.logger.error(errorMsg);
+                throw new Error(errorMsg);
+              }
             }
           }
         }
@@ -312,8 +345,15 @@ export class TracksManager {
         `Finished processing SUBGROUP_HEADER stream for track ${trackAlias}`,
       );
     } catch (error) {
-      this.logger.error("Error processing SUBGROUP_HEADER stream:", error);
-      throw error;
+      // Suppress errors during shutdown - they are expected
+      if (!this.isClosing) {
+        this.logger.error("Error processing SUBGROUP_HEADER stream:", error);
+        throw error;
+      } else {
+        this.logger.debug(
+          "SUBGROUP_HEADER stream processing ended during shutdown",
+        );
+      }
     }
   }
 
@@ -498,6 +538,8 @@ export class TracksManager {
    */
   public close(): void {
     this.logger.debug("Closing tracks manager");
+    // Set closing flag to suppress errors from ongoing streams
+    this.isClosing = true;
     // Clear all callbacks
     this.objectCallbacks.clear();
     this.trackRegistry.clear();
