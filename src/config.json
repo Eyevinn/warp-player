@@ -1,5 +1,6 @@
 {
   "defaultServerUrl": "https://localhost:4443/moq",
+  "fingerprintUrl": "",
   "minimalBuffer": 200,
   "targetLatency": 300,
   "comment": "This configuration file can be modified after build to change default settings"
