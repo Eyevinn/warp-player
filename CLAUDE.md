@@ -102,14 +102,12 @@ CMAF is used as packaging instead of LOC.
 The codebase is organized into several key modules:
 
 1. **Transport Layer**:
-
    - Located in `src/transport/`
    - Handles WebTransport connection and MoQ protocol implementation
    - Manages bidirectional control streams and unidirectional data streams
    - Implements client-server setup messaging, track subscription, and data reception
 
 2. **Buffer Layer**:
-
    - Located in `src/buffer/`
    - Processes incoming media segments (CMAF format)
    - Parses segments and extracts timing information
@@ -123,22 +121,18 @@ The codebase is organized into several key modules:
 ### Key Components
 
 1. **Client** (`src/transport/client.ts`):
-
    - Main entry point for establishing WebTransport connections
    - Handles connection setup, track subscription, and message routing
 
 2. **TrackAliasRegistry** (`src/transport/trackaliasregistry.ts`):
-
    - Manages mappings between track namespaces, names, and aliases
    - Tracks registration of callbacks for data objects
 
 3. **TracksManager** (`src/transport/tracks.ts`):
-
    - Manages incoming unidirectional streams for data
    - Processes and routes incoming data objects to registered callbacks
 
 4. **MediaBuffer** (`src/buffer/mediaBuffer.ts`):
-
    - Parses CMAF initialization and media segments
    - Extracts timing information for media synchronization
 
@@ -178,7 +172,6 @@ Note: The fingerprint feature was added to the Player class but the UI has been 
 The project uses GitHub Actions for continuous integration:
 
 1. **CI Workflow** (`ci.yml`):
-
    - Runs on push to main and pull requests
    - Tests on Node.js 20.x and 22.x
    - Runs ESLint, Prettier checks, TypeScript type checking
@@ -186,7 +179,6 @@ The project uses GitHub Actions for continuous integration:
    - Uploads test coverage to Codecov
 
 2. **Commit Linting** (`commitlint.yml`):
-
    - Validates commit messages follow conventional commit format
    - Runs on pull requests
 

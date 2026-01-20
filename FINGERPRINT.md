@@ -114,7 +114,6 @@ For development, you can also:
 If connections fail despite having a valid fingerprint:
 
 1. **Verify certificate requirements**: Use `openssl x509 -in cert.pem -text -noout` to check:
-
    - Signature Algorithm should be `ecdsa-with-SHA256`
    - Validity period should be ≤ 14 days
    - Issuer and Subject should match (self-signed)
