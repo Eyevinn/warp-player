@@ -83,7 +83,6 @@ warp-player/
 When using self-signed certificates for development, you have two options:
 
 1. **Using certificate fingerprint**:
-
    - Enter the server URL: `https://localhost:4443/moq`
    - Enter the fingerprint URL: `http://localhost:8081/fingerprint`
    - The player will fetch the certificate fingerprint and use it to authenticate the connection
@@ -223,12 +222,10 @@ The player uses a sophisticated two-parameter control system to maintain optimal
 The playback rate is adjusted based on a priority system:
 
 1. **Priority 1 - Buffer Safety**: If buffer level < minimal buffer
-
    - Reduce playback rate to 0.97x to build up buffer
    - This takes precedence over latency control
 
 2. **Priority 2 - Latency Control**: If buffer level ≥ minimal buffer
-
    - If latency > target: Increase playback rate (up to 1.02x) to reduce latency
    - If latency < target: Decrease playback rate (down to 0.98x) to maintain target latency
    - This prevents drifting too close to the live edge
