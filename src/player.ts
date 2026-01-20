@@ -1,6 +1,7 @@
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
 import { Client } from "./transport/client";
+import { MoQObject } from "./transport/tracks";
 import { WarpCatalog, WarpTrack, WarpCatalogManager } from "./warpcatalog";
 
 /**
@@ -361,7 +362,7 @@ export class Player {
       const trackAlias = await this.client.subscribeTrack(
         namespaceStr,
         "catalog",
-        (obj: { data: ArrayBuffer }) => {
+        (obj: MoQObject) => {
           try {
             const text = new TextDecoder().decode(obj.data);
             const catalog = JSON.parse(text); // If using CBOR, replace this with CBOR decoding
@@ -2051,7 +2052,7 @@ export class Player {
       this.subscribeToVideoTrack(
         track,
         (obj: {
-          data: ArrayBuffer;
+          data: Uint8Array | ArrayBuffer;
           timing?: { baseMediaDecodeTime?: number; timescale?: number };
         }) => {
           try {
@@ -2083,10 +2084,10 @@ export class Player {
                 arrayBuffer = typedArray.buffer.slice(
                   typedArray.byteOffset,
                   typedArray.byteOffset + typedArray.byteLength,
-                );
+                ) as ArrayBuffer;
               } else {
                 // Use the buffer directly if it's the full buffer
-                arrayBuffer = typedArray.buffer;
+                arrayBuffer = typedArray.buffer as ArrayBuffer;
               }
 
               // Replace the original data with the ArrayBuffer for downstream processing
@@ -2253,7 +2254,7 @@ export class Player {
   private async subscribeToVideoTrack(
     track: WarpTrack,
     onObject: (obj: {
-      data: ArrayBuffer;
+      data: Uint8Array | ArrayBuffer;
       timing?: { baseMediaDecodeTime?: number; timescale?: number };
     }) => void,
   ): Promise<void> {
@@ -2277,7 +2278,7 @@ export class Player {
       const trackAlias = await this.client.subscribeTrack(
         namespace,
         trackName,
-        (obj: { data: ArrayBuffer }) => {
+        (obj: MoQObject) => {
           onObject(obj);
         },
       );
@@ -2352,7 +2353,7 @@ export class Player {
       const trackAlias = await this.client.subscribeTrack(
         namespace,
         trackName,
-        (obj: { data: ArrayBuffer }) => {
+        (obj: MoQObject) => {
           this.logger.debug(
             `Received object for track ${trackName} with size ${obj.data.byteLength} bytes`,
           );
@@ -2610,7 +2611,7 @@ export class Player {
 
     // Define callback function for handling audio objects
     const onAudioObject = (obj: {
-      data: ArrayBuffer;
+      data: Uint8Array | ArrayBuffer;
       timing?: { baseMediaDecodeTime?: number; timescale?: number };
     }) => {
       try {
@@ -2642,10 +2643,10 @@ export class Player {
             arrayBuffer = typedArray.buffer.slice(
               typedArray.byteOffset,
               typedArray.byteOffset + typedArray.byteLength,
-            );
+            ) as ArrayBuffer;
           } else {
             // Use the buffer directly if it's the full buffer
-            arrayBuffer = typedArray.buffer;
+            arrayBuffer = typedArray.buffer as ArrayBuffer;
           }
 
           // Replace the original data with the ArrayBuffer for downstream processing
