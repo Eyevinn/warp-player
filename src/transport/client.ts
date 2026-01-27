@@ -130,7 +130,7 @@ export class Client {
 
   /**
    * Get the next available request ID and increment for future use
-   * According to the MoQ Transport spec, client request IDs are even numbers starting at 0
+   * According to the MOQ Transport spec, client request IDs are even numbers starting at 0
    * and increment by 2 for each new request
    */
   getNextRequestId(): bigint {

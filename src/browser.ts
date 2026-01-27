@@ -2,7 +2,7 @@
  * Warp Player - Browser Entry Point
  *
  * Handles the browser UI interactions and connects to the Player component
- * for MoQ/WARP streaming and MSE playback.
+ * for MOQ/WARP streaming and MSE playback.
  */
 import { LoggerFactory, LogLevel } from "./logger";
 import { Player } from "./player";
@@ -614,7 +614,7 @@ function displayLogEntry(
   logContainerEl.scrollTop = logContainerEl.scrollHeight;
 }
 
-// Connect to the MoQ server
+// Connect to the MOQ server
 async function connect() {
   if (!player) {
     logger.error("Player not initialized");
@@ -672,7 +672,7 @@ async function connect() {
   }
 }
 
-// Disconnect from the MoQ server
+// Disconnect from the MOQ server
 function disconnect() {
   if (player) {
     logger.info("Disconnecting from server");

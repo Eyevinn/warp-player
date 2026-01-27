@@ -55,10 +55,11 @@ These ensure code quality before changes are pushed to the repository.
 ## Project Overview
 
 WARP Player is a browser-based TypeScript implementation of a media player,
-using Media over QUIC (MoQ) transport protocol, draft version 11,
-via WebTransport. It uses the WARP protocol to fetch a catalog with media tracks.
+using MOQ transport protocol via WebTransport.
+It uses the MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00)
+to fetch a catalog with media tracks.
 The actual media playback is done using MSE, and the media container is CMAF.
-This player allows browsers to connect to MoQ servers, subscribe to media tracks, and receive media segments over WebTransport.
+This player allows browsers to connect to MOQ servers, subscribe to media tracks, and receive media segments over WebTransport.
 
 ### Project Structure
 
@@ -67,7 +68,7 @@ The project follows the Eyevinn TypeScript project template structure:
 ```
 warp-player/
 ├── src/
-│   ├── transport/        # MoQ protocol implementation
+│   ├── transport/        # MOQ protocol implementation
 │   │   ├── client.ts     # WebTransport client implementation
 │   │   ├── setup.ts      # Setup message handling
 │   │   ├── tracks.ts     # Track subscription and management
@@ -93,17 +94,16 @@ warp-player/
 
 ### Core Architecture
 
-The transport used is MoQ Transport, currently draft-14.
+The transport used is MOQ Transport, currently draft-14.
 
-For the WARP catalog, the specification is draft-0
-but with some modifications added later like updates to Catalog.
-CMAF is used as packaging instead of LOC.
+For the catalog, the specification used is MSF (draft-ietf-moq-msf-00)
+with CMSF (draft-ietf-moq-cmsf-00) for CMAF packaging.
 
 The codebase is organized into several key modules:
 
 1. **Transport Layer**:
    - Located in `src/transport/`
-   - Handles WebTransport connection and MoQ protocol implementation
+   - Handles WebTransport connection and MOQ protocol implementation
    - Manages bidirectional control streams and unidirectional data streams
    - Implements client-server setup messaging, track subscription, and data reception
 
@@ -115,7 +115,7 @@ The codebase is organized into several key modules:
 
 3. **Player Integration**:
    - Located in `src/player.ts` and `src/browser.ts`
-   - Provides the high-level API for connecting to MoQ servers
+   - Provides the high-level API for connecting to MOQ servers
    - Handles user interface interaction for track discovery and subscription
 
 ### Key Components
@@ -142,7 +142,7 @@ The codebase is organized into several key modules:
 
 ## Technical Notes
 
-1. The implementation follows the MoQ Transport protocol draft version 11.
+1. The implementation follows the MOQ Transport protocol draft version 14, with MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00).
 2. WebTransport is only available in Chrome 87+ and Edge 87+, not in Safari or Node.js.
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is expected in CMAF format with ISO BMFF container structure.
