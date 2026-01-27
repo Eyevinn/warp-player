@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Upgraded to MoQ Transport [draft-14][moqt-d14] compatibility
+- Upgraded to MOQ Transport [draft-14][moqt-d14] compatibility
 - Updated protocol implementation for draft-14 changes
 
 ## [0.2.0] - 2025-05-24
@@ -73,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial WARP player implementation following MoQ Transport draft-11
+- Initial WARP player implementation following MOQ Transport draft-11
 - WebTransport client with bidirectional control stream support
 - WARP catalog parsing and track subscription
 - MSE-based media playback with CMAF segment handling

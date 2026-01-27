@@ -29,7 +29,7 @@ mlmpub -fingerprintport 8081
 
 This starts:
 
-- MoQ server on port 4443 with auto-generated certificate
+- MOQ server on port 4443 with auto-generated certificate
 - HTTP fingerprint server on port 8081
 
 ### Manual Certificate Generation

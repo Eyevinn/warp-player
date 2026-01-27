@@ -20,14 +20,14 @@ const SUBGROUP_HEADER_START_BIGINT = 0x08n;
 const SUBGROUP_HEADER_END_BIGINT = 0x0dn;
 
 // Object received in a data stream
-export interface MoQObject {
+export interface MOQObject {
   trackAlias: bigint;
   location: Location;
   data: Uint8Array;
 }
 
 // Callback for receiving objects
-export type ObjectCallback = (obj: MoQObject) => void;
+export type ObjectCallback = (obj: MOQObject) => void;
 
 // Tracks manager to handle incoming data streams
 export class TracksManager {
@@ -174,7 +174,7 @@ export class TracksManager {
       this.logger.debug(`Publisher Priority: ${publisherPriority}`);
 
       // Buffer for objects while waiting for track registration
-      const bufferedObjects: MoQObject[] = [];
+      const bufferedObjects: MOQObject[] = [];
       const RETRY_INTERVAL_MS = 100;
       const MAX_RETRIES = 5; // 500ms total
       const MAX_BUFFERED_OBJECTS = 50;
@@ -230,8 +230,8 @@ export class TracksManager {
           this.logger.debug(`Read ${data.byteLength} bytes of object data`);
         }
 
-        // Create the MoQObject with additional properties from the improved parsing
-        const obj: MoQObject = {
+        // Create the MOQObject with additional properties from the improved parsing
+        const obj: MOQObject = {
           trackAlias,
           location: {
             group: groupId,
@@ -454,7 +454,7 @@ export class TracksManager {
   /**
    * Notify all callbacks registered for a track
    */
-  private notifyObjectCallbacks(trackAlias: bigint, obj: MoQObject) {
+  private notifyObjectCallbacks(trackAlias: bigint, obj: MOQObject) {
     const key = trackAlias.toString();
     this.logger.debug(
       `Notifying callbacks for track ${trackAlias} (key: ${key}), object ID: ${obj.location.object}`,
@@ -685,7 +685,7 @@ export class TracksManager {
 
     const trackDescription = `${trackInfo.namespace}:${trackInfo.trackName}`;
 
-    // According to MoQ Transport draft-14, the unsubscribe message must use the same
+    // According to MOQ Transport draft-14, the unsubscribe message must use the same
     // request ID that was used in the original subscribe message
     const requestId = trackInfo.requestId;
 
@@ -701,7 +701,7 @@ export class TracksManager {
 
     try {
       // Create a Promise that will be resolved after a short delay
-      // Note: The MoQ spec doesn't require an acknowledgment for unsubscribe messages,
+      // Note: The MOQ spec doesn't require an acknowledgment for unsubscribe messages,
       // so we'll just wait a short time to allow the message to be sent
       const unsubscribePromise = new Promise<void>((resolve) => {
         setTimeout(() => {

@@ -1,7 +1,7 @@
 {
   "name": "@eyevinn/warp-player",
   "version": "0.4.1",
-  "description": "Browser-based Media Player for Media over QUIC (MoQ) protocol with WARP support",
+  "description": "Browser-based Media Player for MOQ protocol with WARP support",
   "main": "dist/index.js",
   "scripts": {
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",

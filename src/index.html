@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WARP Player - Media over QUIC</title>
+    <title>WARP Player - MOQ</title>
     <style>
       * {
         margin: 0;
@@ -575,20 +575,41 @@
           <span class="version" id="appVersion"></span>
         </div>
         <nav class="nav-links">
-          <a href="https://github.com/Eyevinn/warp-player" class="nav-link"
+          <a
+            href="https://github.com/Eyevinn/warp-player"
+            class="nav-link"
+            target="_blank"
+            rel="noopener noreferrer"
             >GitHub</a
           >
           <a
             href="https://datatracker.ietf.org/doc/draft-ietf-moq-transport/"
             class="nav-link"
-            >MoQ Spec</a
+            target="_blank"
+            rel="noopener noreferrer"
+            >MOQT Spec</a
           >
           <a
-            href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-warp-00"
+            href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf/"
             class="nav-link"
-            >WARP Spec</a
+            target="_blank"
+            rel="noopener noreferrer"
+            >MSF Spec</a
           >
-          <a href="https://www.eyevinn.se" class="nav-link">About</a>
+          <a
+            href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-cmsf/"
+            class="nav-link"
+            target="_blank"
+            rel="noopener noreferrer"
+            >CMSF Spec</a
+          >
+          <a
+            href="https://www.eyevinn.se"
+            class="nav-link"
+            target="_blank"
+            rel="noopener noreferrer"
+            >About</a
+          >
         </nav>
       </div>
     </header>
@@ -613,7 +634,7 @@
           <a
             href="https://caniuse.com/webtransport"
             target="_blank"
-            rel="noopener"
+            rel="noopener noreferrer"
             >Can I Use WebTransport</a
           >
         </p>
@@ -660,7 +681,7 @@
         <div class="card">
           <h2>Connection</h2>
           <div class="form-group">
-            <label for="serverUrl">MoQ Server URL</label>
+            <label for="serverUrl">MOQ Server URL</label>
             <input
               type="text"
               id="serverUrl"
@@ -691,6 +712,7 @@
               <a
                 href="https://github.com/Eyevinn/warp-player/blob/main/FINGERPRINT.md"
                 target="_blank"
+                rel="noopener noreferrer"
                 style="color: var(--bg-button-primary)"
                 >Learn more</a
               >

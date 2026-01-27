@@ -122,10 +122,10 @@ firebase deploy --only hosting
 
 1. **HTTPS Requirement**: WebTransport requires HTTPS. Make sure your hosting service provides HTTPS.
 
-2. **Cross-Origin Considerations**: If your MoQ server is on a different domain, it will need to support CORS and appropriate headers for WebTransport.
+2. **Cross-Origin Considerations**: If your MOQ server is on a different domain, it will need to support CORS and appropriate headers for WebTransport.
 
 3. **Content Security Policy**: If your hosting service imposes strict CSP rules, you may need to configure them to allow WebTransport connections.
 
 4. **Server Configuration**: Some static hosting services may require additional configuration to properly serve the application. Check their documentation for details.
 
-5. **Testing After Deployment**: Always test your deployed application to ensure it works correctly with your MoQ server.
+5. **Testing After Deployment**: Always test your deployed application to ensure it works correctly with your MOQ server.

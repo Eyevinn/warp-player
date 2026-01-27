@@ -3,7 +3,7 @@
 </h1>
 
 <div align="center">
-  A browser-based Media Player for Media over QUIC (MoQ) protocol with WARP support
+  A browser-based Media Player for MOQ protocol with WARP support
   <br />
   <br />
 </div>
@@ -24,10 +24,10 @@
 
 This project implements a media player that:
 
-1. Establishes a WebTransport connection to a MoQ server
+1. Establishes a WebTransport connection to a MOQ server
 2. Subscribes to and parses WARP catalogs for available media
-3. Subscribes to selected media tracks through MoQ transport protocol
-4. Receives media segments in CMAF format through the MoQ protocol
+3. Subscribes to selected media tracks through MOQ transport protocol
+4. Receives media segments in CMAF format through the MOQ protocol
 5. Uses Media Source Extensions (MSE) to decode and play media content
 6. Provides adaptive buffer management for smooth playback experience
 7. This player is intended to work towards [moqlivemock][moqlivemock] publisher
@@ -35,7 +35,7 @@ This project implements a media player that:
 ## Requirements
 
 - A modern browser that supports WebTransport (Chrome 87+ or Edge 87+)
-- A MoQ server that supports draft-14 such as moqlivemock
+- A MOQ server that supports draft-14 such as moqlivemock
 - Node.js version 20+
 
 ## Project Structure
@@ -43,7 +43,7 @@ This project implements a media player that:
 ```
 warp-player/
 ├── src/
-│   ├── transport/        # MoQ protocol implementation
+│   ├── transport/        # MOQ protocol implementation
 │   │   ├── client.ts     # WebTransport client implementation
 │   │   ├── setup.ts      # Setup message handling
 │   │   ├── tracks.ts     # Track subscription and management
@@ -54,7 +54,7 @@ warp-player/
 │   ├── player.ts         # Core player implementation with MSE integration
 │   ├── browser.ts        # Browser entry point and UI handling
 │   └── index.html        # HTML template and UI components
-├── references/           # MoQ and WARP specification references
+├── references/           # MOQ and WARP specification references
 ├── tsconfig.json         # TypeScript configuration
 ├── webpack.config.js     # Webpack configuration
 └── package.json          # Project dependencies and scripts
@@ -76,7 +76,7 @@ warp-player/
 
 3. Open your browser at `https://localhost:8080`
 
-4. Enter the MoQ server URL (e.g., `https://localhost:4443/moq`) and click "Connect"
+4. Enter the MOQ server URL (e.g., `https://localhost:4443/moq`) and click "Connect"
 
 ### Connecting with Self-Signed Certificates
 
@@ -194,7 +194,7 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 
 ## Features
 
-- Complete MoQ client implementation based on draft-14 of the specification
+- Complete MOQ client implementation based on draft-14 of the specification
 - Full WARP catalog support for discovering available media streams
 - Media Source Extensions (MSE) integration for seamless playback in browsers
 - CMAF/ISO-BMFF media segment parsing and playback
@@ -266,12 +266,12 @@ Without proper NTP synchronization on both client and server, latency measuremen
 
 ## Acknowledgments
 
-The MoQ transport implementation in this project is based on work from:
+The MOQ transport implementation in this project is based on work from:
 
 - [moq-js](https://github.com/kixelated/moq-js) by Luke Curley (kixelated)
 - [moq-js fork](https://github.com/englishm/moq-js) by Mike English (englishm)
 
-We are grateful for their pioneering work on MoQ transport in JavaScript/TypeScript.
+We are grateful for their pioneering work on MOQ transport in JavaScript/TypeScript.
 
 ## Contributing
 

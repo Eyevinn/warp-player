@@ -16,7 +16,7 @@ The `config.json` file supports the following options:
 
 ### Options
 
-- **defaultServerUrl**: The default MoQ server URL that appears in the connection input field
+- **defaultServerUrl**: The default MOQ server URL that appears in the connection input field
 - **minimalBuffer**: The minimal buffer threshold in milliseconds (default: 200ms). Below this threshold, playback quality may suffer
 - **targetLatency**: The target end-to-end latency in milliseconds (default: 300ms). Must be greater than minimalBuffer
 

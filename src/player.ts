@@ -1,11 +1,12 @@
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
 import { Client } from "./transport/client";
-import { MoQObject } from "./transport/tracks";
+import { MOQObject } from "./transport/tracks";
 import { WarpCatalog, WarpTrack, WarpCatalogManager } from "./warpcatalog";
 
 /**
- * Player class for handling MoQ transport connections, track subscriptions, and UI updates
+ * Player class for handling MOQ transport connections, MSF/CMSF track subscriptions, and UI updates.
+ * Conforms to draft-ietf-moq-msf-00 and draft-ietf-moq-cmsf-00.
  */
 export class Player {
   private client: Client | null = null;
@@ -60,7 +61,7 @@ export class Player {
 
   /**
    * Create a new Player instance
-   * @param serverUrl The URL of the MoQ server
+   * @param serverUrl The URL of the MOQ server
    * @param tracksContainerEl The HTML element to display tracks in
    * @param statusEl The HTML element to display connection status
    * @param uiLogger Optional function to log messages to the UI
@@ -137,7 +138,7 @@ export class Player {
   }
 
   /**
-   * Connect to the MoQ server
+   * Connect to the MOQ server
    */
   async connect(): Promise<void> {
     if (!this.serverUrl) {
@@ -161,7 +162,7 @@ export class Player {
       this.statusEl.className = "status connected";
       this.statusEl.innerHTML = "<span>●</span> Connected";
 
-      this.logger.info("Connected to MoQ server successfully!");
+      this.logger.info("Connected to MOQ server successfully!");
 
       // Notify connection state change
       if (this.onConnectionStateChange) {
@@ -196,7 +197,7 @@ export class Player {
   }
 
   /**
-   * Disconnect from the MoQ server
+   * Disconnect from the MOQ server
    */
   disconnect(): void {
     // Prevent recursive calls
@@ -362,7 +363,7 @@ export class Player {
       const trackAlias = await this.client.subscribeTrack(
         namespaceStr,
         "catalog",
-        (obj: MoQObject) => {
+        (obj: MOQObject) => {
           try {
             const text = new TextDecoder().decode(obj.data);
             const catalog = JSON.parse(text); // If using CBOR, replace this with CBOR decoding
@@ -418,14 +419,14 @@ export class Player {
   }
 
   /**
-   * Process the WARP catalog and display track information
-   * @param catalog The WARP catalog to process
+   * Process the MSF/CMSF catalog and display track information
+   * @param catalog The MSF/CMSF catalog to process
    */
   private processWarpCatalog(catalog: WarpCatalog): void {
     // Clear previous tracks display
     this.tracksContainerEl.innerHTML = "";
 
-    this.logger.info(`Processing WARP catalog version ${catalog.version}`);
+    this.logger.info(`Processing MSF/CMSF catalog version ${catalog.version}`);
     this.logger.info(`Found ${catalog.tracks.length} tracks in catalog`);
 
     // Get video and audio tracks using the catalog manager
@@ -2278,7 +2279,7 @@ export class Player {
       const trackAlias = await this.client.subscribeTrack(
         namespace,
         trackName,
-        (obj: MoQObject) => {
+        (obj: MOQObject) => {
           onObject(obj);
         },
       );
@@ -2353,7 +2354,7 @@ export class Player {
       const trackAlias = await this.client.subscribeTrack(
         namespace,
         trackName,
-        (obj: MoQObject) => {
+        (obj: MOQObject) => {
           this.logger.debug(
             `Received object for track ${trackName} with size ${obj.data.byteLength} bytes`,
           );

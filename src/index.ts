@@ -9,7 +9,7 @@ const logger = LoggerFactory.getInstance().getLogger("Main");
 LoggerFactory.getInstance().setGlobalLogLevel(LogLevel.INFO);
 
 async function main() {
-  logger.info("WARP Player - Eyevinn MoQ WARP CMAF player");
+  logger.info("WARP Player - Eyevinn MOQ WARP CMAF player");
 
   // Get server URL from command line arguments or use default
   const serverUrl = process.argv[2] || DEFAULT_SERVER_URL;
@@ -23,9 +23,9 @@ async function main() {
       // fingerprint: 'https://localhost:4443/fingerprint',
     });
 
-    logger.info("Connecting to MoQ server...");
+    logger.info("Connecting to MOQ server...");
     const connection = await client.connect();
-    logger.info("Connected to MoQ server successfully!");
+    logger.info("Connected to MOQ server successfully!");
 
     // Handle connection closure
     connection
