@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Nothing yet
 
+## [0.5.0] - 2026-01-27
+
+### Added
+
+- Catalog format upgrade to MSF/CMSF v0
+  - Implemented draft-ietf-moq-msf-00 for catalog structure
+  - Implemented draft-ietf-moq-cmsf-00 for CMAF packaging
+  - Updated catalog parsing to support new format
+- Navigation improvements
+  - External links now open in new tabs to preserve player interface
+  - Added proper security attributes (rel="noopener noreferrer") to all external links
+
+### Changed
+
+- Standardized MOQ terminology throughout codebase
+  - Changed spelling from MoQ to MOQ in all documentation and code
+  - Removed "Media over QUIC" references, replaced with MOQ
+  - Updated "MOQ Spec" link to "MOQT Spec" for clarity
+  - Renamed `MoQObject` interface to `MOQObject` for consistency
+
 ## [0.4.1] - 2026-01-12
 
 ### Fixed
@@ -81,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for video and audio track selection
 - Real-time playback metrics (buffer levels, latency, playback rate)
 
-[Unreleased]: https://github.com/Eyevinn/warp-player/releases/tag/v0.4.1...HEAD
+[Unreleased]: https://github.com/Eyevinn/warp-player/releases/tag/v0.5.0...HEAD
+[0.5.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Eyevinn/warp-player/releases/tag/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.2.0...v0.4.0
 [0.2.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.1.0...v0.2.0

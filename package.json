@@ -1,6 +1,6 @@
 {
   "name": "@eyevinn/warp-player",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Browser-based Media Player for MOQ protocol with WARP support",
   "main": "dist/index.js",
   "scripts": {
