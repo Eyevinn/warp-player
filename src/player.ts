@@ -1960,7 +1960,7 @@ export class Player {
   }
 
   /**
-   * Handles EME session message calls. This function only handles clearkey where the key-ID = decryption key. The publisher also needs to send encryption data of this format.
+   * Handles EME session message calls. Makes a request to the DRM license server and passes that response to EME. This function only handles clearkey where the key-ID = decryption key. The publisher also needs to send data that has been decrypted this way.
    */
   private async handleMessage(
     event: MediaKeyMessageEvent,
@@ -1970,13 +1970,34 @@ export class Player {
       kids: string[];
     };
 
-    const keys = request.kids
-      .map((kid) => ({
-        kty: "oct",
-        kid: kid,
-        k: kid, //key=kid
-      }))
-      .filter((key) => key.k !== "");
+    if (!this.fingerprintUrl) {
+      this.logger.error(
+        "Fingerprint URL not configured, cannot fetch ClearKey license",
+      );
+      return;
+    }
+
+    const clearkeyUrl = new URL("/clearkey", this.fingerprintUrl).href;
+    const response = await fetch(clearkeyUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      this.logger.error(`ClearKey request failed: ${response.statusText}`);
+      return;
+    }
+
+    interface clearkeyResponse {
+      kty: string;
+      k: string;
+      kid: string;
+    }
+
+    const { keys } = (await response.json()) as { keys: clearkeyResponse[] };
 
     if (keys.length === 0) {
       this.logger.error("No matching ClearKey found for requested kids");
