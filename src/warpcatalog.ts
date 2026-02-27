@@ -90,9 +90,31 @@ export interface WarpTrack {
   trackDuration?: number;
   /** Event type, required when packaging is "eventtimeline". */
   eventType?: string;
+  /** DRM-related information for protected tracks. */
+  contentProtection?: ContentProtection;
   /** Parent track name for cloned tracks (only in cloneTracks). */
   parentName?: string;
   [key: string]: any; // For future/custom fields
+}
+
+/** DRM information for a track. */
+export interface ContentProtection {
+  scheme?: string;
+  defaultKIDs?: string[];
+  drmSystems?: Record<string, DRMSystem>;
+}
+
+/** A specific DRM system configuration. */
+export interface DRMSystem {
+  license?: DRMService;
+  authorization?: DRMService;
+  pssh?: string;
+}
+
+/** A DRM license or authorization service. */
+export interface DRMService {
+  url?: string;
+  type?: string;
 }
 
 /**

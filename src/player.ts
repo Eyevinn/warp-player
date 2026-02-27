@@ -2,7 +2,12 @@ import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
 import { Client } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
-import { WarpCatalog, WarpTrack, WarpCatalogManager } from "./warpcatalog";
+import {
+  WarpCatalog,
+  WarpTrack,
+  WarpCatalogManager,
+  ContentProtection,
+} from "./warpcatalog";
 
 /**
  * Player class for handling MOQ transport connections, MSF/CMSF track subscriptions, and UI updates.
@@ -1822,6 +1827,9 @@ export class Player {
       return;
     }
 
+    let videoTrack: WarpTrack | undefined;
+    let audioTrack: WarpTrack | undefined;
+
     // --- VIDEO PLAYBACK LOGIC ---
     if (hasVideoTrack) {
       const selectedOption = videoSelect.options[videoSelect.selectedIndex];
@@ -1833,7 +1841,7 @@ export class Player {
       );
 
       // Find the video track object from the catalog
-      const videoTrack = this.getTrackFromCatalog(
+      videoTrack = this.getTrackFromCatalog(
         videoNamespace,
         videoTrackName,
         "video",
@@ -1842,9 +1850,7 @@ export class Player {
         this.logger.error("Could not find selected video track in catalog");
         return;
       }
-
-      // Setup MediaSource and SourceBuffer
-      this.setupVideoPlayback(videoTrack);
+      this.logger.info("Video track found in catalog, preparing for setup");
     }
 
     // --- AUDIO PLAYBACK LOGIC ---
@@ -1858,7 +1864,7 @@ export class Player {
       );
 
       // Find the audio track object from the catalog
-      const audioTrack = this.getTrackFromCatalog(
+      audioTrack = this.getTrackFromCatalog(
         audioNamespace,
         audioTrackName,
         "audio",
@@ -1869,9 +1875,20 @@ export class Player {
       }
 
       this.logger.info("Audio track found in catalog, preparing for setup");
+    }
 
-      // Setup MediaSource and SourceBuffer for audio
+    const tracks = [videoTrack, audioTrack].filter(Boolean) as WarpTrack[];
+    const drmSucess = await this.setupDRM(tracks);
+    if (!drmSucess) {
+      return;
+    }
+
+    // Setup MediaSource and SourceBuffer for audio and video
+    if (audioTrack) {
       this.setupAudioPlayback(audioTrack);
+    }
+    if (videoTrack) {
+      this.setupVideoPlayback(videoTrack);
     }
   }
 
@@ -1884,6 +1901,201 @@ export class Player {
     kind: string,
   ): WarpTrack | undefined {
     return this.catalogManager.getTrackFromCatalog(namespace, name, kind);
+  }
+
+  /**
+   * @param codec Codec found in track
+   * @return A full video mime type. If no codec is specified a default value of avc3.640028 is set.
+   */
+  private generateVideoMimeType(codec?: string): string {
+    return `video/mp4; codecs="${codec || "avc3.640028"}"`;
+  }
+
+  private async setupDRM(tracks: WarpTrack[]): Promise<boolean> {
+    try {
+      for (const track of tracks) {
+        const contentProtection = track.contentProtection;
+        if (!contentProtection) {
+          continue;
+        }
+        let videoMimeType: string | undefined = undefined;
+        let audioMimeType: string | undefined = undefined;
+        if (track.role === "video") {
+          videoMimeType = this.generateVideoMimeType(track.codec);
+        } else if (track.role === "audio") {
+          audioMimeType = this.generateAudioMimeType(track.codec);
+        }
+        const config: MediaKeySystemConfiguration[] = [
+          {
+            initDataTypes: ["cenc"],
+            ...(videoMimeType && {
+              videoCapabilities: [{ contentType: videoMimeType }],
+            }),
+            ...(audioMimeType && {
+              audioCapabilities: [{ contentType: audioMimeType }],
+            }),
+          },
+        ];
+
+        const access = await navigator.requestMediaKeySystemAccess(
+          "org.w3.clearkey",
+          config,
+        );
+        const keys = await access.createMediaKeys();
+        const videoElement = document.getElementById(
+          "videoPlayer",
+        ) as HTMLVideoElement;
+        await videoElement.setMediaKeys(keys);
+        const session = videoElement.mediaKeys?.createSession();
+        if (!session) {
+          this.logger.error("Failed to create MediaKeySession");
+          return false;
+        }
+        session.addEventListener("message", (msg) =>
+          this.handleMessage(
+            msg as MediaKeyMessageEvent,
+            session,
+            contentProtection,
+          ),
+        );
+        session.addEventListener("keystatuseschange", () =>
+          this.logKeyStatusChange(session, track),
+        );
+        const pssh =
+          track?.contentProtection?.drmSystems?.[
+            "1077efec-c0b2-4d02-ace3-3c1e52e2fb4b"
+          ]?.pssh;
+        if (!pssh) {
+          this.logger.error("Failed to find PSSH for Common System ID");
+          return false;
+        }
+        const initData = this.base64URLToArrayBuffer(pssh);
+        this.logger.info("initData", initData);
+        await session.generateRequest("cenc", initData);
+      }
+      return true;
+    } catch (e) {
+      this.logger.error(`EME Initialization failed: ${e}`);
+      return false;
+    }
+  }
+
+  private logKeyStatusChange(session: MediaKeySession, track: WarpTrack) {
+    const statuses: Array<{
+      track: string;
+      keyId: string;
+      status: MediaKeyStatus;
+    }> = [];
+    session.keyStatuses.forEach((status, keyId) => {
+      statuses.push({
+        track: track.name,
+        keyId: this.arrayBufferToBase64Url(keyId),
+        status,
+      });
+    });
+    this.logger.debug("MediaKeySession key status update", statuses);
+  }
+
+  /**
+   * Handles EME session message calls. Makes a request to the DRM license server and passes that response to EME. This function only handles clearkey where the key-ID = decryption key. The publisher also needs to send data that has been decrypted this way.
+   */
+  private async handleMessage(
+    event: MediaKeyMessageEvent,
+    session: MediaKeySession,
+    contentProtection: ContentProtection,
+  ): Promise<void> {
+    const request = JSON.parse(new TextDecoder().decode(event.message)) as {
+      kids: string[];
+    };
+    this.logger.debug("ClearKey request", request);
+
+    if (
+      !contentProtection.drmSystems?.["1077efec-c0b2-4d02-ace3-3c1e52e2fb4b"]
+        ?.license?.url
+    ) {
+      this.logger.error(
+        "ClearKey license URL not configured, cannot request ClearKey license",
+      );
+      return;
+    }
+
+    const licenseUrl =
+      contentProtection.drmSystems["1077efec-c0b2-4d02-ace3-3c1e52e2fb4b"]
+        .license.url;
+    const response = await fetch(licenseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      this.logger.error(`ClearKey request failed: ${response.statusText}`);
+      return;
+    }
+
+    interface clearkeyResponse {
+      kty: string;
+      k: string;
+      kid: string;
+    }
+
+    const { keys } = (await response.json()) as { keys: clearkeyResponse[] };
+
+    if (keys.length === 0) {
+      this.logger.error("No matching ClearKey keys found for requested kids");
+      return;
+    }
+
+    const license = new TextEncoder().encode(JSON.stringify({ keys }));
+    this.logger.debug("ClearKey response", JSON.stringify({ keys }));
+    try {
+      await session.update(license);
+      this.logger.info(
+        "Successfully updated MediaKeySession with ClearKey license",
+      );
+    } catch (e) {
+      this.logger.error(`Failed to update MediaKeySession: ${e}`);
+    }
+  }
+
+  /**
+   * @param codec Codec found in track
+   * @return A full audio mime type. If no codec is specified a default value of mp4a.40.2 is set.
+   */
+  private generateAudioMimeType(codec?: string): string {
+    return `audio/mp4; codecs="${codec || "mp4a.40.2"}"`;
+  }
+
+  /**
+   * Process a media init segment (video, audio, etc.)
+   * @param initData The raw init segment data
+   * @param mediaBuffer The media buffer to use for parsing
+   * @param mediaSegmentBuffer The media segment buffer to use for buffering
+   * @param sourceBuffer The source buffer to use for playback
+   * @param type The type of media (e.g., 'Video', 'Audio')
+   */
+  private processInitSegment(
+    initData: ArrayBuffer,
+    mediaBuffer: MediaBuffer,
+    mediaSegmentBuffer: MediaSegmentBuffer,
+    sourceBuffer: SourceBuffer,
+    type: string,
+  ): void {
+    this.logger.info(`[${type}MediaBuffer] Processing init segment`);
+
+    const trackInfo = mediaBuffer.parseInitSegment(initData);
+    this.logger.info(
+      `[${type}MediaBuffer] Parsed init segment, timescale: ${trackInfo.timescale}`,
+    );
+    mediaSegmentBuffer.setSourceBuffer(sourceBuffer);
+    const initSegmentObj = mediaSegmentBuffer.addInitSegment(initData);
+    mediaSegmentBuffer.appendToSourceBuffer(initSegmentObj);
+
+    this.logger.info(
+      `[${type}MediaBuffer] Added CMAF init segment to MediaSegmentBuffer and SourceBuffer`,
+    );
   }
 
   /**
@@ -1930,9 +2142,7 @@ export class Player {
       );
 
       // Create video source buffer
-      const videoMimeType = `video/mp4; codecs="${
-        track.codec || "avc3.640028"
-      }"`;
+      const videoMimeType = this.generateVideoMimeType(track.codec);
       this.logger.debug(
         `[SharedMediaSource] Using video mimeType: ${videoMimeType}`,
       );
@@ -2009,35 +2219,29 @@ export class Player {
           !this.videoSourceBuffer
         ) {
           this.logger.error(
-            "Video media buffers or source buffer not initialized",
+            `[Video] Initialization failed. Missing: ${[
+              !this.videoMediaBuffer && "MediaBuffer",
+              !this.videoMediaSegmentBuffer && "SegmentBuffer",
+              !this.videoSourceBuffer && "SourceBuffer",
+            ]
+              .filter(Boolean)
+              .join(", ")}`,
           );
           return;
         }
 
-        // Parse the init segment with videoMediaBuffer to get timing info
-        const videoTrackInfo =
-          this.videoMediaBuffer.parseInitSegment(videoInitSegment);
-        this.logger.info(
-          `[VideoMediaBuffer] Parsed init segment, timescale: ${videoTrackInfo.timescale}`,
-        );
-
-        // Set the source buffer in the videoMediaSegmentBuffer
-        this.videoMediaSegmentBuffer.setSourceBuffer(this.videoSourceBuffer);
-
-        // Add the init segment to the video media segment buffer
-        const videoInitSegmentObj =
-          this.videoMediaSegmentBuffer.addInitSegment(videoInitSegment);
-
-        // Append to video source buffer via mediaSegmentBuffer
-        this.videoMediaSegmentBuffer.appendToSourceBuffer(videoInitSegmentObj);
-
-        this.logger.info(
-          "Added video CMAF init segment to MediaSegmentBuffer and SourceBuffer",
+        this.processInitSegment(
+          videoInitSegment,
+          this.videoMediaBuffer,
+          this.videoMediaSegmentBuffer,
+          this.videoSourceBuffer,
+          "Video",
         );
       } catch (e) {
         this.logger.error(
-          "Failed to process video CMAF init segment: " +
-            (e instanceof Error ? e.message : String(e)),
+          `[VideoInitSegment] Failed to process audio CMAF init segment: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
         );
         return;
       }
@@ -2332,6 +2536,29 @@ export class Player {
     return bytes.buffer;
   }
 
+  private base64URLToArrayBuffer(base64url: string): ArrayBuffer {
+    let base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    while (base64.length % 4 !== 0) {
+      base64 += "=";
+    }
+    return this.base64ToArrayBuffer(base64);
+  }
+
+  private arrayBufferToBase64Url(buffer: BufferSource): string {
+    const bytes =
+      buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer)
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  }
+
   /**
    * Subscribe to a track
    * @param track The track to subscribe to
@@ -2472,9 +2699,7 @@ export class Player {
     }
 
     // Create audio source buffer
-    const audioMimeType = `audio/mp4; codecs="${
-      this.audioTrack.codec || "mp4a.40.2"
-    }"`;
+    const audioMimeType = this.generateAudioMimeType(this.audioTrack.codec);
     this.logger.info(
       `[AudioSourceBuffer] Using audio mimeType: ${audioMimeType}`,
     );
@@ -2551,27 +2776,29 @@ export class Player {
         `[AudioInitSegment] Decoded init segment: ${audioInitSegment.byteLength} bytes`,
       );
 
-      if (!this.audioMediaBuffer) {
+      if (
+        !this.audioMediaBuffer ||
+        !this.audioMediaSegmentBuffer ||
+        !this.audioSourceBuffer
+      ) {
         this.logger.info(
-          "[AudioMediaBuffer] Audio media buffer not initialized",
+          `[Audio] Initialization failed. Missing: ${[
+            !this.audioMediaBuffer && "MediaBuffer",
+            !this.audioMediaSegmentBuffer && "SegmentBuffer",
+            !this.audioSourceBuffer && "SourceBuffer",
+          ]
+            .filter(Boolean)
+            .join(", ")}`,
         );
         return;
       }
 
-      // Parse the init segment to get timing info
-      const audioTrackInfo =
-        this.audioMediaBuffer.parseInitSegment(audioInitSegment);
-      this.logger.info(
-        `[AudioMediaBuffer] Parsed init segment, timescale: ${audioTrackInfo.timescale}`,
-      );
-
-      // Add to MediaSegmentBuffer and process
-      const audioInitSegmentObj =
-        this.audioMediaSegmentBuffer.addInitSegment(audioInitSegment);
-      this.audioMediaSegmentBuffer.appendToSourceBuffer(audioInitSegmentObj);
-
-      this.logger.info(
-        "[AudioInitSegment] Added audio CMAF init segment to MediaSegmentBuffer and SourceBuffer",
+      this.processInitSegment(
+        audioInitSegment,
+        this.audioMediaBuffer,
+        this.audioMediaSegmentBuffer,
+        this.audioSourceBuffer,
+        "Audio",
       );
 
       // Subscribe to the audio track now that we're ready to receive data
