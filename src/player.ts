@@ -2,7 +2,13 @@ import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
 import { Client } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
-import { WarpCatalog, WarpTrack, WarpCatalogManager } from "./warpcatalog";
+import {
+  WarpCatalog,
+  WarpTrack,
+  WarpCatalogManager,
+  ContentProtection,
+  DRMSystem,
+} from "./warpcatalog";
 
 /**
  * Player class for handling MOQ transport connections, MSF/CMSF track subscriptions, and UI updates.
@@ -59,6 +65,24 @@ export class Player {
   private maxRecoveryAttempts = 3;
   private lastErrorTime = 0;
 
+  //DRM information
+  private widevine = "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed";
+  private playready = "9a04f079-9840-4286-ab92-e65be0885f95";
+  private fairplay = "94ce86fb-07ff-4f43-adb8-93d2fa968ca2";
+  private clearkey = "1077efec-c0b2-4d02-ace3-3c1e52e2fb4b";
+  private drmSystems: Record<string, string> = {
+    [this.widevine]: "widevine",
+    [this.playready]: "playready",
+    [this.fairplay]: "fairplay",
+    [this.clearkey]: "clearkey",
+  };
+  private keySystems: Record<string, string> = {
+    [this.widevine]: "com.widevine.alpha",
+    [this.playready]: "com.microsoft.playready",
+    [this.fairplay]: "com.apple.fps",
+    [this.clearkey]: "org.w3.clearkey",
+  };
+
   /**
    * Create a new Player instance
    * @param serverUrl The URL of the MOQ server
@@ -81,7 +105,6 @@ export class Player {
     this.fingerprintUrl = fingerprintUrl;
     this.tracksContainerEl = tracksContainerEl;
     this.statusEl = statusEl;
-
     // Get logger for Player component
     this.logger = LoggerFactory.getInstance().getLogger("Player");
 
@@ -1822,6 +1845,9 @@ export class Player {
       return;
     }
 
+    let videoTrack: WarpTrack | undefined;
+    let audioTrack: WarpTrack | undefined;
+
     // --- VIDEO PLAYBACK LOGIC ---
     if (hasVideoTrack) {
       const selectedOption = videoSelect.options[videoSelect.selectedIndex];
@@ -1833,7 +1859,7 @@ export class Player {
       );
 
       // Find the video track object from the catalog
-      const videoTrack = this.getTrackFromCatalog(
+      videoTrack = this.getTrackFromCatalog(
         videoNamespace,
         videoTrackName,
         "video",
@@ -1842,9 +1868,7 @@ export class Player {
         this.logger.error("Could not find selected video track in catalog");
         return;
       }
-
-      // Setup MediaSource and SourceBuffer
-      this.setupVideoPlayback(videoTrack);
+      this.logger.info("Video track found in catalog, preparing for setup");
     }
 
     // --- AUDIO PLAYBACK LOGIC ---
@@ -1858,7 +1882,7 @@ export class Player {
       );
 
       // Find the audio track object from the catalog
-      const audioTrack = this.getTrackFromCatalog(
+      audioTrack = this.getTrackFromCatalog(
         audioNamespace,
         audioTrackName,
         "audio",
@@ -1869,9 +1893,20 @@ export class Player {
       }
 
       this.logger.info("Audio track found in catalog, preparing for setup");
+    }
 
-      // Setup MediaSource and SourceBuffer for audio
+    const tracks = [videoTrack, audioTrack].filter(Boolean) as WarpTrack[];
+    const drmSucess = await this.setupDRM(tracks);
+    if (!drmSucess) {
+      return;
+    }
+
+    // Setup MediaSource and SourceBuffer for audio and video
+    if (audioTrack) {
       this.setupAudioPlayback(audioTrack);
+    }
+    if (videoTrack) {
+      this.setupVideoPlayback(videoTrack);
     }
   }
 
@@ -1884,6 +1919,301 @@ export class Player {
     kind: string,
   ): WarpTrack | undefined {
     return this.catalogManager.getTrackFromCatalog(namespace, name, kind);
+  }
+
+  /**
+   * @param codec Codec found in track
+   * @return A full video mime type. If no codec is specified a default value of avc3.640028 is set.
+   */
+  private generateVideoMimeType(codec?: string): string {
+    return `video/mp4; codecs="${codec || "avc3.640028"}"`;
+  }
+
+  private async setupDRM(tracks: WarpTrack[]): Promise<boolean> {
+    try {
+      let candidates: [string, DRMSystem][] = [];
+      let videoMimeType: string | undefined;
+      let audioMimeType: string | undefined;
+      for (const track of tracks) {
+        const contentProtection = track.contentProtection;
+        if (!contentProtection) {
+          continue;
+        }
+        if (track.role === "video") {
+          videoMimeType = this.generateVideoMimeType(track.codec);
+        } else if (track.role === "audio") {
+          audioMimeType = this.generateAudioMimeType(track.codec);
+        }
+
+        candidates = this.selectDRMSystems(contentProtection); //If protected trackse exist, the last's DRM systems is chosen
+        if (candidates.length === 0) {
+          this.logger.error("No drm system found");
+          return false;
+        }
+      }
+      let selectedSystemID: string | null = null;
+      let selectedDrmSystem: DRMSystem | null = null;
+      let selectedInitDataType: string | null = null;
+      let access: MediaKeySystemAccess | null = null;
+
+      for (const [candidateSystemID, candidateDrmSystem] of candidates) {
+        const initDataType =
+          candidateSystemID === this.fairplay ? "sinf" : "cenc";
+        const config: MediaKeySystemConfiguration[] = [
+          {
+            initDataTypes: [initDataType],
+            ...(videoMimeType && {
+              videoCapabilities: [{ contentType: videoMimeType }],
+            }),
+            ...(audioMimeType && {
+              audioCapabilities: [{ contentType: audioMimeType }],
+            }),
+          },
+        ];
+
+        try {
+          access = await navigator.requestMediaKeySystemAccess(
+            this.keySystems[candidateSystemID],
+            config,
+          );
+          selectedSystemID = candidateSystemID;
+          selectedDrmSystem = candidateDrmSystem;
+          selectedInitDataType = initDataType;
+          this.logger.info(
+            `DRM system ${this.drmSystems[candidateSystemID]} selected`,
+          );
+          break;
+        } catch {
+          this.logger.warn(
+            `DRM system ${this.drmSystems[candidateSystemID]} not supported, trying next`,
+          );
+        }
+      }
+
+      if (
+        !access ||
+        !selectedSystemID ||
+        !selectedDrmSystem ||
+        !selectedInitDataType
+      ) {
+        this.logger.error("No supported DRM system found for this track");
+        return false;
+      }
+
+      const keys = await access.createMediaKeys();
+      const videoElement = document.getElementById(
+        "videoPlayer",
+      ) as HTMLVideoElement;
+      await videoElement.setMediaKeys(keys);
+      const session = videoElement.mediaKeys?.createSession();
+      if (!session) {
+        this.logger.error("Failed to create MediaKeySession");
+        return false;
+      }
+
+      session.addEventListener("message", (msg) =>
+        this.handleMessage(
+          msg as MediaKeyMessageEvent,
+          session,
+          selectedDrmSystem,
+          selectedSystemID,
+        ),
+      );
+
+      if (!selectedDrmSystem.pssh) {
+        this.logger.error(
+          `Failed to find PSSH for DRM system ${this.drmSystems[selectedSystemID]}`,
+        );
+        return false;
+      }
+      const initData = this.base64ToArrayBuffer(selectedDrmSystem.pssh);
+      this.logger.info("initData", this.arrayBufferToBase64(initData));
+      await session.generateRequest(selectedInitDataType, initData);
+      return true;
+    } catch (e) {
+      this.logger.error(`EME Initialization failed: ${e}`);
+      return false;
+    }
+  }
+
+  private selectDRMSystems(
+    contentProtection: ContentProtection,
+  ): Array<[string, DRMSystem]> {
+    const systems = contentProtection.drmSystems ?? {};
+    const priority = [
+      this.widevine,
+      this.playready,
+      this.fairplay,
+      this.clearkey,
+    ];
+    const candidates: Array<[string, DRMSystem]> = [];
+    for (const systemID of priority) {
+      if (Object.prototype.hasOwnProperty.call(systems, systemID)) {
+        candidates.push([systemID, systems[systemID]]);
+      }
+    }
+    return candidates;
+  }
+
+  /**
+   * Handles EME session message calls. Makes a request to the DRM license server and passes that response to EME
+   */
+  private async handleMessage(
+    event: MediaKeyMessageEvent,
+    session: MediaKeySession,
+    drmSystem: DRMSystem,
+    systemID: string,
+  ): Promise<void> {
+    const licenseURL = drmSystem.license?.url;
+    if (!licenseURL) {
+      this.logger.error(
+        "License URL not configured, cannot request license server",
+      );
+      return;
+    }
+    let license: BufferSource | undefined;
+    if (systemID === this.widevine) {
+      license = await this.makeWidevineRequest(event, licenseURL);
+    } else if (systemID === this.clearkey) {
+      license = await this.makeClearkeyRequest(event, licenseURL);
+    } else if (systemID === this.playready) {
+      license = await this.makePlayreadyRequest(event, licenseURL);
+    } else if (systemID === this.fairplay) {
+      license = await this.makeFairplayRequest(event, licenseURL);
+    }
+    if (!license) {
+      this.logger.error("No license found.");
+      return;
+    }
+    try {
+      await session.update(license);
+      this.logger.info("Successfully updated MediaKeySession with license");
+    } catch (e) {
+      this.logger.error(`Failed to update MediaKeySession: ${e}`);
+    }
+  }
+
+  private async makeClearkeyRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const request = JSON.parse(new TextDecoder().decode(event.message)) as {
+      kids: string[];
+    };
+    const response = await fetch(licenseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      this.logger.error(`ClearKey request failed: ${response.statusText}`);
+      return;
+    }
+
+    interface clearkeyResponse {
+      kty: string;
+      k: string;
+      kid: string;
+    }
+
+    const { keys } = (await response.json()) as { keys: clearkeyResponse[] };
+
+    if (keys.length === 0) {
+      this.logger.error("No matching ClearKey keys found for requested kids");
+      return;
+    }
+    return new TextEncoder().encode(JSON.stringify({ keys }));
+  }
+
+  private async makeWidevineRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const licenseResponse = await fetch(licenseUrl, {
+      method: "POST",
+      body: event.message,
+    });
+    return await licenseResponse.arrayBuffer();
+  }
+
+  private async makePlayreadyRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const xml = new TextDecoder("utf-16").decode(event.message);
+    const dom = new DOMParser().parseFromString(xml, "application/xml");
+
+    // Extract custom HTTP headers from XML
+    const headers = new Headers();
+    for (const header of Array.from(dom.getElementsByTagName("HttpHeader"))) {
+      //own change might not work.
+      headers.set(
+        header.getElementsByTagName("name")[0].textContent,
+        header.getElementsByTagName("value")[0].textContent,
+      );
+    }
+
+    // Extract and decode the base64 challenge
+    const challenge = dom.getElementsByTagName("Challenge")[0].textContent;
+    const licenseResponse = await fetch(licenseUrl, {
+      method: "POST",
+      headers,
+      body: this.base64ToArrayBuffer(challenge),
+    });
+    return await licenseResponse.arrayBuffer();
+  }
+
+  private async makeFairplayRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const licenseResponse = await fetch(licenseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: event.message,
+    });
+    return await licenseResponse.arrayBuffer(); // Binary CKC
+  }
+
+  /**
+   * @param codec Codec found in track
+   * @return A full audio mime type. If no codec is specified a default value of mp4a.40.2 is set.
+   */
+  private generateAudioMimeType(codec?: string): string {
+    return `audio/mp4; codecs="${codec || "mp4a.40.2"}"`;
+  }
+
+  /**
+   * Process a media init segment (video, audio, etc.)
+   * @param initData The raw init segment data
+   * @param mediaBuffer The media buffer to use for parsing
+   * @param mediaSegmentBuffer The media segment buffer to use for buffering
+   * @param sourceBuffer The source buffer to use for playback
+   * @param type The type of media (e.g., 'Video', 'Audio')
+   */
+  private processInitSegment(
+    initData: ArrayBuffer,
+    mediaBuffer: MediaBuffer,
+    mediaSegmentBuffer: MediaSegmentBuffer,
+    sourceBuffer: SourceBuffer,
+    type: string,
+  ): void {
+    this.logger.info(`[${type}MediaBuffer] Processing init segment`);
+
+    const trackInfo = mediaBuffer.parseInitSegment(initData);
+    this.logger.info(
+      `[${type}MediaBuffer] Parsed init segment, timescale: ${trackInfo.timescale}`,
+    );
+    mediaSegmentBuffer.setSourceBuffer(sourceBuffer);
+    const initSegmentObj = mediaSegmentBuffer.addInitSegment(initData);
+    mediaSegmentBuffer.appendToSourceBuffer(initSegmentObj);
+
+    this.logger.info(
+      `[${type}MediaBuffer] Added CMAF init segment to MediaSegmentBuffer and SourceBuffer`,
+    );
   }
 
   /**
@@ -1930,9 +2260,7 @@ export class Player {
       );
 
       // Create video source buffer
-      const videoMimeType = `video/mp4; codecs="${
-        track.codec || "avc3.640028"
-      }"`;
+      const videoMimeType = this.generateVideoMimeType(track.codec);
       this.logger.debug(
         `[SharedMediaSource] Using video mimeType: ${videoMimeType}`,
       );
@@ -2009,35 +2337,29 @@ export class Player {
           !this.videoSourceBuffer
         ) {
           this.logger.error(
-            "Video media buffers or source buffer not initialized",
+            `[Video] Initialization failed. Missing: ${[
+              !this.videoMediaBuffer && "MediaBuffer",
+              !this.videoMediaSegmentBuffer && "SegmentBuffer",
+              !this.videoSourceBuffer && "SourceBuffer",
+            ]
+              .filter(Boolean)
+              .join(", ")}`,
           );
           return;
         }
 
-        // Parse the init segment with videoMediaBuffer to get timing info
-        const videoTrackInfo =
-          this.videoMediaBuffer.parseInitSegment(videoInitSegment);
-        this.logger.info(
-          `[VideoMediaBuffer] Parsed init segment, timescale: ${videoTrackInfo.timescale}`,
-        );
-
-        // Set the source buffer in the videoMediaSegmentBuffer
-        this.videoMediaSegmentBuffer.setSourceBuffer(this.videoSourceBuffer);
-
-        // Add the init segment to the video media segment buffer
-        const videoInitSegmentObj =
-          this.videoMediaSegmentBuffer.addInitSegment(videoInitSegment);
-
-        // Append to video source buffer via mediaSegmentBuffer
-        this.videoMediaSegmentBuffer.appendToSourceBuffer(videoInitSegmentObj);
-
-        this.logger.info(
-          "Added video CMAF init segment to MediaSegmentBuffer and SourceBuffer",
+        this.processInitSegment(
+          videoInitSegment,
+          this.videoMediaBuffer,
+          this.videoMediaSegmentBuffer,
+          this.videoSourceBuffer,
+          "Video",
         );
       } catch (e) {
         this.logger.error(
-          "Failed to process video CMAF init segment: " +
-            (e instanceof Error ? e.message : String(e)),
+          `[VideoInitSegment] Failed to process audio CMAF init segment: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
         );
         return;
       }
@@ -2332,6 +2654,41 @@ export class Player {
     return bytes.buffer;
   }
 
+  private base64URLToArrayBuffer(base64url: string): ArrayBuffer {
+    let base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    while (base64.length % 4 !== 0) {
+      base64 += "=";
+    }
+    return this.base64ToArrayBuffer(base64);
+  }
+
+  private arrayBufferToBase64Url(buffer: BufferSource): string {
+    const bytes =
+      buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer)
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  }
+
+  private arrayBufferToBase64(buffer: BufferSource): string {
+    const bytes =
+      buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer)
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/=+$/, "");
+  }
+
   /**
    * Subscribe to a track
    * @param track The track to subscribe to
@@ -2472,9 +2829,7 @@ export class Player {
     }
 
     // Create audio source buffer
-    const audioMimeType = `audio/mp4; codecs="${
-      this.audioTrack.codec || "mp4a.40.2"
-    }"`;
+    const audioMimeType = this.generateAudioMimeType(this.audioTrack.codec);
     this.logger.info(
       `[AudioSourceBuffer] Using audio mimeType: ${audioMimeType}`,
     );
@@ -2551,27 +2906,29 @@ export class Player {
         `[AudioInitSegment] Decoded init segment: ${audioInitSegment.byteLength} bytes`,
       );
 
-      if (!this.audioMediaBuffer) {
+      if (
+        !this.audioMediaBuffer ||
+        !this.audioMediaSegmentBuffer ||
+        !this.audioSourceBuffer
+      ) {
         this.logger.info(
-          "[AudioMediaBuffer] Audio media buffer not initialized",
+          `[Audio] Initialization failed. Missing: ${[
+            !this.audioMediaBuffer && "MediaBuffer",
+            !this.audioMediaSegmentBuffer && "SegmentBuffer",
+            !this.audioSourceBuffer && "SourceBuffer",
+          ]
+            .filter(Boolean)
+            .join(", ")}`,
         );
         return;
       }
 
-      // Parse the init segment to get timing info
-      const audioTrackInfo =
-        this.audioMediaBuffer.parseInitSegment(audioInitSegment);
-      this.logger.info(
-        `[AudioMediaBuffer] Parsed init segment, timescale: ${audioTrackInfo.timescale}`,
-      );
-
-      // Add to MediaSegmentBuffer and process
-      const audioInitSegmentObj =
-        this.audioMediaSegmentBuffer.addInitSegment(audioInitSegment);
-      this.audioMediaSegmentBuffer.appendToSourceBuffer(audioInitSegmentObj);
-
-      this.logger.info(
-        "[AudioInitSegment] Added audio CMAF init segment to MediaSegmentBuffer and SourceBuffer",
+      this.processInitSegment(
+        audioInitSegment,
+        this.audioMediaBuffer,
+        this.audioMediaSegmentBuffer,
+        this.audioSourceBuffer,
+        "Audio",
       );
 
       // Subscribe to the audio track now that we're ready to receive data
