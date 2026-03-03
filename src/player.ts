@@ -7,6 +7,7 @@ import {
   WarpTrack,
   WarpCatalogManager,
   ContentProtection,
+  DRMSystem,
 } from "./warpcatalog";
 
 /**
@@ -64,6 +65,24 @@ export class Player {
   private maxRecoveryAttempts = 3;
   private lastErrorTime = 0;
 
+  //DRM information
+  private widevine = "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed";
+  private playready = "9a04f079-9840-4286-ab92-e65be0885f95";
+  private fairplay = "94ce86fb-07ff-4f43-adb8-93d2fa968ca2";
+  private clearkey = "1077efec-c0b2-4d02-ace3-3c1e52e2fb4b";
+  private drmSystems: Record<string, string> = {
+    [this.widevine]: "widevine",
+    [this.playready]: "playready",
+    [this.fairplay]: "fairplay",
+    [this.clearkey]: "clearkey",
+  };
+  private keySystems: Record<string, string> = {
+    [this.widevine]: "com.widevine.alpha",
+    [this.playready]: "com.microsoft.playready",
+    [this.fairplay]: "com.apple.fps",
+    [this.clearkey]: "org.w3.clearkey",
+  };
+
   /**
    * Create a new Player instance
    * @param serverUrl The URL of the MOQ server
@@ -86,7 +105,6 @@ export class Player {
     this.fingerprintUrl = fingerprintUrl;
     this.tracksContainerEl = tracksContainerEl;
     this.statusEl = statusEl;
-
     // Get logger for Player component
     this.logger = LoggerFactory.getInstance().getLogger("Player");
 
@@ -1913,21 +1931,37 @@ export class Player {
 
   private async setupDRM(tracks: WarpTrack[]): Promise<boolean> {
     try {
+      let candidates: [string, DRMSystem][] = [];
+      let videoMimeType: string | undefined;
+      let audioMimeType: string | undefined;
       for (const track of tracks) {
         const contentProtection = track.contentProtection;
         if (!contentProtection) {
           continue;
         }
-        let videoMimeType: string | undefined = undefined;
-        let audioMimeType: string | undefined = undefined;
         if (track.role === "video") {
           videoMimeType = this.generateVideoMimeType(track.codec);
         } else if (track.role === "audio") {
           audioMimeType = this.generateAudioMimeType(track.codec);
         }
+
+        candidates = this.selectDRMSystems(contentProtection); //If protected trackse exist, the last's DRM systems is chosen
+        if (candidates.length === 0) {
+          this.logger.error("No drm system found");
+          return false;
+        }
+      }
+      let selectedSystemID: string | null = null;
+      let selectedDrmSystem: DRMSystem | null = null;
+      let selectedInitDataType: string | null = null;
+      let access: MediaKeySystemAccess | null = null;
+
+      for (const [candidateSystemID, candidateDrmSystem] of candidates) {
+        const initDataType =
+          candidateSystemID === this.fairplay ? "sinf" : "cenc";
         const config: MediaKeySystemConfiguration[] = [
           {
-            initDataTypes: ["cenc"],
+            initDataTypes: [initDataType],
             ...(videoMimeType && {
               videoCapabilities: [{ contentType: videoMimeType }],
             }),
@@ -1937,42 +1971,64 @@ export class Player {
           },
         ];
 
-        const access = await navigator.requestMediaKeySystemAccess(
-          "org.w3.clearkey",
-          config,
-        );
-        const keys = await access.createMediaKeys();
-        const videoElement = document.getElementById(
-          "videoPlayer",
-        ) as HTMLVideoElement;
-        await videoElement.setMediaKeys(keys);
-        const session = videoElement.mediaKeys?.createSession();
-        if (!session) {
-          this.logger.error("Failed to create MediaKeySession");
-          return false;
+        try {
+          access = await navigator.requestMediaKeySystemAccess(
+            this.keySystems[candidateSystemID],
+            config,
+          );
+          selectedSystemID = candidateSystemID;
+          selectedDrmSystem = candidateDrmSystem;
+          selectedInitDataType = initDataType;
+          this.logger.info(
+            `DRM system ${this.drmSystems[candidateSystemID]} selected`,
+          );
+          break;
+        } catch {
+          this.logger.warn(
+            `DRM system ${this.drmSystems[candidateSystemID]} not supported, trying next`,
+          );
         }
-        session.addEventListener("message", (msg) =>
-          this.handleMessage(
-            msg as MediaKeyMessageEvent,
-            session,
-            contentProtection,
-          ),
-        );
-        session.addEventListener("keystatuseschange", () =>
-          this.logKeyStatusChange(session, track),
-        );
-        const pssh =
-          track?.contentProtection?.drmSystems?.[
-            "1077efec-c0b2-4d02-ace3-3c1e52e2fb4b"
-          ]?.pssh;
-        if (!pssh) {
-          this.logger.error("Failed to find PSSH for Common System ID");
-          return false;
-        }
-        const initData = this.base64URLToArrayBuffer(pssh);
-        this.logger.info("initData", initData);
-        await session.generateRequest("cenc", initData);
       }
+
+      if (
+        !access ||
+        !selectedSystemID ||
+        !selectedDrmSystem ||
+        !selectedInitDataType
+      ) {
+        this.logger.error("No supported DRM system found for this track");
+        return false;
+      }
+
+      const keys = await access.createMediaKeys();
+      const videoElement = document.getElementById(
+        "videoPlayer",
+      ) as HTMLVideoElement;
+      await videoElement.setMediaKeys(keys);
+      const session = videoElement.mediaKeys?.createSession();
+      if (!session) {
+        this.logger.error("Failed to create MediaKeySession");
+        return false;
+      }
+
+      session.addEventListener("message", (msg) =>
+        this.handleMessage(
+          msg as MediaKeyMessageEvent,
+          session,
+          selectedDrmSystem,
+          selectedSystemID,
+        ),
+      );
+
+      if (!selectedDrmSystem.pssh) {
+        this.logger.error(
+          `Failed to find PSSH for DRM system ${this.drmSystems[selectedSystemID]}`,
+        );
+        return false;
+      }
+      const initData = this.base64ToArrayBuffer(selectedDrmSystem.pssh);
+      this.logger.info("initData", this.arrayBufferToBase64(initData));
+      await session.generateRequest(selectedInitDataType, initData);
       return true;
     } catch (e) {
       this.logger.error(`EME Initialization failed: ${e}`);
@@ -1980,48 +2036,70 @@ export class Player {
     }
   }
 
-  private logKeyStatusChange(session: MediaKeySession, track: WarpTrack) {
-    const statuses: Array<{
-      track: string;
-      keyId: string;
-      status: MediaKeyStatus;
-    }> = [];
-    session.keyStatuses.forEach((status, keyId) => {
-      statuses.push({
-        track: track.name,
-        keyId: this.arrayBufferToBase64Url(keyId),
-        status,
-      });
-    });
-    this.logger.debug("MediaKeySession key status update", statuses);
+  private selectDRMSystems(
+    contentProtection: ContentProtection,
+  ): Array<[string, DRMSystem]> {
+    const systems = contentProtection.drmSystems ?? {};
+    const priority = [
+      this.widevine,
+      this.playready,
+      this.fairplay,
+      this.clearkey,
+    ];
+    const candidates: Array<[string, DRMSystem]> = [];
+    for (const systemID of priority) {
+      if (Object.prototype.hasOwnProperty.call(systems, systemID)) {
+        candidates.push([systemID, systems[systemID]]);
+      }
+    }
+    return candidates;
   }
 
   /**
-   * Handles EME session message calls. Makes a request to the DRM license server and passes that response to EME. This function only handles clearkey where the key-ID = decryption key. The publisher also needs to send data that has been decrypted this way.
+   * Handles EME session message calls. Makes a request to the DRM license server and passes that response to EME
    */
   private async handleMessage(
     event: MediaKeyMessageEvent,
     session: MediaKeySession,
-    contentProtection: ContentProtection,
+    drmSystem: DRMSystem,
+    systemID: string,
   ): Promise<void> {
-    const request = JSON.parse(new TextDecoder().decode(event.message)) as {
-      kids: string[];
-    };
-    this.logger.debug("ClearKey request", request);
-
-    if (
-      !contentProtection.drmSystems?.["1077efec-c0b2-4d02-ace3-3c1e52e2fb4b"]
-        ?.license?.url
-    ) {
+    const licenseURL = drmSystem.license?.url;
+    if (!licenseURL) {
       this.logger.error(
-        "ClearKey license URL not configured, cannot request ClearKey license",
+        "License URL not configured, cannot request license server",
       );
       return;
     }
+    let license: BufferSource | undefined;
+    if (systemID === this.widevine) {
+      license = await this.makeWidevineRequest(event, licenseURL);
+    } else if (systemID === this.clearkey) {
+      license = await this.makeClearkeyRequest(event, licenseURL);
+    } else if (systemID === this.playready) {
+      license = await this.makePlayreadyRequest(event, licenseURL);
+    } else if (systemID === this.fairplay) {
+      license = await this.makeFairplayRequest(event, licenseURL);
+    }
+    if (!license) {
+      this.logger.error("No license found.");
+      return;
+    }
+    try {
+      await session.update(license);
+      this.logger.info("Successfully updated MediaKeySession with license");
+    } catch (e) {
+      this.logger.error(`Failed to update MediaKeySession: ${e}`);
+    }
+  }
 
-    const licenseUrl =
-      contentProtection.drmSystems["1077efec-c0b2-4d02-ace3-3c1e52e2fb4b"]
-        .license.url;
+  private async makeClearkeyRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const request = JSON.parse(new TextDecoder().decode(event.message)) as {
+      kids: string[];
+    };
     const response = await fetch(licenseUrl, {
       method: "POST",
       headers: {
@@ -2047,17 +2125,57 @@ export class Player {
       this.logger.error("No matching ClearKey keys found for requested kids");
       return;
     }
+    return new TextEncoder().encode(JSON.stringify({ keys }));
+  }
 
-    const license = new TextEncoder().encode(JSON.stringify({ keys }));
-    this.logger.debug("ClearKey response", JSON.stringify({ keys }));
-    try {
-      await session.update(license);
-      this.logger.info(
-        "Successfully updated MediaKeySession with ClearKey license",
+  private async makeWidevineRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const licenseResponse = await fetch(licenseUrl, {
+      method: "POST",
+      body: event.message,
+    });
+    return await licenseResponse.arrayBuffer();
+  }
+
+  private async makePlayreadyRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const xml = new TextDecoder("utf-16").decode(event.message);
+    const dom = new DOMParser().parseFromString(xml, "application/xml");
+
+    // Extract custom HTTP headers from XML
+    const headers = new Headers();
+    for (const header of Array.from(dom.getElementsByTagName("HttpHeader"))) {
+      //own change might not work.
+      headers.set(
+        header.getElementsByTagName("name")[0].textContent,
+        header.getElementsByTagName("value")[0].textContent,
       );
-    } catch (e) {
-      this.logger.error(`Failed to update MediaKeySession: ${e}`);
     }
+
+    // Extract and decode the base64 challenge
+    const challenge = dom.getElementsByTagName("Challenge")[0].textContent;
+    const licenseResponse = await fetch(licenseUrl, {
+      method: "POST",
+      headers,
+      body: this.base64ToArrayBuffer(challenge),
+    });
+    return await licenseResponse.arrayBuffer();
+  }
+
+  private async makeFairplayRequest(
+    event: MediaKeyMessageEvent,
+    licenseUrl: string,
+  ): Promise<BufferSource | undefined> {
+    const licenseResponse = await fetch(licenseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: event.message,
+    });
+    return await licenseResponse.arrayBuffer(); // Binary CKC
   }
 
   /**
@@ -2557,6 +2675,18 @@ export class Player {
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
+  }
+
+  private arrayBufferToBase64(buffer: BufferSource): string {
+    const bytes =
+      buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer)
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/=+$/, "");
   }
 
   /**
