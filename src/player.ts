@@ -1894,11 +1894,19 @@ export class Player {
 
       this.logger.info("Audio track found in catalog, preparing for setup");
     }
-
-    const tracks = [videoTrack, audioTrack].filter(Boolean) as WarpTrack[];
-    const drmSucess = await this.setupDRM(tracks);
-    if (!drmSucess) {
-      return;
+    const tracks = [videoTrack, audioTrack].filter(
+      (track) => track?.contentProtectionRefIDs !== undefined,
+    ) as WarpTrack[];
+    if (
+      this.catalogManager.getCatalog()?.contentProtections &&
+      tracks.length > 0
+    ) {
+      const drmSucess = await this.setupDRM(tracks);
+      if (!drmSucess) {
+        return;
+      }
+    } else {
+      this.logger.info("DRM information not found, skipping DRM setup");
     }
 
     // Setup MediaSource and SourceBuffer for audio and video
@@ -1929,14 +1937,18 @@ export class Player {
     return `video/mp4; codecs="${codec || "avc3.640028"}"`;
   }
 
+  /**
+   * @param tracks A list containing at most a video and audio warp track. The tracks are required to be protected.
+   * @returns
+   */
   private async setupDRM(tracks: WarpTrack[]): Promise<boolean> {
     try {
-      let candidates: [string, DRMSystem][] = [];
+      let candidates: ContentProtection[] = [];
       let videoMimeType: string | undefined;
       let audioMimeType: string | undefined;
       for (const track of tracks) {
-        const contentProtection = track.contentProtection;
-        if (!contentProtection) {
+        const refIDs = track.contentProtectionRefIDs;
+        if (!refIDs) {
           continue;
         }
         if (track.role === "video") {
@@ -1945,7 +1957,8 @@ export class Player {
           audioMimeType = this.generateAudioMimeType(track.codec);
         }
 
-        candidates = this.selectDRMSystems(contentProtection); //If protected trackse exist, the last's DRM systems is chosen
+        candidates = this.selectContentProtections(refIDs); //If several protected tracks exist, the last's DRM systems is chosen
+        this.logger.info("candidates", candidates);
         if (candidates.length === 0) {
           this.logger.error("No drm system found");
           return false;
@@ -1956,9 +1969,9 @@ export class Player {
       let selectedInitDataType: string | null = null;
       let access: MediaKeySystemAccess | null = null;
 
-      for (const [candidateSystemID, candidateDrmSystem] of candidates) {
+      for (const candidate of candidates) {
         const initDataType =
-          candidateSystemID === this.fairplay ? "sinf" : "cenc";
+          candidate.drmSystem.systemID === this.fairplay ? "sinf" : "cenc";
         const config: MediaKeySystemConfiguration[] = [
           {
             initDataTypes: [initDataType],
@@ -1972,21 +1985,26 @@ export class Player {
         ];
 
         try {
+          if (!candidate.drmSystem.systemID) {
+            this.logger.error("DRM system SystemID is undefined, trying next");
+            continue;
+          }
           access = await navigator.requestMediaKeySystemAccess(
-            this.keySystems[candidateSystemID],
+            this.keySystems[candidate.drmSystem.systemID],
             config,
           );
-          selectedSystemID = candidateSystemID;
-          selectedDrmSystem = candidateDrmSystem;
+          selectedSystemID = candidate.drmSystem.systemID;
+          selectedDrmSystem = candidate.drmSystem;
           selectedInitDataType = initDataType;
           this.logger.info(
-            `DRM system ${this.drmSystems[candidateSystemID]} selected`,
+            `DRM system ${this.drmSystems[selectedSystemID]} selected`,
           );
           break;
         } catch {
           this.logger.warn(
-            `DRM system ${this.drmSystems[candidateSystemID]} not supported, trying next`,
+            `DRM system ${this.drmSystems[selectedSystemID!]} not supported, trying next`,
           );
+          continue;
         }
       }
 
@@ -1996,7 +2014,7 @@ export class Player {
         !selectedDrmSystem ||
         !selectedInitDataType
       ) {
-        this.logger.error("No supported DRM system found for this track");
+        this.logger.error("No supported DRM system found");
         return false;
       }
 
@@ -2036,23 +2054,22 @@ export class Player {
     }
   }
 
-  private selectDRMSystems(
-    contentProtection: ContentProtection,
-  ): Array<[string, DRMSystem]> {
-    const systems = contentProtection.drmSystems ?? {};
-    const priority = [
-      this.widevine,
-      this.playready,
-      this.fairplay,
-      this.clearkey,
-    ];
-    const candidates: Array<[string, DRMSystem]> = [];
-    for (const systemID of priority) {
-      if (Object.prototype.hasOwnProperty.call(systems, systemID)) {
-        candidates.push([systemID, systems[systemID]]);
+  /**
+   * Match contentProtectionRefIDs from the track, to the corresponding contenProtections refIDs
+   */
+  private selectContentProtections(refIDs: string[]): Array<ContentProtection> {
+    const protections: Array<ContentProtection> = [];
+    for (const refID of refIDs) {
+      const cps = this.catalogManager.getCatalog()?.contentProtections;
+      if (cps) {
+        for (const cp of cps) {
+          if (refID === cp.refID) {
+            protections.push(cp);
+          }
+        }
       }
     }
-    return candidates;
+    return protections;
   }
 
   /**
@@ -2064,7 +2081,7 @@ export class Player {
     drmSystem: DRMSystem,
     systemID: string,
   ): Promise<void> {
-    const licenseURL = drmSystem.license?.url;
+    const licenseURL = drmSystem.laURL?.url;
     if (!licenseURL) {
       this.logger.error(
         "License URL not configured, cannot request license server",
@@ -2149,7 +2166,6 @@ export class Player {
     // Extract custom HTTP headers from XML
     const headers = new Headers();
     for (const header of Array.from(dom.getElementsByTagName("HttpHeader"))) {
-      //own change might not work.
       headers.set(
         header.getElementsByTagName("name")[0].textContent,
         header.getElementsByTagName("value")[0].textContent,
