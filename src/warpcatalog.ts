@@ -29,6 +29,8 @@ export interface WarpCatalog {
   cloneTracks?: WarpTrack[];
   /** Array of track objects. Required for non-delta updates. */
   tracks: WarpTrack[];
+  /**DRM information that tracks reference */
+  contentProtections?: ContentProtection[];
 }
 
 /**
@@ -90,8 +92,8 @@ export interface WarpTrack {
   trackDuration?: number;
   /** Event type, required when packaging is "eventtimeline". */
   eventType?: string;
-  /** DRM-related information for protected tracks. */
-  contentProtection?: ContentProtection;
+  /** References to DRM-related information in the contentProtections field in the root-level catalog*/
+  contentProtectionRefIDs?: string[];
   /** Parent track name for cloned tracks (only in cloneTracks). */
   parentName?: string;
   [key: string]: any; // For future/custom fields
@@ -99,15 +101,19 @@ export interface WarpTrack {
 
 /** DRM information for a track. */
 export interface ContentProtection {
-  scheme?: string;
+  refID?: string;
   defaultKIDs?: string[];
-  drmSystems?: Record<string, DRMSystem>;
+  scheme?: string;
+  drmSystem: DRMSystem;
 }
 
 /** A specific DRM system configuration. */
 export interface DRMSystem {
-  license?: DRMService;
-  authorization?: DRMService;
+  systemID?: string;
+  robustness?: string;
+  laURL?: DRMService;
+  authzURL?: DRMService;
+  certURL?: DRMService;
   pssh?: string;
 }
 

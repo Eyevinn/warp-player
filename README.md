@@ -28,9 +28,10 @@ This project implements a media player that:
 2. Subscribes to and parses WARP catalogs for available media
 3. Subscribes to selected media tracks through MOQ transport protocol
 4. Receives media segments in CMAF format through the MOQ protocol
-5. Uses Media Source Extensions (MSE) to decode and play media content
-6. Provides adaptive buffer management for smooth playback experience
-7. This player is intended to work towards [moqlivemock][moqlivemock] publisher
+5. (Optional) Uses EME to handle decryption of protected content
+6. Uses Media Source Extensions (MSE) to decode and play media content
+7. Provides adaptive buffer management for smooth playback experience
+8. This player is intended to work towards [moqlivemock][moqlivemock] publisher and the moqliemock catalog is the only DRM implementation supported
 
 ## Requirements
 
@@ -203,6 +204,7 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 - Synchronized audio and video playback with automatic recovery
 - Configurable logging with support for debug, info, warn, and error levels
 - Clean and intuitive UI with real-time buffer and latency monitoring
+- DRM support for Widevine & ClearKey, with experimental support for PlayReady (since DRM isn't standardised, only the moqlivemock implementation is supported)
 
 ## Buffer Control Algorithm
 
