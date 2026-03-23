@@ -1,3 +1,9 @@
+import {
+  isWidevineSupported,
+  isPlayreadySupported,
+  isFairplaySupported,
+} from "@eyevinn/is-drm-supported";
+
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
 import { Client } from "./transport/client";
@@ -1931,10 +1937,13 @@ export class Player {
 
   /**
    * @param codec Codec found in track
-   * @return A full video mime type. If no codec is specified a default value of avc3.640028 is set.
+   * @return A full video mime type.
    */
   private generateVideoMimeType(codec?: string): string {
-    return `video/mp4; codecs="${codec || "avc3.640028"}"`;
+    if (!codec) {
+      throw new Error("Video codec is required but was not provided");
+    }
+    return `video/mp4; codecs="${codec}"`;
   }
 
   /**
@@ -1957,7 +1966,7 @@ export class Player {
           audioMimeType = this.generateAudioMimeType(track.codec);
         }
 
-        candidates = this.selectContentProtections(refIDs); //If several protected tracks exist, the last's DRM systems is chosen
+        candidates = this.selectContentProtections(refIDs); //If several protected tracks exist, the last's DRM systems are chosen
         this.logger.info("candidates", candidates);
         if (candidates.length === 0) {
           this.logger.error("No drm system found");
@@ -1970,6 +1979,29 @@ export class Player {
       let access: MediaKeySystemAccess | null = null;
 
       for (const candidate of candidates) {
+        if (!candidate.drmSystem.systemID) {
+          this.logger.error("DRM system SystemID is undefined, trying next");
+          continue;
+        }
+        let drmSystemSupported = false;
+        switch (candidate.drmSystem.systemID) {
+          case this.widevine:
+            drmSystemSupported = await isWidevineSupported();
+            break;
+          case this.playready:
+            drmSystemSupported = await isPlayreadySupported();
+            break;
+          case this.fairplay:
+            drmSystemSupported = await isFairplaySupported();
+            break;
+        }
+        if (!drmSystemSupported) {
+          this.logger.info(
+            `DRM system ${this.drmSystems[candidate.drmSystem.systemID]} not supported, trying next.`,
+          );
+          continue;
+        }
+
         const initDataType =
           candidate.drmSystem.systemID === this.fairplay ? "sinf" : "cenc";
         const config: MediaKeySystemConfiguration[] = [
@@ -1985,10 +2017,6 @@ export class Player {
         ];
 
         try {
-          if (!candidate.drmSystem.systemID) {
-            this.logger.error("DRM system SystemID is undefined, trying next");
-            continue;
-          }
           access = await navigator.requestMediaKeySystemAccess(
             this.keySystems[candidate.drmSystem.systemID],
             config,
@@ -2001,10 +2029,10 @@ export class Player {
           );
           break;
         } catch {
-          this.logger.warn(
-            `DRM system ${this.drmSystems[selectedSystemID!]} not supported, trying next`,
-          );
-          continue;
+          const systemName = selectedSystemID
+            ? this.drmSystems[selectedSystemID]
+            : candidate.drmSystem.systemID;
+          this.logger.error(`Unable to setup DRM system ${systemName}`);
         }
       }
 
@@ -2196,10 +2224,13 @@ export class Player {
 
   /**
    * @param codec Codec found in track
-   * @return A full audio mime type. If no codec is specified a default value of mp4a.40.2 is set.
+   * @return A full audio mime type.
    */
   private generateAudioMimeType(codec?: string): string {
-    return `audio/mp4; codecs="${codec || "mp4a.40.2"}"`;
+    if (!codec) {
+      throw new Error("Audio codec is required but was not provided");
+    }
+    return `audio/mp4; codecs="${codec}"`;
   }
 
   /**
@@ -2275,17 +2306,17 @@ export class Player {
         `[SharedMediaSource] sourceopen - readyState: ${this.sharedMediaSource?.readyState}`,
       );
 
-      // Create video source buffer
-      const videoMimeType = this.generateVideoMimeType(track.codec);
-      this.logger.debug(
-        `[SharedMediaSource] Using video mimeType: ${videoMimeType}`,
-      );
-
       try {
         if (!this.sharedMediaSource) {
           this.logger.error("SharedMediaSource is null");
           return;
         }
+
+        // Create video source buffer
+        const videoMimeType = this.generateVideoMimeType(track.codec);
+        this.logger.debug(
+          `[SharedMediaSource] Using video mimeType: ${videoMimeType}`,
+        );
 
         this.videoSourceBuffer =
           this.sharedMediaSource.addSourceBuffer(videoMimeType);
@@ -2844,13 +2875,13 @@ export class Player {
       return;
     }
 
-    // Create audio source buffer
-    const audioMimeType = this.generateAudioMimeType(this.audioTrack.codec);
-    this.logger.info(
-      `[AudioSourceBuffer] Using audio mimeType: ${audioMimeType}`,
-    );
-
     try {
+      // Create audio source buffer
+      const audioMimeType = this.generateAudioMimeType(this.audioTrack.codec);
+      this.logger.info(
+        `[AudioSourceBuffer] Using audio mimeType: ${audioMimeType}`,
+      );
+
       this.audioSourceBuffer =
         this.sharedMediaSource.addSourceBuffer(audioMimeType);
       this.logger.info("[AudioSourceBuffer] Created successfully");

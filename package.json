@@ -59,6 +59,7 @@
     "webpack-dev-server": "^5.2.3"
   },
   "dependencies": {
+    "@eyevinn/is-drm-supported": "^2.0.0",
     "codem-isoboxer": "^0.3.10"
   }
 }
