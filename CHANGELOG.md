@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Nothing yet
+### Added
+
+- DRM support via Encrypted Media Extensions (EME)
+  - ClearKey DRM for development and testing
+  - Commercial DRM support (Widevine, PlayReady, FairPlay)
+  - DRM configuration via common field at the root level in the CMSF catalog
+
+### Changed
+
+- Bumped development dependencies (@types/node, jest, webpack)
+- Bumped production dependencies (@commitlint/cli, @typescript-eslint/\*, globals, serve, typescript-eslint)
 
 ## [0.5.0] - 2026-01-27
 
