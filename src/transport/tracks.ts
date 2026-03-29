@@ -16,8 +16,9 @@ import { TrackAliasRegistry } from "./trackaliasregistry";
 
 // Bigint versions of stream types for comparison
 const FETCH_HEADER_BIGINT = 0x05n;
-const SUBGROUP_HEADER_START_BIGINT = 0x08n;
-const SUBGROUP_HEADER_END_BIGINT = 0x0dn;
+// Draft-14 SUBGROUP_HEADER stream types: 0x10-0x15 (without EOG), 0x18-0x1D (with EOG)
+const SUBGROUP_HEADER_MIN_BIGINT = 0x10n;
+const SUBGROUP_HEADER_MAX_BIGINT = 0x1dn;
 
 // Object received in a data stream
 export interface MOQObject {
@@ -113,11 +114,12 @@ export class TracksManager {
       const streamType = await reader.u62();
       this.logger.debug(`Incoming Unidirectional Stream. Type: ${streamType}`);
 
-      // Check if this is a SUBGROUP_HEADER stream
-      if (
-        streamType >= SUBGROUP_HEADER_START_BIGINT &&
-        streamType <= SUBGROUP_HEADER_END_BIGINT
-      ) {
+      // Check if this is a SUBGROUP_HEADER stream (draft-14: 0x10-0x15, 0x18-0x1D)
+      const isSubgroup =
+        streamType >= SUBGROUP_HEADER_MIN_BIGINT &&
+        streamType <= SUBGROUP_HEADER_MAX_BIGINT &&
+        !(streamType >= 0x16n && streamType <= 0x17n); // gap: 0x16-0x17 are not valid
+      if (isSubgroup) {
         await this.handleSubgroupStream(reader, streamType);
       } else if (streamType === FETCH_HEADER_BIGINT) {
         // Handle FETCH_HEADER streams if needed
@@ -150,21 +152,24 @@ export class TracksManager {
       const groupId = await reader.u62();
       this.logger.debug(`Track alias: ${trackAlias} Group ID: ${groupId}`);
 
-      // Determine subgroup ID based on the stream type
-      // According to section 9.4.2, there are 6 defined Type values for SUBGROUP_HEADER (0x08-0x0D)
+      // Determine subgroup ID based on the stream type (draft-14)
+      // Stream types 0x10-0x15 (no EOG) and 0x18-0x1D (with EOG)
+      // Bit 0: has extensions, Bits 1-2: SID mode (00=zero, 01=firstObjID, 10=explicit)
+      // Bit 3: contains End of Group
       let subgroupId: bigint | null = null;
-      const hasExtensions =
-        streamType === 0x09n || streamType === 0x0bn || streamType === 0x0dn;
+      const hasExtensions = (streamType & 0x01n) === 0x01n; // odd types have extensions
+      // Strip the high nibble and EOG bit to get the base SID mode from lower 3 bits
+      const baseType = streamType & 0x07n;
 
-      if (streamType === 0x08n || streamType === 0x09n) {
-        // Type 0x08-0x09: Subgroup ID is implicitly 0
+      if (baseType === 0x00n || baseType === 0x01n) {
+        // ZeroSID: 0x10, 0x11, 0x18, 0x19 - Subgroup ID is implicitly 0
         subgroupId = 0n;
-        this.logger.debug(`Subgroup ID: ${subgroupId} (implicit)`);
-      } else if (streamType === 0x0an || streamType === 0x0bn) {
-        // Type 0x0A-0x0B: Subgroup ID is the first Object ID (will be set when first object is read)
+        this.logger.debug(`Subgroup ID: ${subgroupId} (implicit zero)`);
+      } else if (baseType === 0x02n || baseType === 0x03n) {
+        // NoSID: 0x12, 0x13, 0x1A, 0x1B - Subgroup ID is the first Object ID
         this.logger.debug("Subgroup ID will be set to the first Object ID");
-      } else if (streamType === 0x0cn || streamType === 0x0dn) {
-        // Type 0x0C-0x0D: Subgroup ID is explicitly provided
+      } else if (baseType === 0x04n || baseType === 0x05n) {
+        // ExplicitSID: 0x14, 0x15, 0x1C, 0x1D - Subgroup ID is explicitly provided
         subgroupId = await reader.u62();
         this.logger.debug(`Subgroup ID: ${subgroupId} (explicit)`);
       }

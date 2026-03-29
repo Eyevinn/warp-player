@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Commercial DRM support (Widevine, PlayReady, FairPlay)
   - DRM configuration via common field at the root level in the CMSF catalog
 
+### Fixed
+
+- Updated draft-14 stream types to match specification
+- Added ANNOUNCE_OK response to server announcements
+
 ### Changed
 
 - Bumped development dependencies (@types/node, jest, webpack)
