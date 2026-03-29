@@ -231,8 +231,26 @@ export class Client {
           this.logger.info(
             `Received publish namespace message with namespace: ${msg.namespace.join(
               "/",
-            )}`,
+            )}, requestId: ${msg.requestId}`,
           );
+
+          // Send PublishNamespaceOk (ANNOUNCE_OK) back to the server
+          try {
+            await control.send({
+              kind: Msg.PublishNamespaceOk,
+              requestId: msg.requestId,
+              namespace: msg.namespace,
+            });
+            this.logger.info(
+              `Sent PublishNamespaceOk for requestId ${msg.requestId}`,
+            );
+          } catch (error) {
+            this.logger.error(
+              `Error sending PublishNamespaceOk: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
 
           // Notify all registered publish namespace callbacks
           this.#publishNamespaceCallbacks.forEach((callback) => {
