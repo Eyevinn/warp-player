@@ -234,7 +234,7 @@ export class Client {
             )}, requestId: ${msg.requestId}`,
           );
 
-          // Send PublishNamespaceOk (ANNOUNCE_OK) back to the server
+          // Send PublishNamespaceOk back to the server
           try {
             await control.send({
               kind: Msg.PublishNamespaceOk,

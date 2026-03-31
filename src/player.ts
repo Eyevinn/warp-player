@@ -28,10 +28,10 @@ export class Player {
   private catalogManager: WarpCatalogManager;
   private unregisterCatalogCallback: (() => void) | null = null;
   private unregisterPublishNamespaceCallback: (() => void) | null = null;
-  private announceNamespaces: string[][] = [];
+  private publishedNamespaces: string[][] = [];
   private tracksContainerEl: HTMLElement;
   private statusEl: HTMLElement;
-  private announcementsEl: HTMLElement | null = null;
+  private publishedNamespacesEl: HTMLElement | null = null;
   private logger: ILogger;
   private trackSubscriptions: Map<string, bigint> = new Map(); // Track name -> trackAlias
   private isDisconnecting: boolean = false; // Flag to prevent recursive disconnect calls
@@ -125,8 +125,8 @@ export class Player {
       this.processWarpCatalog(catalog),
     );
 
-    // Create announcements section
-    this.createAnnouncementsSection();
+    // Create published namespaces section
+    this.createPublishedNamespacesSection();
   }
 
   /**
@@ -198,13 +198,13 @@ export class Player {
         this.onConnectionStateChange(true);
       }
 
-      // Create the announcements section
-      this.createAnnouncementsSection();
+      // Create the published namespaces section
+      this.createPublishedNamespacesSection();
 
-      // Listen for announcements - catalog subscription will happen after announcement is received
-      this.listenForAnnouncements();
+      // Listen for published namespaces - catalog subscription will happen after namespace is received
+      this.listenForPublishedNamespaces();
 
-      this.logger.info("Waiting for announcements...");
+      this.logger.info("Waiting for published namespaces...");
 
       // Handle connection closure
       this.connection
@@ -245,7 +245,7 @@ export class Player {
       this.unregisterCatalogCallback = null;
     }
 
-    // Unregister announce callback if registered
+    // Unregister publish namespace callback if registered
     if (this.unregisterPublishNamespaceCallback) {
       this.unregisterPublishNamespaceCallback();
       this.unregisterPublishNamespaceCallback = null;
@@ -291,12 +291,12 @@ export class Player {
       // Clear tracks display
       this.tracksContainerEl.innerHTML = "";
 
-      // Remove the announcements section completely
-      this.removeAnnouncementsSection();
+      // Remove the published namespaces section completely
+      this.removePublishedNamespacesSection();
     }
 
-    // Clear announcements
-    this.announceNamespaces = [];
+    // Clear published namespaces
+    this.publishedNamespaces = [];
 
     // Notify connection state change
     if (this.onConnectionStateChange) {
@@ -308,28 +308,30 @@ export class Player {
   }
 
   /**
-   * Listen for announcements from the server
+   * Listen for published namespaces from the server
    */
-  private async listenForAnnouncements(): Promise<void> {
+  private async listenForPublishedNamespaces(): Promise<void> {
     if (!this.client) {
-      this.logger.error("Cannot listen for announcements: Not connected");
+      this.logger.error(
+        "Cannot listen for published namespaces: Not connected",
+      );
       return;
     }
 
     try {
-      this.logger.info("Listening for announcements...");
+      this.logger.info("Listening for published namespaces...");
 
-      // Make sure the announcements section exists
-      if (!this.announcementsEl) {
-        this.createAnnouncementsSection();
+      // Make sure the published namespaces section exists
+      if (!this.publishedNamespacesEl) {
+        this.createPublishedNamespacesSection();
       }
 
-      // Subscribe to announcements
+      // Subscribe to published namespaces
       const unregister = this.client.registerPublishNamespaceCallback(
         (namespace: string[]) => {
-          // Log that we received an announcement for debugging
+          // Log that we received a published namespace for debugging
           this.logger.info(
-            `Received announcement callback with namespace: ${namespace.join(
+            `Received publish namespace callback with namespace: ${namespace.join(
               "/",
             )}`,
           );
@@ -337,17 +339,17 @@ export class Player {
           // Check if we've already seen this namespace
           const namespaceStr = namespace.join("/");
           if (
-            this.announceNamespaces.some((ns) => ns.join("/") === namespaceStr)
+            this.publishedNamespaces.some((ns) => ns.join("/") === namespaceStr)
           ) {
             this.logger.info(`Already processed namespace: ${namespaceStr}`);
             return;
           }
 
           // Store the namespace
-          this.announceNamespaces.push(namespace);
+          this.publishedNamespaces.push(namespace);
 
-          // Display the announcement in the UI
-          this.displayAnnouncement(namespace);
+          // Display the published namespace in the UI
+          this.displayPublishedNamespace(namespace);
 
           // Subscribe to the catalog in this namespace
           this.subscribeToCatalog(namespace).catch((error) => {
@@ -364,10 +366,10 @@ export class Player {
       this.unregisterPublishNamespaceCallback = unregister;
 
       // Log that we've registered the callback
-      this.logger.info("Announcement listener registered successfully");
+      this.logger.info("Publish namespace listener registered successfully");
     } catch (error) {
       this.logger.error(
-        `Error listening for announcements: ${
+        `Error listening for published namespaces: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -482,12 +484,14 @@ export class Player {
   }
 
   /**
-   * Create the announcements section in the DOM
+   * Create the published namespaces section in the DOM
    */
-  private createAnnouncementsSection(): void {
-    // Check if announcements section already exists
-    if (document.getElementById("announcements")) {
-      this.announcementsEl = document.getElementById("announcements");
+  private createPublishedNamespacesSection(): void {
+    // Check if published namespaces section already exists
+    if (document.getElementById("published-namespaces")) {
+      this.publishedNamespacesEl = document.getElementById(
+        "published-namespaces",
+      );
       return;
     }
 
@@ -504,14 +508,14 @@ export class Player {
       return;
     }
 
-    // Create announcements section
+    // Create published namespaces section
     const heading = document.createElement("h3");
-    heading.textContent = "Announcements";
-    heading.id = "announcements-heading";
+    heading.textContent = "Published Namespaces";
+    heading.id = "published-namespaces-heading";
 
-    this.announcementsEl = document.createElement("div");
-    this.announcementsEl.id = "announcements";
-    this.announcementsEl.className = "announcements-container";
+    this.publishedNamespacesEl = document.createElement("div");
+    this.publishedNamespacesEl.id = "published-namespaces";
+    this.publishedNamespacesEl.className = "published-namespaces-container";
 
     // Find the "Available Tracks" heading that is the sibling of tracksContainerEl
     let tracksHeading = null;
@@ -526,77 +530,82 @@ export class Player {
     if (tracksHeading) {
       // Insert before the "Available Tracks" heading
       this.logger.debug(
-        'Found "Available Tracks" heading, inserting announcements before it',
+        'Found "Available Tracks" heading, inserting published namespaces before it',
       );
       container.insertBefore(heading, tracksHeading);
-      container.insertBefore(this.announcementsEl, tracksHeading);
+      container.insertBefore(this.publishedNamespacesEl, tracksHeading);
     } else {
       // If we can't find the heading, insert before the tracks container itself
       this.logger.debug("Using tracks container as reference for insertion");
       container.insertBefore(heading, this.tracksContainerEl);
-      container.insertBefore(this.announcementsEl, this.tracksContainerEl);
+      container.insertBefore(
+        this.publishedNamespacesEl,
+        this.tracksContainerEl,
+      );
     }
   }
 
   /**
-   * Remove the announcements section from the DOM
+   * Remove the published namespaces section from the DOM
    */
-  private removeAnnouncementsSection(): void {
-    // Remove the announcements heading
-    const heading = document.getElementById("announcements-heading");
+  private removePublishedNamespacesSection(): void {
+    // Remove the published namespaces heading
+    const heading = document.getElementById("published-namespaces-heading");
     if (heading && heading.parentNode) {
       heading.parentNode.removeChild(heading);
     }
 
-    // Remove the announcements container
-    if (this.announcementsEl && this.announcementsEl.parentNode) {
-      this.announcementsEl.parentNode.removeChild(this.announcementsEl);
-      this.announcementsEl = null;
+    // Remove the published namespaces container
+    if (this.publishedNamespacesEl && this.publishedNamespacesEl.parentNode) {
+      this.publishedNamespacesEl.parentNode.removeChild(
+        this.publishedNamespacesEl,
+      );
+      this.publishedNamespacesEl = null;
     }
   }
 
   /**
-   * Display an announcement on the page
-   * @param namespace The namespace that was announced
+   * Display a published namespace on the page
+   * @param namespace The namespace that was published
    */
-  private displayAnnouncement(namespace: string[]): void {
-    // Log that we're trying to display an announcement
+  private displayPublishedNamespace(namespace: string[]): void {
     this.logger.info(
-      `Attempting to display announcement for namespace: ${namespace.join("/")}`,
+      `Attempting to display published namespace: ${namespace.join("/")}`,
     );
 
-    if (!this.announcementsEl) {
-      this.logger.warn("Announcements element not found, creating it now");
-      this.createAnnouncementsSection();
+    if (!this.publishedNamespacesEl) {
+      this.logger.warn(
+        "Published namespaces element not found, creating it now",
+      );
+      this.createPublishedNamespacesSection();
 
-      if (!this.announcementsEl) {
-        this.logger.error("Failed to create announcements element");
+      if (!this.publishedNamespacesEl) {
+        this.logger.error("Failed to create published namespaces element");
         return;
       }
     }
 
-    // Clear any existing announcements
-    this.announcementsEl.innerHTML = "";
+    // Clear any existing published namespaces
+    this.publishedNamespacesEl.innerHTML = "";
 
-    // Create announcement element with more compact styling
-    const announcementEl = document.createElement("div");
-    announcementEl.className = "announcement";
+    // Create published namespace element with more compact styling
+    const nsEl = document.createElement("div");
+    nsEl.className = "published-namespace";
 
     // Create a compact inline display for the namespace
     const namespaceStr = namespace.join("/");
-    announcementEl.innerHTML = `
-      <div class="announcement-container">
-        <span class="announcement-title">Announced Namespace:</span>
-        <span class="announcement-namespace">${namespaceStr}</span>
+    nsEl.innerHTML = `
+      <div class="published-namespace-container">
+        <span class="published-namespace-title">Published Namespace:</span>
+        <span class="published-namespace-value">${namespaceStr}</span>
       </div>
     `;
 
-    // Add to the announcements container
-    this.announcementsEl.appendChild(announcementEl);
+    // Add to the published namespaces container
+    this.publishedNamespacesEl.appendChild(nsEl);
 
-    // Log the announcement
     this.logger.info(
-      `Successfully displayed announcement for namespace: ${namespaceStr}`,
+      `Successfully displayed published namespace: ${namespaceStr}`,
     );
   }
 
