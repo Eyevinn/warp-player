@@ -190,7 +190,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Check WebTransport support
   if (typeof WebTransport === "undefined") {
     logger.error(
-      "WebTransport is NOT supported in this browser. Please use Chrome or Edge.",
+      "WebTransport is NOT supported in this browser. Please use Chrome, Edge, Firefox, or Safari 26.4+.",
     );
     connectBtn.disabled = true;
     startBtn.disabled = true;
