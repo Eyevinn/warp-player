@@ -1968,11 +1968,29 @@ export class Player {
 
         candidates = this.selectContentProtections(refIDs); //If several protected tracks exist, the last's DRM systems are chosen
         this.logger.info("candidates", candidates);
+        this.logger.info(
+          `DRM track: role=${track.role}, codec=${track.codec}, videoMimeType=${videoMimeType}, audioMimeType=${audioMimeType}`,
+        );
         if (candidates.length === 0) {
           this.logger.error("No drm system found");
           return false;
         }
       }
+      // Log all DRM systems available in this browser
+      const availableSystems: string[] = [];
+      if (await isWidevineSupported()) {
+        availableSystems.push("widevine");
+      }
+      if (await isPlayreadySupported()) {
+        availableSystems.push("playready");
+      }
+      if (await isFairplaySupported()) {
+        availableSystems.push("fairplay");
+      }
+      this.logger.info(
+        `Available DRM systems in browser: ${availableSystems.length > 0 ? availableSystems.join(", ") : "none"}`,
+      );
+
       let selectedSystemID: string | null = null;
       let selectedDrmSystem: DRMSystem | null = null;
       let selectedInitDataType: string | null = null;
@@ -2002,38 +2020,88 @@ export class Player {
           continue;
         }
 
-        const initDataType =
-          candidate.drmSystem.systemID === this.fairplay ? "sinf" : "cenc";
-        const config: MediaKeySystemConfiguration[] = [
-          {
-            initDataTypes: [initDataType],
-            ...(videoMimeType && {
-              videoCapabilities: [{ contentType: videoMimeType }],
-            }),
-            ...(audioMimeType && {
-              audioCapabilities: [{ contentType: audioMimeType }],
-            }),
-          },
-        ];
+        const isFairplay = candidate.drmSystem.systemID === this.fairplay;
 
-        try {
-          access = await navigator.requestMediaKeySystemAccess(
-            this.keySystems[candidate.drmSystem.systemID],
-            config,
-          );
-          selectedSystemID = candidate.drmSystem.systemID;
-          selectedDrmSystem = candidate.drmSystem;
-          selectedInitDataType = initDataType;
-          this.logger.info(
-            `DRM system ${this.drmSystems[selectedSystemID]} selected`,
-          );
-          break;
-        } catch {
-          const systemName = selectedSystemID
-            ? this.drmSystems[selectedSystemID]
-            : candidate.drmSystem.systemID;
-          this.logger.error(`Unable to setup DRM system ${systemName}`);
+        // Build capability config for requestMediaKeySystemAccess.
+        // FairPlay is special: it does not use PSSH from the catalog.
+        // Instead, init data arrives via the "encrypted" event on the
+        // video element once encrypted segments are appended. However,
+        // the capability check still needs valid codecs and initDataTypes.
+        const buildConfig = (
+          initDataTypes: string[],
+          encryptionScheme?: string,
+        ): MediaKeySystemConfiguration => ({
+          initDataTypes,
+          ...(videoMimeType && {
+            videoCapabilities: [
+              {
+                contentType: videoMimeType,
+                ...(encryptionScheme && { encryptionScheme }),
+              },
+            ],
+          }),
+          ...(audioMimeType && {
+            audioCapabilities: [
+              {
+                contentType: audioMimeType,
+                ...(encryptionScheme && { encryptionScheme }),
+              },
+            ],
+          }),
+        });
+
+        // For FairPlay, try multiple configurations and key system strings.
+        // Safari may accept different combos depending on version.
+        const configsToTry: {
+          keySystem: string;
+          initDataType: string;
+          config: MediaKeySystemConfiguration[];
+        }[] = [];
+
+        if (isFairplay) {
+          configsToTry.push({
+            keySystem: "com.apple.fps",
+            initDataType: "sinf",
+            config: [buildConfig(["sinf"], "cbcs")],
+          });
+        } else {
+          configsToTry.push({
+            keySystem: this.keySystems[candidate.drmSystem.systemID],
+            initDataType: "cenc",
+            config: [buildConfig(["cenc"])],
+          });
         }
+
+        for (const attempt of configsToTry) {
+          try {
+            this.logger.info(
+              `Trying ${attempt.keySystem} with config: ${JSON.stringify(attempt.config)}`,
+            );
+            access = await navigator.requestMediaKeySystemAccess(
+              attempt.keySystem,
+              attempt.config,
+            );
+            selectedSystemID = candidate.drmSystem.systemID;
+            selectedDrmSystem = candidate.drmSystem;
+            selectedInitDataType = attempt.initDataType;
+            const resolvedConfig = access.getConfiguration();
+            this.logger.info(
+              `DRM accepted: keySystem=${attempt.keySystem}, initDataType=${attempt.initDataType}, resolvedConfig=${JSON.stringify(resolvedConfig)}`,
+            );
+            break;
+          } catch (e) {
+            this.logger.info(
+              `Config rejected for ${attempt.keySystem}: ${e instanceof Error ? e.message : e}`,
+            );
+          }
+        }
+
+        if (access) {
+          break;
+        }
+        this.logger.error(
+          `Unable to setup DRM system ${this.drmSystems[candidate.drmSystem.systemID] ?? candidate.drmSystem.systemID}`,
+        );
       }
 
       if (
@@ -2050,7 +2118,73 @@ export class Player {
       const videoElement = document.getElementById(
         "videoPlayer",
       ) as HTMLVideoElement;
+
+      // FairPlay requires a server certificate before key sessions can work
+      if (
+        selectedSystemID === this.fairplay &&
+        selectedDrmSystem.certURL?.url
+      ) {
+        this.logger.info(
+          `Fetching FairPlay server certificate from ${selectedDrmSystem.certURL.url}`,
+        );
+        const certResponse = await fetch(selectedDrmSystem.certURL.url);
+        if (!certResponse.ok) {
+          this.logger.error(
+            `Failed to fetch FairPlay certificate: ${certResponse.statusText}`,
+          );
+          return false;
+        }
+        const certData = await certResponse.arrayBuffer();
+        await keys.setServerCertificate(new Uint8Array(certData));
+        this.logger.info("FairPlay server certificate set successfully");
+      }
+
       await videoElement.setMediaKeys(keys);
+
+      // FairPlay does not have PSSH data in the catalog/manifest.
+      // Instead, init data arrives via the "encrypted" event on the video
+      // element when encrypted media segments are appended to the MSE
+      // SourceBuffer. We set up an event-driven flow here.
+      if (selectedSystemID === this.fairplay) {
+        this.logger.info(
+          "FairPlay: waiting for encrypted event on video element",
+        );
+        const drmSystem = selectedDrmSystem;
+        const systemID = selectedSystemID;
+        videoElement.addEventListener("encrypted", async (event) => {
+          this.logger.info(
+            `FairPlay encrypted event: initDataType=${event.initDataType}, initData length=${event.initData?.byteLength}`,
+          );
+          if (!event.initData) {
+            this.logger.error("FairPlay encrypted event has no initData");
+            return;
+          }
+          const session = videoElement.mediaKeys?.createSession();
+          if (!session) {
+            this.logger.error(
+              "Failed to create MediaKeySession from encrypted event",
+            );
+            return;
+          }
+          session.addEventListener("message", (msg) =>
+            this.handleMessage(
+              msg as MediaKeyMessageEvent,
+              session,
+              drmSystem,
+              systemID,
+            ),
+          );
+          try {
+            await session.generateRequest("sinf", event.initData);
+            this.logger.info("FairPlay generateRequest succeeded");
+          } catch (e) {
+            this.logger.error(`FairPlay generateRequest failed: ${e}`);
+          }
+        });
+        return true;
+      }
+
+      // Widevine / PlayReady / ClearKey: proactive flow using PSSH from catalog
       const session = videoElement.mediaKeys?.createSession();
       if (!session) {
         this.logger.error("Failed to create MediaKeySession");
@@ -2219,7 +2353,58 @@ export class Player {
       headers: { "Content-Type": "application/octet-stream" },
       body: event.message,
     });
-    return await licenseResponse.arrayBuffer(); // Binary CKC
+    return await this.parseCkcResponse(licenseResponse);
+  }
+
+  /**
+   * Parse a FairPlay CKC (Content Key Context) response.
+   * License servers return CKC in various formats: raw binary, base64 text,
+   * XML-wrapped (<ckc>base64</ckc>), or JSON-wrapped ({ckc/CkcMessage/License: base64}).
+   */
+  private async parseCkcResponse(
+    response: Response,
+  ): Promise<ArrayBuffer | undefined> {
+    const contentType = response.headers.get("content-type") || "";
+
+    // Binary response — return as-is
+    if (contentType.includes("application/octet-stream")) {
+      return await response.arrayBuffer();
+    }
+
+    const text = await response.text();
+
+    // JSON-wrapped CKC
+    if (
+      contentType.includes("application/json") ||
+      text.trimStart()[0] === "{"
+    ) {
+      try {
+        const json = JSON.parse(text) as Record<string, string>;
+        const b64 = json["ckc"] ?? json["CkcMessage"] ?? json["License"];
+        if (b64) {
+          return this.base64ToArrayBuffer(b64);
+        }
+      } catch {
+        this.logger.error("Failed to parse FairPlay JSON CKC response");
+        return undefined;
+      }
+    }
+
+    // XML-wrapped CKC: <ckc>base64</ckc>
+    if (contentType.includes("xml") || text.trimStart()[0] === "<") {
+      const match = text.match(/<ckc>([\s\S]*?)<\/ckc>/);
+      if (match?.[1]) {
+        return this.base64ToArrayBuffer(match[1].trim());
+      }
+    }
+
+    // Plain base64 text
+    try {
+      return this.base64ToArrayBuffer(text.trim());
+    } catch {
+      this.logger.error("Failed to decode FairPlay CKC response as base64");
+      return undefined;
+    }
   }
 
   /**
