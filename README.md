@@ -35,7 +35,7 @@ This project implements a media player that:
 
 ## Requirements
 
-- A modern browser that supports WebTransport (Chrome 87+ or Edge 87+)
+- A modern browser that supports WebTransport (Chrome 87+, Edge 87+, Firefox, or Safari 26.4+)
 - A MOQ server that supports draft-14 such as moqlivemock
 - Node.js version 20+
 
@@ -257,11 +257,11 @@ Without proper NTP synchronization on both client and server, latency measuremen
 
 - Target latency must be greater than minimal buffer
 - Latency measurement accuracy depends on clock synchronization
-- WebTransport is required (Chrome/Edge only)
+- WebTransport is required (Chrome, Edge, Firefox, or Safari 26.4+)
 
 ## Notes
 
-- WebTransport is only supported in some modern browsers, not in Node.js or Safari
+- WebTransport is supported in Chrome, Edge, Firefox, and Safari 26.4+
 - For development with self-signed certificates, see [FINGERPRINT.md](FINGERPRINT.md) for detailed instructions
 - Alternatively, you may need to accept the self-signed certificate warning in your browser
 - The UI includes controls for adjusting both minimal buffer and target latency

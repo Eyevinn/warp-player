@@ -143,7 +143,7 @@ The codebase is organized into several key modules:
 ## Technical Notes
 
 1. The implementation follows the MOQ Transport protocol draft version 14, with MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00).
-2. WebTransport is only available in Chrome 87+ and Edge 87+, not in Safari or Node.js.
+2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+.
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is expected in CMAF format with ISO BMFF container structure.
 5. The client includes proper handling of bidirectional control streams for subscribing to content.
