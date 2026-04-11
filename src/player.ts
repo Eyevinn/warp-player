@@ -404,14 +404,28 @@ export class Player {
     // Update the visual selection state
     this.renderNamespaceSelector();
 
-    // Subscribe to the catalog in this namespace
-    this.subscribeToCatalog(namespace).catch((error) => {
-      this.logger.error(
-        `Error subscribing to catalog: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    });
+    // Check if we should use FETCH instead of SUBSCRIBE
+    const useFetch = (
+      document.getElementById("useFetchCatalog") as HTMLInputElement
+    )?.checked;
+
+    if (useFetch) {
+      this.fetchCatalog(namespace).catch((error) => {
+        this.logger.error(
+          `Error fetching catalog: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    } else {
+      this.subscribeToCatalog(namespace).catch((error) => {
+        this.logger.error(
+          `Error subscribing to catalog: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    }
   }
 
   /**
@@ -481,6 +495,49 @@ export class Player {
     } catch (error) {
       this.logger.error(
         `Error subscribing to catalog: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Fetch the catalog using FETCH (one-shot) instead of SUBSCRIBE
+   */
+  private async fetchCatalog(namespace: string[]): Promise<void> {
+    if (!this.client) {
+      this.logger.error("Cannot fetch catalog: Not connected");
+      return;
+    }
+
+    const namespaceStr = namespace.join("/");
+    this.logger.info(`Fetching catalog in namespace: ${namespaceStr}`);
+
+    try {
+      await this.client.fetchTrack(
+        namespaceStr,
+        "catalog",
+        (obj: MOQObject) => {
+          try {
+            const text = new TextDecoder().decode(obj.data);
+            const catalog = JSON.parse(text);
+            this.catalogManager.handleCatalogData(catalog);
+          } catch (e) {
+            this.logger.error(
+              `Failed to decode fetched catalog data: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+          }
+        },
+      );
+
+      this.logger.info(
+        `Successfully fetched catalog in namespace: ${namespaceStr}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error fetching catalog: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

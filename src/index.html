@@ -410,6 +410,15 @@
         color: #fff;
       }
 
+      .fetch-option {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+      }
+
       .track-selector {
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-color);
@@ -739,6 +748,10 @@
             </div>
             <div id="status" class="status disconnected">
               <span>●</span> Disconnected
+            </div>
+            <div class="fetch-option">
+              <input type="checkbox" id="useFetchCatalog" />
+              <label for="useFetchCatalog">Use FETCH for catalog</label>
             </div>
           </div>
         </div>
