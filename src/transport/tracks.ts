@@ -185,21 +185,32 @@ export class TracksManager {
       const MAX_BUFFERED_OBJECTS = 50;
 
       // Process objects in the stream
-      let isFirstObject = true;
+      // Object IDs are delta-encoded in subgroup streams (draft-14+):
+      // First object: objectId = delta
+      // Subsequent objects: objectId = prevObjectId + delta + 1
+      let objectCount = 0;
+      let prevObjectId = 0n;
       while (!(await reader.done())) {
-        // Read the object ID
-        const objectId = await reader.u62();
-        this.logger.debug(`Object ID: ${objectId}`);
+        // Read the object ID delta
+        const objectIdDelta = await reader.u62();
+        let objectId: bigint;
+        if (objectCount > 0) {
+          objectId = prevObjectId + objectIdDelta + 1n;
+        } else {
+          objectId = objectIdDelta;
+        }
+        prevObjectId = objectId;
+        objectCount++;
+        this.logger.debug(`Object ID: ${objectId} (delta: ${objectIdDelta})`);
 
         // If this is the first object and subgroupId is null (types 0x0A-0x0B),
         // set the subgroupId to the objectId
-        if (isFirstObject && subgroupId === null) {
+        if (objectCount === 1 && subgroupId === null) {
           subgroupId = objectId;
           this.logger.debug(
             `Subgroup ID set to first Object ID: ${subgroupId}`,
           );
         }
-        isFirstObject = false;
 
         // Handle extension headers if present
         let extensions: Uint8Array | null = null;
