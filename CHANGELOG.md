@@ -116,9 +116,9 @@ Full [MOQ Transport draft-14][moqt-d14] compliance release.
 
 ### Added
 
-- Initial WARP player implementation following MOQ Transport draft-11
+- Initial player implementation following MOQ Transport draft-11
 - WebTransport client with bidirectional control stream support
-- WARP catalog parsing and track subscription
+- Catalog parsing and track subscription
 - MSE-based media playback with CMAF segment handling
 - Basic UI with connection controls and playback information
 - Support for video and audio track selection
