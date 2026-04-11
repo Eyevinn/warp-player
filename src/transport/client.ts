@@ -438,6 +438,22 @@ export class Client {
   }
 
   /**
+   * Fetch a track (one-shot retrieval instead of ongoing subscription)
+   */
+  async fetchTrack(
+    namespace: string,
+    trackName: string,
+    callback: ObjectCallback,
+  ): Promise<void> {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot fetch: Tracks manager not initialized");
+    }
+
+    this.logger.info(`Client fetching track ${namespace}:${trackName}`);
+    return this.#tracksManager.fetchTrack(namespace, trackName, callback);
+  }
+
+  /**
    * Unsubscribe from a track by track alias
    * @param trackAlias The track alias to unsubscribe from
    * @returns A promise that resolves when the unsubscribe message has been sent

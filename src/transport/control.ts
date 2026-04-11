@@ -12,6 +12,7 @@ export type Message = Subscriber | Publisher;
 export type Subscriber =
   | Subscribe
   | Unsubscribe
+  | Fetch
   | PublishNamespaceOk
   | PublishNamespaceError;
 
@@ -19,6 +20,7 @@ export function isSubscriber(m: Message): m is Subscriber {
   return (
     m.kind === Msg.Subscribe ||
     m.kind === Msg.Unsubscribe ||
+    m.kind === Msg.Fetch ||
     m.kind === Msg.PublishNamespaceOk ||
     m.kind === Msg.PublishNamespaceError
   );
@@ -28,6 +30,8 @@ export function isSubscriber(m: Message): m is Subscriber {
 export type Publisher =
   | SubscribeOk
   | SubscribeError
+  | FetchOk
+  | FetchError
   | PublishDone
   | PublishNamespace
   | UnpublishNamespace
@@ -37,6 +41,8 @@ export function isPublisher(m: Message): m is Publisher {
   return (
     m.kind === Msg.SubscribeOk ||
     m.kind === Msg.SubscribeError ||
+    m.kind === Msg.FetchOk ||
+    m.kind === Msg.FetchError ||
     m.kind === Msg.PublishDone ||
     m.kind === Msg.PublishNamespace ||
     m.kind === Msg.UnpublishNamespace ||
@@ -51,6 +57,9 @@ export enum Msg {
   SubscribeUpdate = "subscribe_update",
   PublishDone = "publish_done", // draft-14: renamed from subscribe_done
   Unsubscribe = "unsubscribe",
+  Fetch = "fetch",
+  FetchOk = "fetch_ok",
+  FetchError = "fetch_error",
   PublishNamespace = "publish_namespace", // draft-14: renamed from announce
   PublishNamespaceOk = "publish_namespace_ok", // draft-14: renamed from announce_ok
   PublishNamespaceError = "publish_namespace_error", // draft-14: renamed from announce_error
@@ -65,6 +74,9 @@ enum Id {
   SubscribeUpdate = 0x2,
   PublishDone = 0xb, // draft-14: renamed from SubscribeDone
   Unsubscribe = 0xa,
+  Fetch = 0x16,
+  FetchOk = 0x18,
+  FetchError = 0x19,
   PublishNamespace = 0x6, // draft-14: renamed from Announce
   PublishNamespaceOk = 0x7, // draft-14: renamed from AnnounceOk
   PublishNamespaceError = 0x8, // draft-14: renamed from AnnounceError
@@ -140,6 +152,40 @@ export interface SubscribeUpdate {
 export interface Unsubscribe {
   kind: Msg.Unsubscribe;
   requestId: bigint;
+}
+
+export const FetchTypeStandalone = 0x01;
+
+export interface Fetch {
+  kind: Msg.Fetch;
+  requestId: bigint;
+  subscriberPriority: number;
+  groupOrder: number;
+  fetchType: number;
+  namespace: string[];
+  trackName: string;
+  startGroup: bigint;
+  startObject: bigint;
+  endGroup: bigint;
+  endObject: bigint;
+  params: KeyValuePair[];
+}
+
+export interface FetchOk {
+  kind: Msg.FetchOk;
+  requestId: bigint;
+  groupOrder: number;
+  endOfTrack: number;
+  endGroup: bigint;
+  endObject: bigint;
+  params: KeyValuePair[];
+}
+
+export interface FetchError {
+  kind: Msg.FetchError;
+  requestId: bigint;
+  code: bigint;
+  reason: string;
 }
 
 export interface PublishDone {
@@ -263,6 +309,12 @@ export class Decoder {
       case Id.Unsubscribe:
         msgType = Msg.Unsubscribe;
         break;
+      case Id.FetchOk:
+        msgType = Msg.FetchOk;
+        break;
+      case Id.FetchError:
+        msgType = Msg.FetchError;
+        break;
       case Id.PublishNamespace:
         msgType = Msg.PublishNamespace;
         break;
@@ -307,6 +359,12 @@ export class Decoder {
         break;
       case Msg.PublishDone:
         result = await this.publish_done();
+        break;
+      case Msg.FetchOk:
+        result = await this.fetch_ok();
+        break;
+      case Msg.FetchError:
+        result = await this.fetch_error();
         break;
       case Msg.Unsubscribe:
         result = await this.unsubscribe();
@@ -515,6 +573,48 @@ export class Decoder {
     };
   }
 
+  private async fetch_ok(): Promise<FetchOk> {
+    controlLogger.debug("Parsing FetchOk message...");
+    const requestId = await this.r.u62();
+    const groupOrder = await this.r.u8();
+    const endOfTrack = await this.r.u8();
+    const endGroup = await this.r.u62();
+    const endObject = await this.r.u62();
+    const params = await this.r.keyValuePairs();
+
+    controlLogger.debug(
+      `FetchOk: requestId=${requestId}, endOfTrack=${endOfTrack}`,
+    );
+
+    return {
+      kind: Msg.FetchOk,
+      requestId,
+      groupOrder,
+      endOfTrack,
+      endGroup,
+      endObject,
+      params,
+    };
+  }
+
+  private async fetch_error(): Promise<FetchError> {
+    controlLogger.debug("Parsing FetchError message...");
+    const requestId = await this.r.u62();
+    const code = await this.r.u62();
+    const reason = await this.r.string();
+
+    controlLogger.debug(
+      `FetchError: requestId=${requestId}, code=${code}, reason=${reason}`,
+    );
+
+    return {
+      kind: Msg.FetchError,
+      requestId,
+      code,
+      reason,
+    };
+  }
+
   private async publish_done(): Promise<PublishDone> {
     controlLogger.debug("Parsing PublishDone message...");
     const requestId = await this.r.u62();
@@ -657,6 +757,9 @@ export class Encoder {
         break;
       case Msg.Unsubscribe:
         writer.marshalUnsubscribe(msg as Unsubscribe);
+        break;
+      case Msg.Fetch:
+        writer.marshalFetch(msg as Fetch);
         break;
       case Msg.PublishNamespace:
         writer.marshalPublishNamespace(msg as PublishNamespace);

@@ -7,6 +7,9 @@ import {
   Msg,
   Subscribe,
   SubscribeOk,
+  Fetch,
+  FetchError,
+  FetchTypeStandalone,
   FilterType,
   GroupOrder,
   Message,
@@ -34,6 +37,7 @@ export type ObjectCallback = (obj: MOQObject) => void;
 export class TracksManager {
   private wt: WebTransport;
   private objectCallbacks: Map<string, ObjectCallback[]> = new Map();
+  private fetchCallbacks: Map<bigint, ObjectCallback> = new Map();
   private trackRegistry: TrackAliasRegistry = new TrackAliasRegistry();
   private controlStream: CtrlStream | null = null;
   private nextRequestId: bigint = 0n;
@@ -122,8 +126,7 @@ export class TracksManager {
       if (isSubgroup) {
         await this.handleSubgroupStream(reader, streamType);
       } else if (streamType === FETCH_HEADER_BIGINT) {
-        // Handle FETCH_HEADER streams if needed
-        this.logger.debug("Received FETCH_HEADER stream (not implemented yet)");
+        await this.handleFetchStream(reader);
       } else {
         this.logger.warn(`Unknown stream type: ${streamType}`);
       }
@@ -566,6 +569,129 @@ export class TracksManager {
    * Returns the track alias that can be used to unsubscribe later
    * @throws Error if control stream is not set
    */
+  /**
+   * Handle an incoming FETCH_HEADER stream (stream type 0x05).
+   * Reads the requestId, then reads objects and dispatches to the registered callback.
+   */
+  private async handleFetchStream(reader: Reader): Promise<void> {
+    const requestId = await reader.u62();
+    this.logger.info(`Received FETCH_HEADER stream, requestId=${requestId}`);
+
+    const callback = this.fetchCallbacks.get(requestId);
+    if (!callback) {
+      this.logger.warn(
+        `No callback registered for fetch requestId=${requestId}`,
+      );
+      return;
+    }
+
+    // Read objects from the fetch stream
+    // Each object: groupId, subgroupId, objectId, publisherPriority, extensionsLen, [extensions], payloadLen, payload
+    while (!(await reader.done())) {
+      const groupId = await reader.u62();
+      const subgroupId = await reader.u62();
+      const objectId = await reader.u62();
+      await reader.u8(); // publisherPriority - not needed
+      const extensionsLen = await reader.u62();
+      if (extensionsLen > 0n) {
+        await reader.read(Number(extensionsLen)); // skip extensions
+      }
+      const payloadLen = await reader.u62();
+      const payload =
+        payloadLen > 0n
+          ? await reader.read(Number(payloadLen))
+          : new Uint8Array(0);
+
+      this.logger.debug(
+        `Fetch object: group=${groupId}, subgroup=${subgroupId}, obj=${objectId}, len=${payload.length}`,
+      );
+
+      callback({
+        trackAlias: 0n,
+        location: { group: groupId, object: objectId },
+        data: payload,
+      });
+    }
+
+    // Clean up the callback
+    this.fetchCallbacks.delete(requestId);
+  }
+
+  /**
+   * Send a FETCH request for a track and register a callback for the response data.
+   * Returns a promise that resolves when the FETCH_OK is received.
+   */
+  public async fetchTrack(
+    namespace: string,
+    trackName: string,
+    callback: ObjectCallback,
+  ): Promise<void> {
+    this.logger.info(`Fetching track ${namespace}:${trackName}`);
+
+    if (!this.controlStream) {
+      throw new Error("Cannot fetch: Control stream not set");
+    }
+    if (!this.client) {
+      throw new Error("Cannot fetch: Client not set");
+    }
+
+    const requestId = this.getNextRequestId();
+
+    const fetchMsg: Fetch = {
+      kind: Msg.Fetch,
+      requestId,
+      subscriberPriority: 0,
+      groupOrder: 0, // Publisher order
+      fetchType: FetchTypeStandalone,
+      namespace: [namespace],
+      trackName,
+      startGroup: 0n,
+      startObject: 0n,
+      endGroup: 0n,
+      endObject: 0n,
+      params: [],
+    };
+
+    // Register callback for fetch data before sending the message
+    this.fetchCallbacks.set(requestId, callback);
+
+    const client = this.client;
+
+    const fetchPromise = new Promise<void>((resolve, reject) => {
+      const unregisterOk = client.registerMessageHandler(
+        Msg.FetchOk,
+        requestId,
+        () => {
+          this.logger.info(
+            `Received FetchOk for ${namespace}:${trackName}, requestId=${requestId}`,
+          );
+          unregisterErr();
+          resolve();
+        },
+      );
+
+      const unregisterErr = client.registerMessageHandler(
+        Msg.FetchError,
+        requestId,
+        (response: Message) => {
+          const fetchError = response as FetchError;
+          this.logger.error(
+            `Fetch error for ${namespace}:${trackName}: ${fetchError.reason}`,
+          );
+          unregisterOk();
+          this.fetchCallbacks.delete(requestId);
+          reject(new Error(`Fetch error: ${fetchError.reason}`));
+        },
+      );
+    });
+
+    this.logger.info(
+      `Sending FETCH for ${namespace}:${trackName} with requestId ${requestId}`,
+    );
+    await this.controlStream.send(fetchMsg);
+    await fetchPromise;
+  }
+
   public async subscribeTrack(
     namespace: string,
     trackName: string,

@@ -4,6 +4,7 @@ import {
   SubscribeError,
   PublishDone,
   Unsubscribe,
+  Fetch,
   PublishNamespace,
   PublishNamespaceOk,
   PublishNamespaceError,
@@ -23,6 +24,7 @@ enum Id {
   SubscribeUpdate = 0x2,
   PublishDone = 0xb, // draft-14: renamed from SubscribeDone
   Unsubscribe = 0xa,
+  Fetch = 0x16,
   PublishNamespace = 0x6, // draft-14: renamed from Announce
   PublishNamespaceOk = 0x7, // draft-14: renamed from AnnounceOk
   PublishNamespaceError = 0x8, // draft-14: renamed from AnnounceError
@@ -453,6 +455,27 @@ export class BufferCtrlWriter {
       this.writeVarInt53(msg.streamCount);
     });
 
+    return this;
+  }
+
+  /**
+   * Marshals a Fetch message to the buffer (standalone fetch type)
+   */
+  public marshalFetch(msg: Fetch): BufferCtrlWriter {
+    this.marshalWithLength(Id.Fetch, () => {
+      this.writeVarInt62(msg.requestId);
+      this.writeUint8(msg.subscriberPriority);
+      this.writeUint8(msg.groupOrder);
+      this.writeVarInt62(BigInt(msg.fetchType));
+      // Standalone fetch includes namespace, trackName, start/end
+      this.writeTuple(msg.namespace);
+      this.writeString(msg.trackName);
+      this.writeVarInt62(msg.startGroup);
+      this.writeVarInt62(msg.startObject);
+      this.writeVarInt62(msg.endGroup);
+      this.writeVarInt62(msg.endObject);
+      this.writeKeyValuePairs(msg.params);
+    });
     return this;
   }
 
