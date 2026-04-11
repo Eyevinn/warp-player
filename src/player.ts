@@ -29,6 +29,7 @@ export class Player {
   private unregisterCatalogCallback: (() => void) | null = null;
   private unregisterPublishNamespaceCallback: (() => void) | null = null;
   private publishedNamespaces: string[][] = [];
+  private selectedNamespace: string[] | null = null;
   private tracksContainerEl: HTMLElement;
   private statusEl: HTMLElement;
   private publishedNamespacesEl: HTMLElement | null = null;
@@ -297,6 +298,7 @@ export class Player {
 
     // Clear published namespaces
     this.publishedNamespaces = [];
+    this.selectedNamespace = null;
 
     // Notify connection state change
     if (this.onConnectionStateChange) {
@@ -348,17 +350,13 @@ export class Player {
           // Store the namespace
           this.publishedNamespaces.push(namespace);
 
-          // Display the published namespace in the UI
-          this.displayPublishedNamespace(namespace);
+          // Re-render the namespace selector with all known namespaces
+          this.renderNamespaceSelector();
 
-          // Subscribe to the catalog in this namespace
-          this.subscribeToCatalog(namespace).catch((error) => {
-            this.logger.error(
-              `Error subscribing to catalog: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          });
+          // Auto-select the first namespace if none is selected yet
+          if (this.selectedNamespace === null) {
+            this.selectNamespace(namespace);
+          }
         },
       );
 
@@ -374,6 +372,46 @@ export class Player {
         }`,
       );
     }
+  }
+
+  /**
+   * Select a namespace: unsubscribe from previous catalog, clear tracks,
+   * subscribe to the new namespace's catalog.
+   */
+  private selectNamespace(namespace: string[]): void {
+    const namespaceStr = namespace.join("/");
+    this.logger.info(`Selecting namespace: ${namespaceStr}`);
+
+    // Unsubscribe from previous catalog if any
+    if (this.unregisterCatalogCallback) {
+      this.logger.info("Unsubscribing from previous catalog");
+      this.unregisterCatalogCallback();
+      this.unregisterCatalogCallback = null;
+    }
+
+    // Clear previous catalog and tracks display
+    this.catalogManager.clearCatalog();
+    this.tracksContainerEl.innerHTML = "";
+
+    // Hide start/stop buttons until new tracks are loaded
+    const startBtn = document.getElementById("startBtn") as HTMLButtonElement;
+    if (startBtn) {
+      startBtn.disabled = true;
+    }
+
+    this.selectedNamespace = namespace;
+
+    // Update the visual selection state
+    this.renderNamespaceSelector();
+
+    // Subscribe to the catalog in this namespace
+    this.subscribeToCatalog(namespace).catch((error) => {
+      this.logger.error(
+        `Error subscribing to catalog: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
   }
 
   /**
@@ -510,7 +548,7 @@ export class Player {
 
     // Create published namespaces section
     const heading = document.createElement("h3");
-    heading.textContent = "Published Namespaces";
+    heading.textContent = "Namespaces";
     heading.id = "published-namespaces-heading";
 
     this.publishedNamespacesEl = document.createElement("div");
@@ -528,15 +566,9 @@ export class Player {
     }
 
     if (tracksHeading) {
-      // Insert before the "Available Tracks" heading
-      this.logger.debug(
-        'Found "Available Tracks" heading, inserting published namespaces before it',
-      );
       container.insertBefore(heading, tracksHeading);
       container.insertBefore(this.publishedNamespacesEl, tracksHeading);
     } else {
-      // If we can't find the heading, insert before the tracks container itself
-      this.logger.debug("Using tracks container as reference for insertion");
       container.insertBefore(heading, this.tracksContainerEl);
       container.insertBefore(
         this.publishedNamespacesEl,
@@ -565,48 +597,36 @@ export class Player {
   }
 
   /**
-   * Display a published namespace on the page
-   * @param namespace The namespace that was published
+   * Render the namespace selector showing all known namespaces as buttons.
+   * The currently selected namespace is highlighted.
    */
-  private displayPublishedNamespace(namespace: string[]): void {
-    this.logger.info(
-      `Attempting to display published namespace: ${namespace.join("/")}`,
-    );
-
+  private renderNamespaceSelector(): void {
     if (!this.publishedNamespacesEl) {
-      this.logger.warn(
-        "Published namespaces element not found, creating it now",
-      );
       this.createPublishedNamespacesSection();
-
       if (!this.publishedNamespacesEl) {
         this.logger.error("Failed to create published namespaces element");
         return;
       }
     }
 
-    // Clear any existing published namespaces
     this.publishedNamespacesEl.innerHTML = "";
 
-    // Create published namespace element with more compact styling
-    const nsEl = document.createElement("div");
-    nsEl.className = "published-namespace";
+    const selectedStr = this.selectedNamespace?.join("/") ?? "";
 
-    // Create a compact inline display for the namespace
-    const namespaceStr = namespace.join("/");
-    nsEl.innerHTML = `
-      <div class="published-namespace-container">
-        <span class="published-namespace-title">Published Namespace:</span>
-        <span class="published-namespace-value">${namespaceStr}</span>
-      </div>
-    `;
-
-    // Add to the published namespaces container
-    this.publishedNamespacesEl.appendChild(nsEl);
-
-    this.logger.info(
-      `Successfully displayed published namespace: ${namespaceStr}`,
-    );
+    const container = this.publishedNamespacesEl;
+    for (const ns of this.publishedNamespaces) {
+      const nsStr = ns.join("/");
+      const btn = document.createElement("button");
+      btn.className =
+        "namespace-btn" + (nsStr === selectedStr ? " selected" : "");
+      btn.textContent = nsStr;
+      btn.addEventListener("click", () => {
+        if (nsStr !== selectedStr) {
+          this.selectNamespace(ns);
+        }
+      });
+      container.appendChild(btn);
+    }
   }
 
   /**

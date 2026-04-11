@@ -376,28 +376,38 @@
         margin-top: 0;
       }
 
-      /* Published namespace styles */
-      .published-namespace {
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        padding: 1rem;
+      /* Namespace selector styles */
+      .published-namespaces-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
         margin-bottom: 1rem;
       }
 
-      .published-namespace-title {
-        font-size: 0.875rem;
-        color: var(--text-secondary);
-        margin-bottom: 0.5rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-      }
-
-      .published-namespace-value {
+      .namespace-btn {
         font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
         font-size: 0.875rem;
-        color: var(--accent-green);
-        word-break: break-all;
+        padding: 0.5rem 1rem;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        background-color: var(--bg-secondary);
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition:
+          background-color 0.15s,
+          border-color 0.15s,
+          color 0.15s;
+      }
+
+      .namespace-btn:hover {
+        border-color: var(--bg-button-primary);
+        color: var(--text-primary);
+      }
+
+      .namespace-btn.selected {
+        background-color: var(--bg-button-primary);
+        border-color: var(--bg-button-primary);
+        color: #fff;
       }
 
       .track-selector {
