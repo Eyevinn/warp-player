@@ -1,6 +1,6 @@
 {
   "name": "@eyevinn/warp-player",
-  "version": "0.6.0+dev",
+  "version": "0.6.1",
   "description": "Browser-based Media Player for MOQ protocol with CMSF support",
   "main": "dist/index.js",
   "scripts": {
