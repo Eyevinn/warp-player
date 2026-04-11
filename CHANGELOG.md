@@ -7,20 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-11
+
+Full [MOQ Transport draft-14][moqt-d14] compliance release.
+
 ### Added
 
 - DRM support via Encrypted Media Extensions (EME)
   - ClearKey DRM for development and testing
   - Commercial DRM support (Widevine, PlayReady, FairPlay)
   - DRM configuration via common field at the root level in the CMSF catalog
+- Safari 26.4+ and Firefox browser support
 
 ### Fixed
 
+- Object ID delta encoding in subgroup streams per draft-14 spec
+- FairPlay DRM support with event-driven key session flow
 - Updated draft-14 stream types to match specification
-- Added ANNOUNCE_OK response to server announcements
+- Added PUBLISH_NAMESPACE_OK response to server announcements
 
 ### Changed
 
+- Renamed announce terminology to publish namespace per draft-14
 - Bumped development dependencies (@types/node, jest, webpack)
 - Bumped production dependencies (@commitlint/cli, @typescript-eslint/\*, globals, serve, typescript-eslint)
 
@@ -116,7 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for video and audio track selection
 - Real-time playback metrics (buffer levels, latency, playback rate)
 
-[Unreleased]: https://github.com/Eyevinn/warp-player/releases/tag/v0.5.0...HEAD
+[Unreleased]: https://github.com/Eyevinn/warp-player/releases/tag/v0.6.0...HEAD
+[0.6.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Eyevinn/warp-player/releases/tag/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.2.0...v0.4.0
