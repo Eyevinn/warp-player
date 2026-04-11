@@ -258,9 +258,9 @@
 
       .connection-controls {
         display: flex;
-        justify-content: space-between;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 1rem;
+        gap: 0.75rem;
       }
 
       /* Status */
@@ -376,6 +376,15 @@
         margin-top: 0;
       }
 
+      .tracks-section {
+        margin-bottom: 0.25rem;
+      }
+
+      .tracks-section h3 {
+        margin: 0.5rem 0 0.25rem;
+        font-size: 0.9rem;
+      }
+
       /* Namespace selector styles */
       .published-namespaces-container {
         display: flex;
@@ -410,44 +419,45 @@
         color: #fff;
       }
 
+      .namespace-btn.disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
       .fetch-option {
         display: flex;
         align-items: center;
         gap: 0.5rem;
-        margin-top: 0.5rem;
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-      }
-
-      .track-selector {
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        padding: 1rem;
-        margin-bottom: 1rem;
-      }
-
-      .track-selector label {
-        display: block;
         font-size: 0.875rem;
         color: var(--text-secondary);
-        margin-bottom: 0.5rem;
+      }
+
+      .selector-container {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
       }
 
       .track-select {
-        width: 100%;
-        padding: 0.75rem;
+        padding: 0.4rem 0.5rem;
         background-color: var(--input-bg);
         border: 1px solid var(--border-color);
-        border-radius: 8px;
+        border-radius: 6px;
         color: var(--text-primary);
-        font-size: 0.875rem;
+        font-size: 0.8rem;
         cursor: pointer;
+        min-width: 0;
       }
 
       .track-select:focus {
         outline: none;
         border-color: var(--bg-button-primary);
+      }
+
+      .track-details-container {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        white-space: nowrap;
       }
 
       /* Logging Section */
@@ -710,7 +720,7 @@
               placeholder="Enter server URL"
             />
           </div>
-          <div class="form-group">
+          <div class="form-group" id="fingerprintSection">
             <label for="fingerprintUrl"
               >Fingerprint URL
               <span style="font-size: 0.75rem; color: var(--text-secondary)"
@@ -794,9 +804,26 @@
 
       <!-- Content Section -->
       <div class="card" style="margin-bottom: 2rem">
-        <h2>Content</h2>
+        <h2>Content Namespaces</h2>
         <!-- Tracks Container -->
         <div id="tracks-container" class="tracks-container"></div>
+        <div id="catalog-section" style="display: none">
+          <pre
+            id="catalogJson"
+            style="
+              background: var(--bg-secondary);
+              border: 1px solid var(--border-color);
+              border-radius: 6px;
+              padding: 0.75rem;
+              font-size: 0.75rem;
+              max-height: 400px;
+              overflow: auto;
+              white-space: pre-wrap;
+              word-break: break-all;
+              color: var(--text-secondary);
+            "
+          ></pre>
+        </div>
       </div>
 
       <!-- Logging Section -->

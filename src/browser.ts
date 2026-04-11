@@ -159,6 +159,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   serverUrlInput.value = serverUrl;
   fingerprintUrlInput.value = fingerprintUrl;
 
+  // Hide fingerprint section if no fingerprint URL is configured, with toggle to show/hide
+  if (!fingerprintUrl) {
+    const fingerprintSection = document.getElementById("fingerprintSection");
+    if (fingerprintSection) {
+      fingerprintSection.style.display = "none";
+      const toggle = document.createElement("a");
+      toggle.textContent = "Fingerprint URL...";
+      toggle.href = "#";
+      toggle.style.cssText =
+        "font-size: 0.75rem; color: var(--text-secondary); cursor: pointer;";
+      toggle.addEventListener("click", (e) => {
+        e.preventDefault();
+        const visible = fingerprintSection.style.display !== "none";
+        fingerprintSection.style.display = visible ? "none" : "";
+      });
+      fingerprintSection.parentElement?.insertBefore(
+        toggle,
+        fingerprintSection,
+      );
+    }
+  }
+
   // Log source of configuration
   if (urlParams.get("serverUrl")) {
     logger.info("Server URL loaded from URL parameters");

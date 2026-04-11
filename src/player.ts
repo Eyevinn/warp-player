@@ -30,6 +30,7 @@ export class Player {
   private unregisterPublishNamespaceCallback: (() => void) | null = null;
   private publishedNamespaces: string[][] = [];
   private selectedNamespace: string[] | null = null;
+  private clearKeySupported: boolean | null = null;
   private tracksContainerEl: HTMLElement;
   private statusEl: HTMLElement;
   private publishedNamespacesEl: HTMLElement | null = null;
@@ -199,6 +200,10 @@ export class Player {
         this.onConnectionStateChange(true);
       }
 
+      // ClearKey is not supported in Safari
+      this.clearKeySupported = !this.isSafari();
+      this.logger.info(`ClearKey supported: ${this.clearKeySupported}`);
+
       // Create the published namespaces section
       this.createPublishedNamespacesSection();
 
@@ -291,6 +296,16 @@ export class Player {
 
       // Clear tracks display
       this.tracksContainerEl.innerHTML = "";
+
+      // Hide and clear catalog view
+      const catalogSection = document.getElementById("catalog-section");
+      if (catalogSection) {
+        catalogSection.style.display = "none";
+      }
+      const catalogJson = document.getElementById("catalogJson");
+      if (catalogJson) {
+        catalogJson.textContent = "";
+      }
 
       // Remove the published namespaces section completely
       this.removePublishedNamespacesSection();
@@ -573,9 +588,82 @@ export class Player {
       `Found ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`,
     );
 
+    // Determine DRM label from catalog contentProtections
+    const drmLabel = this.getDrmLabel();
+
     // Display tracks in the UI
-    this.displayTracks("Video Tracks", videoTracks);
-    this.displayTracks("Audio Tracks", audioTracks);
+    this.displayTracks("video-tracks", `Video Tracks${drmLabel}`, videoTracks);
+    this.displayTracks("audio-tracks", `Audio Tracks${drmLabel}`, audioTracks);
+
+    // Update catalog JSON view
+    const catalogSection = document.getElementById("catalog-section");
+    const catalogJson = document.getElementById("catalogJson");
+    if (catalogJson) {
+      // Shorten initData for readability
+      const displayCatalog = {
+        ...catalog,
+        tracks: catalog.tracks.map((t: WarpTrack & { initData?: string }) => {
+          if (t.initData && t.initData.length > 40) {
+            return {
+              ...t,
+              initData: t.initData.substring(0, 40) + "...",
+            };
+          }
+          return t;
+        }),
+      };
+      catalogJson.textContent = JSON.stringify(displayCatalog, null, 2);
+    }
+
+    // Add catalog toggle button if not already present
+    if (
+      this.tracksContainerEl &&
+      !document.getElementById("catalogToggleBtn")
+    ) {
+      const btn = document.createElement("a");
+      btn.id = "catalogToggleBtn";
+      btn.href = "#";
+      btn.textContent = "Show catalog";
+      btn.style.cssText =
+        "font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; display: inline-block; margin-top: 0.5rem;";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (catalogSection) {
+          const visible = catalogSection.style.display !== "none";
+          catalogSection.style.display = visible ? "none" : "";
+          btn.textContent = visible ? "Show catalog" : "Hide catalog";
+        }
+      });
+      this.tracksContainerEl.appendChild(btn);
+    }
+  }
+
+  /**
+   * Get a DRM label string from the current catalog's contentProtections.
+   * Returns e.g. " 🔒 Widevine" or " 🔒 ClearKey" or "" if no DRM.
+   */
+  private getDrmLabel(): string {
+    const catalog = this.catalogManager.getCatalog();
+    if (
+      !catalog?.contentProtections ||
+      catalog.contentProtections.length === 0
+    ) {
+      return "";
+    }
+    const systemNames: string[] = [];
+    for (const cp of catalog.contentProtections) {
+      const sysId = cp.drmSystem?.systemID;
+      if (sysId) {
+        const name = this.drmSystems[sysId];
+        if (name && !systemNames.includes(name)) {
+          systemNames.push(name);
+        }
+      }
+    }
+    if (systemNames.length === 0) {
+      return "";
+    }
+    return ` 🔒 ${systemNames.join(", ")}`;
   }
 
   /**
@@ -603,47 +691,18 @@ export class Player {
       return;
     }
 
-    // Create published namespaces section
-    const heading = document.createElement("h3");
-    heading.textContent = "Namespaces";
-    heading.id = "published-namespaces-heading";
-
+    // Create published namespaces container before the tracks container
     this.publishedNamespacesEl = document.createElement("div");
     this.publishedNamespacesEl.id = "published-namespaces";
     this.publishedNamespacesEl.className = "published-namespaces-container";
 
-    // Find the "Available Tracks" heading that is the sibling of tracksContainerEl
-    let tracksHeading = null;
-    for (let i = 0; i < container.children.length; i++) {
-      const child = container.children[i];
-      if (child.tagName === "H3" && child.textContent === "Available Tracks") {
-        tracksHeading = child;
-        break;
-      }
-    }
-
-    if (tracksHeading) {
-      container.insertBefore(heading, tracksHeading);
-      container.insertBefore(this.publishedNamespacesEl, tracksHeading);
-    } else {
-      container.insertBefore(heading, this.tracksContainerEl);
-      container.insertBefore(
-        this.publishedNamespacesEl,
-        this.tracksContainerEl,
-      );
-    }
+    container.insertBefore(this.publishedNamespacesEl, this.tracksContainerEl);
   }
 
   /**
    * Remove the published namespaces section from the DOM
    */
   private removePublishedNamespacesSection(): void {
-    // Remove the published namespaces heading
-    const heading = document.getElementById("published-namespaces-heading");
-    if (heading && heading.parentNode) {
-      heading.parentNode.removeChild(heading);
-    }
-
     // Remove the published namespaces container
     if (this.publishedNamespacesEl && this.publishedNamespacesEl.parentNode) {
       this.publishedNamespacesEl.parentNode.removeChild(
@@ -673,25 +732,34 @@ export class Player {
     const container = this.publishedNamespacesEl;
     for (const ns of this.publishedNamespaces) {
       const nsStr = ns.join("/");
+      const isEccp = nsStr.includes("/eccp-");
+      const disabled = isEccp && !this.clearKeySupported;
+
       const btn = document.createElement("button");
       btn.className =
-        "namespace-btn" + (nsStr === selectedStr ? " selected" : "");
+        "namespace-btn" +
+        (nsStr === selectedStr ? " selected" : "") +
+        (disabled ? " disabled" : "");
       btn.textContent = nsStr;
-      btn.addEventListener("click", () => {
-        if (nsStr !== selectedStr) {
-          this.selectNamespace(ns);
-        }
-      });
+
+      if (!disabled) {
+        btn.addEventListener("click", () => {
+          if (nsStr !== selectedStr) {
+            this.selectNamespace(ns);
+          }
+        });
+      }
       container.appendChild(btn);
     }
   }
 
   /**
    * Display tracks in the UI
-   * @param title The title for the tracks section
+   * @param id Stable ID base for the select element (e.g. "video-tracks")
+   * @param title Display title for the section heading
    * @param tracks The tracks to display
    */
-  private displayTracks(title: string, tracks: WarpTrack[]): void {
+  private displayTracks(id: string, title: string, tracks: WarpTrack[]): void {
     if (!this.tracksContainerEl || tracks.length === 0) {
       return;
     }
@@ -705,15 +773,11 @@ export class Player {
     titleEl.textContent = title;
     section.appendChild(titleEl);
 
-    // Create selector and label in a container
+    // Create selector container with dropdown and details side by side
     const selectorContainer = document.createElement("div");
     selectorContainer.className = "selector-container";
 
-    const selectorLabel = document.createElement("label");
-    const selectId = `${title.toLowerCase().replace(/\s+/g, "-")}-select`;
-    selectorLabel.htmlFor = selectId;
-    selectorLabel.textContent = `Select ${title.toLowerCase()}: `;
-    selectorContainer.appendChild(selectorLabel);
+    const selectId = `${id}-select`;
 
     // Create dropdown select element
     const select = document.createElement("select");
@@ -727,9 +791,7 @@ export class Player {
       option.value = track.name;
       option.dataset.trackName = track.name;
       option.dataset.namespace = track.namespace || "";
-      option.textContent = `${track.name}${
-        track.namespace ? ` (${track.namespace})` : ""
-      }`;
+      option.textContent = track.name;
 
       // Select first track by default
       if (index === 0) {
@@ -791,8 +853,8 @@ export class Player {
     }, 0);
 
     selectorContainer.appendChild(select);
+    selectorContainer.appendChild(detailsContainer);
     section.appendChild(selectorContainer);
-    section.appendChild(detailsContainer);
 
     this.tracksContainerEl.appendChild(section);
 
@@ -1986,6 +2048,22 @@ export class Player {
 
       this.logger.info("Audio track found in catalog, preparing for setup");
     }
+    // Warn if HEVC + Widevine — not fully compatible in Chrome
+    if (
+      videoTrack?.codec?.startsWith("hvc") &&
+      videoTrack?.contentProtectionRefIDs
+    ) {
+      const catalog = this.catalogManager.getCatalog();
+      const isWidevine = catalog?.contentProtections?.some(
+        (cp: ContentProtection) => cp.drmSystem?.systemID === this.widevine,
+      );
+      if (isWidevine) {
+        this.logger.warn(
+          "HEVC with Widevine (CENC) is not fully supported in Chrome. Consider selecting an AVC track instead.",
+        );
+      }
+    }
+
     const tracks = [videoTrack, audioTrack].filter(
       (track) => track?.contentProtectionRefIDs !== undefined,
     ) as WarpTrack[];
@@ -2097,6 +2175,21 @@ export class Player {
             break;
           case this.fairplay:
             drmSystemSupported = await isFairplaySupported();
+            break;
+          case this.clearkey:
+            try {
+              await navigator.requestMediaKeySystemAccess("org.w3.clearkey", [
+                {
+                  initDataTypes: ["cenc"],
+                  videoCapabilities: [
+                    { contentType: 'video/mp4; codecs="avc1.4D401F"' },
+                  ],
+                },
+              ]);
+              drmSystemSupported = true;
+            } catch {
+              drmSystemSupported = false; // Safari does not support ClearKey
+            }
             break;
         }
         if (!drmSystemSupported) {
@@ -2962,6 +3055,15 @@ export class Player {
   /**
    * Decode base64 to ArrayBuffer
    */
+  private isSafari(): boolean {
+    const ua = navigator.userAgent;
+    return (
+      ua.includes("Safari") &&
+      !ua.includes("Chrome") &&
+      !ua.includes("Chromium")
+    );
+  }
+
   private base64ToArrayBuffer(base64: string): ArrayBuffer {
     const binary = atob(base64);
     const len = binary.length;
