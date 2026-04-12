@@ -2,6 +2,7 @@ import {
   Subscribe,
   SubscribeOk,
   SubscribeError,
+  SubscribeUpdate,
   PublishDone,
   Unsubscribe,
   Fetch,
@@ -13,6 +14,7 @@ import {
   FilterType,
 } from "./control";
 import { KeyValuePair } from "./stream";
+import { Version, isDraft16 } from "./version";
 
 /**
  * Enum for message type IDs, matching the draft-14 specification
@@ -42,19 +44,23 @@ enum Id {
  * marshal methods to write a message to the buffer. The format is always:
  * wire format type, 16-bit length, message fields, etc.
  */
+// Draft-16 parameter type keys for fields moved from message body to params
+const PARAM_FORWARD = 0x10n;
+const PARAM_SUBSCRIBER_PRIORITY = 0x20n;
+const PARAM_SUBSCRIPTION_FILTER = 0x21n;
+const PARAM_GROUP_ORDER = 0x22n;
+
 export class BufferCtrlWriter {
   private buffer: Uint8Array;
   private position: number;
   private tempBuffer: Uint8Array;
+  private version: Version;
 
-  /**
-   * Creates a new BufferCtrlWriter with an initial buffer size
-   * @param initialSize Initial size of the buffer (default: 1024 bytes)
-   */
-  constructor(initialSize: number = 1024) {
+  constructor(version: Version = Version.DRAFT_14, initialSize: number = 1024) {
     this.buffer = new Uint8Array(initialSize);
     this.position = 0;
-    this.tempBuffer = new Uint8Array(8); // For temporary operations
+    this.tempBuffer = new Uint8Array(8);
+    this.version = version;
   }
 
   /**
@@ -298,6 +304,102 @@ export class BufferCtrlWriter {
   }
 
   /**
+   * Writes delta-encoded key-value pairs (draft-16+).
+   * Parameters are sorted by ascending type, then each type is encoded
+   * as a delta from the previous type.
+   */
+  private writeDeltaKeyValuePairs(pairs?: KeyValuePair[]): void {
+    const numPairs = pairs ? pairs.length : 0;
+    this.writeVarInt53(numPairs);
+
+    if (!pairs || pairs.length === 0) {
+      return;
+    }
+
+    // Sort by ascending type for delta encoding
+    const sorted = [...pairs].sort((a, b) => {
+      if (a.type < b.type) {
+        return -1;
+      }
+      if (a.type > b.type) {
+        return 1;
+      }
+      return 0;
+    });
+
+    let prevType = 0n;
+    for (const pair of sorted) {
+      // Write delta type
+      const delta = pair.type - prevType;
+      this.writeVarInt62(delta);
+      prevType = pair.type;
+
+      if (pair.type % 2n === 0n) {
+        if (typeof pair.value !== "bigint") {
+          throw new Error(
+            `Invalid value type for even key ${pair.type}: expected bigint`,
+          );
+        }
+        this.writeVarInt62(pair.value);
+      } else {
+        if (!(pair.value instanceof Uint8Array)) {
+          throw new Error(
+            `Invalid value type for odd key ${pair.type}: expected Uint8Array`,
+          );
+        }
+        this.writeVarInt53(pair.value.byteLength);
+        this.ensureSpace(pair.value.byteLength);
+        this.buffer.set(pair.value, this.position);
+        this.position += pair.value.byteLength;
+      }
+    }
+  }
+
+  /** Writes params using the appropriate encoding for the current version */
+  private writeParams(pairs?: KeyValuePair[]): void {
+    if (isDraft16(this.version)) {
+      this.writeDeltaKeyValuePairs(pairs);
+    } else {
+      this.writeKeyValuePairs(pairs);
+    }
+  }
+
+  /** Encodes a Location into a Uint8Array (for packing into parameter bytes) */
+  private encodeLocationBytes(location: Location): Uint8Array {
+    const tempWriter = new BufferCtrlWriter(this.version, 16);
+    tempWriter.writeVarInt62(location.group);
+    tempWriter.writeVarInt62(location.object);
+    return tempWriter.getBytes();
+  }
+
+  /** Encodes a subscription filter into bytes for the SUBSCRIPTION_FILTER parameter */
+  private encodeFilterBytes(
+    filterType: FilterType,
+    startLocation?: Location,
+    endGroup?: bigint,
+  ): Uint8Array {
+    const tempWriter = new BufferCtrlWriter(this.version, 32);
+    tempWriter.writeVarInt53(filterType);
+    if (
+      filterType === FilterType.AbsoluteStart ||
+      filterType === FilterType.AbsoluteRange
+    ) {
+      if (!startLocation) {
+        throw new Error("Missing startLocation for absolute filter");
+      }
+      tempWriter.writeVarInt62(startLocation.group);
+      tempWriter.writeVarInt62(startLocation.object);
+    }
+    if (filterType === FilterType.AbsoluteRange) {
+      if (endGroup === undefined) {
+        throw new Error("Missing endGroup for absolute range filter");
+      }
+      tempWriter.writeVarInt62(endGroup);
+    }
+    return tempWriter.getBytes();
+  }
+
+  /**
    * Helper method to marshal a message with proper type and length
    * @param messageType The message type ID
    * @param writeContent Function to write the message content
@@ -331,49 +433,59 @@ export class BufferCtrlWriter {
    */
   public marshalSubscribe(msg: Subscribe): BufferCtrlWriter {
     this.marshalWithLength(Id.Subscribe, () => {
-      // Write the subscription ID
       this.writeVarInt62(msg.requestId);
-
-      // trackAlias removed in draft-14 - publisher assigns it in SUBSCRIBE_OK
-
-      // Write the namespace
       this.writeTuple(msg.namespace);
-
-      // Write the track name
       this.writeString(msg.name);
 
-      // Write the subscriber priority
-      this.writeUint8(msg.subscriber_priority);
+      if (isDraft16(this.version)) {
+        // Draft-16: fields moved to parameters
+        const params: KeyValuePair[] = [...(msg.params || [])];
+        params.push({
+          type: PARAM_FORWARD,
+          value: BigInt(msg.forward ? 1 : 0),
+        });
+        params.push({
+          type: PARAM_SUBSCRIBER_PRIORITY,
+          value: BigInt(msg.subscriber_priority),
+        });
+        params.push({
+          type: PARAM_SUBSCRIPTION_FILTER,
+          value: this.encodeFilterBytes(
+            msg.filterType,
+            msg.startLocation,
+            msg.endGroup,
+          ),
+        });
+        params.push({
+          type: PARAM_GROUP_ORDER,
+          value: BigInt(msg.group_order),
+        });
+        this.writeDeltaKeyValuePairs(params);
+      } else {
+        // Draft-14: inline fields
+        this.writeUint8(msg.subscriber_priority);
+        this.writeUint8(msg.group_order);
+        this.writeBoolAsUint8(msg.forward);
+        this.writeUint8(msg.filterType);
 
-      // Write the group order
-      this.writeUint8(msg.group_order);
-
-      // Write the forward flag
-      this.writeBoolAsUint8(msg.forward);
-
-      // Write the filter type
-      this.writeUint8(msg.filterType);
-
-      if (
-        msg.filterType === FilterType.AbsoluteStart ||
-        msg.filterType === FilterType.AbsoluteRange
-      ) {
-        // Write the location
-        if (!msg.startLocation) {
-          throw new Error("Missing startLocation for absolute filter");
+        if (
+          msg.filterType === FilterType.AbsoluteStart ||
+          msg.filterType === FilterType.AbsoluteRange
+        ) {
+          if (!msg.startLocation) {
+            throw new Error("Missing startLocation for absolute filter");
+          }
+          this.writeLocation(msg.startLocation);
         }
-        this.writeLocation(msg.startLocation);
-      }
 
-      if (msg.filterType === FilterType.AbsoluteRange) {
-        // Write the end group
-        if (!msg.endGroup) {
-          throw new Error("Missing endGroup for absolute range filter");
+        if (msg.filterType === FilterType.AbsoluteRange) {
+          if (!msg.endGroup) {
+            throw new Error("Missing endGroup for absolute range filter");
+          }
+          this.writeVarInt62(msg.endGroup);
         }
-        this.writeVarInt62(msg.endGroup);
+        this.writeKeyValuePairs(msg.params);
       }
-      // Write parameters (if any)
-      this.writeKeyValuePairs(msg.params);
     });
 
     return this;
@@ -419,17 +531,20 @@ export class BufferCtrlWriter {
    */
   public marshalSubscribeError(msg: SubscribeError): BufferCtrlWriter {
     this.marshalWithLength(Id.SubscribeError, () => {
-      // Write the request ID
       this.writeVarInt62(msg.requestId);
-
-      // Write the error code
       this.writeVarInt62(msg.code);
 
-      // Write the error reason
+      if (isDraft16(this.version)) {
+        // Draft-16 REQUEST_ERROR: includes retryInterval
+        this.writeVarInt62(msg.retryInterval ?? 0n);
+      }
+
       this.writeString(msg.reason);
 
-      // Write the track alias
-      this.writeVarInt62(msg.trackAlias);
+      if (!isDraft16(this.version) && msg.trackAlias !== undefined) {
+        // Draft-14 only: trackAlias
+        this.writeVarInt62(msg.trackAlias);
+      }
     });
 
     return this;
@@ -486,28 +601,24 @@ export class BufferCtrlWriter {
    */
   public marshalPublishNamespace(msg: PublishNamespace): BufferCtrlWriter {
     this.marshalWithLength(Id.PublishNamespace, () => {
-      // Write the request ID
       this.writeVarInt62(msg.requestId);
-
-      // Write the namespace
       this.writeTuple(msg.namespace);
-
-      // Convert Parameters map to KeyValuePair array and write them
-      this.writeKeyValuePairs(msg.params);
+      this.writeParams(msg.params);
     });
 
     return this;
   }
 
   /**
-   * Marshals a PublishNamespaceOk message to the buffer (draft-14: renamed from AnnounceOk)
-   * @param msg The PublishNamespaceOk message to marshal
-   * @returns The BufferCtrlWriter instance for chaining
+   * Marshals a PublishNamespaceOk / REQUEST_OK message to the buffer
    */
   public marshalPublishNamespaceOk(msg: PublishNamespaceOk): BufferCtrlWriter {
     this.marshalWithLength(Id.PublishNamespaceOk, () => {
-      // Write the request ID
       this.writeVarInt62(msg.requestId);
+      if (isDraft16(this.version)) {
+        // Draft-16 REQUEST_OK includes parameters
+        this.writeDeltaKeyValuePairs([]);
+      }
     });
 
     return this;
@@ -572,36 +683,82 @@ export class BufferCtrlWriter {
     params?: KeyValuePair[];
   }): BufferCtrlWriter {
     this.marshalWithLength(Id.ClientSetup, () => {
-      // Write version count
-      this.writeVarInt53(msg.versions.length);
-
-      // Write each version
-      for (const version of msg.versions) {
-        this.writeVarInt53(version);
+      if (!isDraft16(this.version)) {
+        // Draft-14: include version list for in-band negotiation
+        this.writeVarInt53(msg.versions.length);
+        for (const version of msg.versions) {
+          this.writeVarInt53(version);
+        }
       }
+      // Draft-16 omits version list (negotiated via protocol)
+      this.writeParams(msg.params);
+    });
 
-      // Write parameters (if any)
-      this.writeKeyValuePairs(msg.params);
+    return this;
+  }
+
+  public marshalServerSetup(msg: {
+    version: number;
+    params?: KeyValuePair[];
+  }): BufferCtrlWriter {
+    this.marshalWithLength(Id.ServerSetup, () => {
+      if (!isDraft16(this.version)) {
+        // Draft-14: include selected version
+        this.writeVarInt53(msg.version);
+      }
+      // Draft-16 omits selected version (negotiated via protocol)
+      this.writeParams(msg.params);
     });
 
     return this;
   }
 
   /**
-   * Marshals a Server setup message to the buffer
-   * @param msg The Server setup message to marshal
-   * @returns The BufferCtrlWriter instance for chaining
+   * Marshals a SubscribeUpdate / REQUEST_UPDATE message to the buffer
    */
-  public marshalServerSetup(msg: {
-    version: number;
-    params?: KeyValuePair[];
-  }): BufferCtrlWriter {
-    this.marshalWithLength(Id.ServerSetup, () => {
-      // Write the selected version
-      this.writeVarInt53(msg.version);
+  public marshalSubscribeUpdate(msg: SubscribeUpdate): BufferCtrlWriter {
+    this.marshalWithLength(Id.SubscribeUpdate, () => {
+      this.writeVarInt62(msg.requestId);
+      // draft-14: SubscriptionRequestID; draft-16 calls it Existing Request ID
+      // In warp-player the field name on the interface hasn't changed
+      // but we need to check if this field exists. For draft-14:
+      // requestId is the new request ID, and we need the subscription request ID.
+      // Looking at the interface, requestId serves as REQUEST_UPDATE's own ID in draft-16
+      // and startLocation/endGroup/etc are inline in draft-14 or in params in draft-16.
 
-      // Write parameters (if any)
-      this.writeKeyValuePairs(msg.params);
+      if (isDraft16(this.version)) {
+        // Draft-16: all fields in parameters
+        const params: KeyValuePair[] = [...(msg.params || [])];
+        params.push({
+          type: PARAM_FORWARD,
+          value: BigInt(msg.forward ? 1 : 0),
+        });
+        params.push({
+          type: PARAM_SUBSCRIBER_PRIORITY,
+          value: BigInt(msg.subscriberPriority),
+        });
+        // Encode filter
+        const filterType =
+          msg.endGroup > 0n
+            ? FilterType.AbsoluteRange
+            : FilterType.AbsoluteStart;
+        params.push({
+          type: PARAM_SUBSCRIPTION_FILTER,
+          value: this.encodeFilterBytes(
+            filterType,
+            msg.startLocation,
+            msg.endGroup,
+          ),
+        });
+        this.writeDeltaKeyValuePairs(params);
+      } else {
+        // Draft-14: inline fields
+        this.writeLocation(msg.startLocation);
+        this.writeVarInt62(msg.endGroup);
+        this.writeUint8(msg.subscriberPriority);
+        this.writeBoolAsUint8(msg.forward);
+        this.writeKeyValuePairs(msg.params);
+      }
     });
 
     return this;

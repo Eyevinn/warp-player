@@ -2,6 +2,7 @@ import { ILogger, LoggerFactory } from "../logger";
 
 import { BufferCtrlWriter } from "./bufferctrlwriter";
 import { Reader, Writer, KeyValuePair } from "./stream";
+import { Version, isDraft16 } from "./version";
 
 // Logger for control message operations
 const controlLogger: ILogger = LoggerFactory.getInstance().getLogger("Control");
@@ -135,8 +136,9 @@ export interface SubscribeError {
   kind: Msg.SubscribeError;
   requestId: bigint;
   code: bigint;
+  retryInterval?: bigint; // draft-16: minimum ms before retry (0 = don't retry)
   reason: string;
-  trackAlias: bigint;
+  trackAlias?: bigint; // draft-14 only
 }
 
 export interface SubscribeUpdate {
@@ -185,6 +187,7 @@ export interface FetchError {
   kind: Msg.FetchError;
   requestId: bigint;
   code: bigint;
+  retryInterval?: bigint; // draft-16
   reason: string;
 }
 
@@ -206,7 +209,7 @@ export interface PublishNamespace {
 export interface PublishNamespaceOk {
   kind: Msg.PublishNamespaceOk;
   requestId: bigint;
-  namespace: string[];
+  namespace?: string[]; // draft-14 only; draft-16 REQUEST_OK has params instead
 }
 
 export interface PublishNamespaceError {
@@ -232,9 +235,9 @@ export class CtrlStream {
 
   #mutex = Promise.resolve();
 
-  constructor(r: Reader, w: Writer) {
-    this.decoder = new Decoder(r);
-    this.encoder = new Encoder(w);
+  constructor(r: Reader, w: Writer, version: Version = Version.DRAFT_14) {
+    this.decoder = new Decoder(r, version);
+    this.encoder = new Encoder(w, version);
   }
 
   // Will error if two messages are read at once.
@@ -273,11 +276,18 @@ export class CtrlStream {
   }
 }
 
+// Draft-16 parameter type keys for decoding
+const PARAM_EXPIRES = 0x08n;
+const PARAM_LARGEST_OBJECT = 0x09n;
+const PARAM_GROUP_ORDER = 0x22n;
+
 export class Decoder {
   r: Reader;
+  private version: Version;
 
-  constructor(r: Reader) {
+  constructor(r: Reader, version: Version = Version.DRAFT_14) {
     this.r = r;
+    this.version = version;
   }
 
   private async msg(): Promise<Msg> {
@@ -510,15 +520,104 @@ export class Decoder {
     }
   }
 
+  /** Draft-16: decode delta-encoded parameters from the control stream */
+  private async deltaKeyValuePairs(): Promise<KeyValuePair[]> {
+    const count = await this.r.u53();
+    const params: KeyValuePair[] = [];
+    let prevType = 0n;
+
+    for (let i = 0; i < count; i++) {
+      const delta = await this.r.u62();
+      const paramType = prevType + delta;
+      prevType = paramType;
+
+      if (paramType % 2n === 0n) {
+        const value = await this.r.u62();
+        params.push({ type: paramType, value });
+      } else {
+        const length = await this.r.u53();
+        const value = await this.r.read(length);
+        params.push({ type: paramType, value });
+      }
+    }
+    return params;
+  }
+
+  /** Read params using the appropriate decoding for the current version */
+  private async readParams(): Promise<KeyValuePair[]> {
+    if (isDraft16(this.version)) {
+      return this.deltaKeyValuePairs();
+    }
+    return this.r.keyValuePairs();
+  }
+
+  /** Helper: find a varint param value by type key */
+  private findParamVarInt(
+    params: KeyValuePair[],
+    key: bigint,
+    defaultValue: bigint,
+  ): bigint {
+    const p = params.find((p) => p.type === key);
+    if (p && typeof p.value === "bigint") {
+      return p.value;
+    }
+    return defaultValue;
+  }
+
+  /** Helper: find a bytes param value by type key */
+  private findParamBytes(
+    params: KeyValuePair[],
+    key: bigint,
+  ): Uint8Array | undefined {
+    const p = params.find((p) => p.type === key);
+    if (p && p.value instanceof Uint8Array) {
+      return p.value;
+    }
+    return undefined;
+  }
+
   private async subscribe_ok(): Promise<SubscribeOk> {
     controlLogger.debug("Parsing SubscribeOk message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
 
-    // draft-14: trackAlias is now in SUBSCRIBE_OK (assigned by publisher)
     const trackAlias = await this.r.u62();
     controlLogger.debug(`Track Alias: ${trackAlias}`);
 
+    if (isDraft16(this.version)) {
+      // Draft-16: fields are in parameters, followed by track extensions
+      const params = await this.deltaKeyValuePairs();
+
+      const expires = this.findParamVarInt(params, PARAM_EXPIRES, 0n);
+      const groupOrderVal = this.findParamVarInt(params, PARAM_GROUP_ORDER, 0n);
+      const group_order = this.parseGroupOrder(Number(groupOrderVal));
+      const largestBytes = this.findParamBytes(params, PARAM_LARGEST_OBJECT);
+
+      let content_exists = false;
+      let largest: Location | undefined;
+      if (largestBytes && largestBytes.length > 0) {
+        content_exists = true;
+        largest = this.parseLocationFromBytes(largestBytes);
+        controlLogger.debug(
+          `Largest: group ${largest.group}, object ${largest.object}`,
+        );
+      }
+
+      // TODO: read track extensions (currently skip any remaining bytes)
+
+      return {
+        kind: Msg.SubscribeOk,
+        requestId,
+        trackAlias,
+        expires,
+        group_order,
+        content_exists,
+        largest,
+        params,
+      };
+    }
+
+    // Draft-14: inline fields
     const expires = await this.r.u62();
     controlLogger.debug(`Expires: ${expires}`);
 
@@ -550,24 +649,97 @@ export class Decoder {
     };
   }
 
+  /** Parse a GroupOrder value from a number (used by both draft-14 and draft-16) */
+  private parseGroupOrder(orderCode: number): GroupOrder {
+    switch (orderCode) {
+      case 0:
+        return GroupOrder.Publisher;
+      case 1:
+        return GroupOrder.Ascending;
+      case 2:
+        return GroupOrder.Descending;
+      default:
+        controlLogger.warn(
+          `Unknown GroupOrder value: ${orderCode}, using Publisher`,
+        );
+        return GroupOrder.Publisher;
+    }
+  }
+
+  /** Parse a Location from raw bytes (for draft-16 parameter values) */
+  private parseLocationFromBytes(bytes: Uint8Array): Location {
+    // Decode two varints from the byte array
+    let offset = 0;
+    const { value: group, bytesRead: gb } = this.decodeVarIntFromBytes(
+      bytes,
+      offset,
+    );
+    offset += gb;
+    const { value: object } = this.decodeVarIntFromBytes(bytes, offset);
+    return { group, object };
+  }
+
+  /** Decode a QUIC varint from a byte array at a given offset */
+  private decodeVarIntFromBytes(
+    bytes: Uint8Array,
+    offset: number,
+  ): { value: bigint; bytesRead: number } {
+    const first = bytes[offset];
+    const prefix = first >> 6;
+    let length: number;
+    switch (prefix) {
+      case 0:
+        length = 1;
+        break;
+      case 1:
+        length = 2;
+        break;
+      case 2:
+        length = 4;
+        break;
+      case 3:
+        length = 8;
+        break;
+      default:
+        throw new Error(`Invalid varint prefix: ${prefix}`);
+    }
+    let value = BigInt(first & 0x3f);
+    for (let i = 1; i < length; i++) {
+      value = (value << 8n) | BigInt(bytes[offset + i]);
+    }
+    return { value, bytesRead: length };
+  }
+
   private async subscribe_error(): Promise<SubscribeError> {
-    controlLogger.debug("Parsing SubscribeError message...");
+    controlLogger.debug("Parsing SubscribeError / REQUEST_ERROR message...");
     const requestId = await this.r.u62();
-    controlLogger.debug(`Subscribe ID: ${requestId}`);
+    controlLogger.debug(`Request ID: ${requestId}`);
 
     const code = await this.r.u62();
     controlLogger.debug(`Code: ${code}`);
 
+    let retryInterval: bigint | undefined;
+    if (isDraft16(this.version)) {
+      // Draft-16 REQUEST_ERROR: includes retryInterval
+      retryInterval = await this.r.u62();
+      controlLogger.debug(`Retry interval: ${retryInterval}`);
+    }
+
     const reason = await this.r.string();
     controlLogger.debug(`Reason: ${reason}`);
 
-    const trackAlias = await this.r.u62();
-    controlLogger.debug(`Track Alias: ${trackAlias}`);
+    let trackAlias: bigint | undefined;
+    if (!isDraft16(this.version)) {
+      // Draft-14 only: trackAlias after reason
+      trackAlias = await this.r.u62();
+      controlLogger.debug(`Track Alias: ${trackAlias}`);
+    }
 
     return {
       kind: Msg.SubscribeError,
       requestId,
       code,
+      retryInterval,
       reason,
       trackAlias,
     };
@@ -598,9 +770,15 @@ export class Decoder {
   }
 
   private async fetch_error(): Promise<FetchError> {
-    controlLogger.debug("Parsing FetchError message...");
+    controlLogger.debug("Parsing FetchError / REQUEST_ERROR message...");
     const requestId = await this.r.u62();
     const code = await this.r.u62();
+
+    let retryInterval: bigint | undefined;
+    if (isDraft16(this.version)) {
+      retryInterval = await this.r.u62();
+    }
+
     const reason = await this.r.string();
 
     controlLogger.debug(
@@ -611,6 +789,7 @@ export class Decoder {
       kind: Msg.FetchError,
       requestId,
       code,
+      retryInterval,
       reason,
     };
   }
@@ -658,7 +837,7 @@ export class Decoder {
     const namespace = await this.r.tuple();
     controlLogger.debug(`Namespace: ${namespace.join("/")}`);
 
-    const params = await this.r.keyValuePairs();
+    const params = await this.readParams();
     controlLogger.debug(`Parameters: ${params.length}`);
 
     return {
@@ -670,10 +849,22 @@ export class Decoder {
   }
 
   private async publish_namespace_ok(): Promise<PublishNamespaceOk> {
-    controlLogger.debug("Parsing PublishNamespaceOk message...");
+    controlLogger.debug("Parsing PublishNamespaceOk / REQUEST_OK message...");
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
 
+    if (isDraft16(this.version)) {
+      // Draft-16 REQUEST_OK: includes parameters (no namespace)
+      const params = await this.deltaKeyValuePairs();
+      controlLogger.debug(`Parameters: ${params.length}`);
+
+      return {
+        kind: Msg.PublishNamespaceOk,
+        requestId,
+      };
+    }
+
+    // Draft-14: includes namespace
     const namespace = await this.r.tuple();
     controlLogger.debug(`Namespace: ${namespace.join("/")}`);
 
@@ -685,12 +876,20 @@ export class Decoder {
   }
 
   private async publish_namespace_error(): Promise<PublishNamespaceError> {
-    controlLogger.debug("Parsing PublishNamespaceError message...");
+    controlLogger.debug(
+      "Parsing PublishNamespaceError / REQUEST_ERROR message...",
+    );
     const requestId = await this.r.u62();
     controlLogger.debug(`Request ID: ${requestId}`);
 
     const code = await this.r.u62();
     controlLogger.debug(`Error code: ${code}`);
+
+    if (isDraft16(this.version)) {
+      // Draft-16: retryInterval before reason
+      const retryInterval = await this.r.u62();
+      controlLogger.debug(`Retry interval: ${retryInterval}`);
+    }
 
     const reason = await this.r.string();
     controlLogger.debug(`Error reason: ${reason}`);
@@ -730,16 +929,17 @@ export class Decoder {
 
 export class Encoder {
   w: Writer;
+  private version: Version;
 
-  constructor(w: Writer) {
+  constructor(w: Writer, version: Version = Version.DRAFT_14) {
     this.w = w;
+    this.version = version;
   }
 
   async message(msg: Message): Promise<void> {
     controlLogger.debug(`Encoding message of type: ${msg.kind}`);
 
-    // Create a BufferCtrlWriter to marshal the message
-    const writer = new BufferCtrlWriter();
+    const writer = new BufferCtrlWriter(this.version);
 
     // Marshal the message based on its type
     switch (msg.kind) {

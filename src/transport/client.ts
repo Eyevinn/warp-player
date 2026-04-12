@@ -11,6 +11,14 @@ import {
 import * as Setup from "./setup";
 import * as Stream from "./stream";
 import { TracksManager, ObjectCallback } from "./tracks";
+import {
+  Version,
+  isDraft16,
+  PROTOCOL_DRAFT_14,
+  PROTOCOL_DRAFT_16,
+} from "./version";
+
+export type DraftVersion = "auto" | "draft-14" | "draft-16";
 
 export interface ClientConfig {
   url: string;
@@ -18,6 +26,9 @@ export interface ClientConfig {
   // If set, the server fingerprint will be fetched from this URL.
   // This is required to use self-signed certificates with Chrome
   fingerprint?: string;
+
+  // Protocol draft version: "auto" (default), "draft-14", or "draft-16"
+  draftVersion?: DraftVersion;
 }
 
 // Type for message handlers based on message kind and request ID
@@ -28,6 +39,8 @@ export class Client {
   readonly config: ClientConfig;
   // Track the next request ID to use (client IDs are even, starting at 0)
   #nextRequestId: bigint = 0n;
+  // The negotiated protocol version (set during connect)
+  #negotiatedVersion: Version = Version.DRAFT_14;
   // Store the trackAlias used for catalog subscription
   // eslint-disable-next-line no-unused-private-class-members
   #catalogTrackAlias: bigint | null = null;
@@ -56,7 +69,6 @@ export class Client {
   #publishNamespaceCallbacks: Set<(namespace: string[]) => void> = new Set();
 
   async connect(): Promise<Connection> {
-    // Create WebTransport options
     const options: WebTransportOptions = {};
 
     const fingerprint = await this.#fingerprint;
@@ -75,10 +87,49 @@ export class Client {
       );
     }
 
+    // Set WebTransport protocols for version negotiation
+    const draftVersion = this.config.draftVersion || "auto";
+    if (draftVersion === "draft-16") {
+      (options as any).protocols = [PROTOCOL_DRAFT_16];
+      this.logger.info(
+        `Requesting WebTransport protocol: ${PROTOCOL_DRAFT_16}`,
+      );
+    } else if (draftVersion === "auto") {
+      // Offer both protocols, server picks the best match
+      (options as any).protocols = [PROTOCOL_DRAFT_16, PROTOCOL_DRAFT_14];
+      this.logger.info(
+        `Requesting WebTransport protocols: ${PROTOCOL_DRAFT_16}, ${PROTOCOL_DRAFT_14}`,
+      );
+    }
+
     this.logger.info(`Connecting to ${this.config.url}...`);
     const wt = new WebTransport(this.config.url, options);
     await wt.ready;
     this.logger.info("WebTransport connection established");
+
+    // Determine negotiated version from WebTransport protocol
+    const negotiatedProtocol = (wt as any).protocol as string | undefined;
+    let version: Version;
+
+    if (draftVersion === "draft-14") {
+      // Forced draft-14
+      version = Version.DRAFT_14;
+      this.logger.info("Using forced draft-14");
+    } else if (negotiatedProtocol === PROTOCOL_DRAFT_16) {
+      // Server accepted draft-16 protocol
+      version = Version.DRAFT_16;
+      this.logger.info(
+        `Server negotiated protocol: ${negotiatedProtocol} -> draft-16`,
+      );
+    } else {
+      // Fall back to draft-14 in-band negotiation
+      version = Version.DRAFT_14;
+      this.logger.info(
+        `WebTransport protocol: ${negotiatedProtocol || "(none)"} -> falling back to draft-14`,
+      );
+    }
+
+    this.#negotiatedVersion = version;
 
     const stream = await wt.createBidirectionalStream();
     this.logger.info("Bidirectional stream created");
@@ -86,16 +137,18 @@ export class Client {
     const writer = new Stream.Writer(stream.writable);
     const reader = new Stream.Reader(new Uint8Array(), stream.readable);
 
-    const setup = new Setup.Stream(reader, writer);
+    const setup = new Setup.Stream(reader, writer, version);
 
     // Send the client setup message
-    this.logger.info("Sending client setup message");
+    this.logger.info(
+      `Sending client setup message (${isDraft16(version) ? "draft-16" : "draft-14"})`,
+    );
     await setup.send.client({
-      versions: [Setup.Version.DRAFT_14],
+      versions: isDraft16(version) ? [] : [Version.DRAFT_14],
       params: [
         {
           type: 0x02n, // MAX_REQUEST_ID parameter type
-          value: 64n, // Allow server to send up to 64 request-type messages
+          value: 64n,
         },
       ],
     });
@@ -105,13 +158,21 @@ export class Client {
     const server = await setup.recv.server();
     this.logger.info("Received server setup:", server);
 
-    if (server.version !== Setup.Version.DRAFT_14) {
-      throw new Error(`Unsupported server version: ${server.version}`);
+    if (!isDraft16(version)) {
+      // Draft-14: validate server version
+      if (
+        server.version !== Version.DRAFT_14 &&
+        server.version !== Version.DRAFT_16
+      ) {
+        throw new Error(`Unsupported server version: ${server.version}`);
+      }
     }
 
-    // Create control stream for handling control messages
-    const control = new CtrlStream(reader, writer);
-    this.logger.info("Control stream established");
+    // Create control stream with version
+    const control = new CtrlStream(reader, writer, version);
+    this.logger.info(
+      `Control stream established (${isDraft16(version) ? "draft-16" : "draft-14"})`,
+    );
 
     // Create tracks manager for handling data streams
     this.#tracksManager = new TracksManager(wt, control, this);
@@ -119,13 +180,17 @@ export class Client {
       "Tracks manager created with control stream and client reference",
     );
 
-    // Create a Connection object with the client instance to access request ID management
     const connection = new Connection(wt, control, this);
 
     // Start listening for control messages
     this.#listenForControlMessages(control);
 
     return connection;
+  }
+
+  /** Get the negotiated protocol version */
+  get negotiatedVersion(): Version {
+    return this.#negotiatedVersion;
   }
 
   /**
