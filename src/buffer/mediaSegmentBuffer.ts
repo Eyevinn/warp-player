@@ -33,7 +33,7 @@ export class MediaSegmentBuffer {
   private initSegment: MediaSegment | null = null;
   private pendingSegments: MediaSegment[] = [];
   private isAppending: boolean = false;
-  private sourceBuffer: SourceBuffer | null = null;
+  private sourceBuffer: SourceBuffer | ManagedSourceBuffer | null = null;
   private mediaType: "video" | "audio" | "unknown" = "unknown";
   private logger: ILogger;
 
@@ -251,7 +251,9 @@ export class MediaSegmentBuffer {
    * Set the source buffer to use for appending segments
    * @param sourceBuffer The SourceBuffer instance to use
    */
-  public setSourceBuffer(sourceBuffer: SourceBuffer): void {
+  public setSourceBuffer(
+    sourceBuffer: SourceBuffer | ManagedSourceBuffer,
+  ): void {
     this.sourceBuffer = sourceBuffer;
 
     // Add event listeners to the source buffer
