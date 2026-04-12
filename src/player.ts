@@ -6,7 +6,7 @@ import {
 
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
-import { Client } from "./transport/client";
+import { Client, DraftVersion } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
 import {
   WarpCatalog,
@@ -38,6 +38,7 @@ export class Player {
   private trackSubscriptions: Map<string, bigint> = new Map(); // Track name -> trackAlias
   private isDisconnecting: boolean = false; // Flag to prevent recursive disconnect calls
   private onConnectionStateChange: ((connected: boolean) => void) | null = null;
+  private draftVersion: DraftVersion = "auto";
 
   // Shared media elements for synchronized playback
   private sharedMediaSource: MediaSource | null = null;
@@ -108,9 +109,11 @@ export class Player {
       type?: "info" | "success" | "error" | "warn",
     ) => void,
     fingerprintUrl?: string,
+    draftVersion?: DraftVersion,
   ) {
     this.serverUrl = serverUrl;
     this.fingerprintUrl = fingerprintUrl;
+    this.draftVersion = draftVersion || "auto";
     this.tracksContainerEl = tracksContainerEl;
     this.statusEl = statusEl;
     // Get logger for Player component
@@ -185,13 +188,16 @@ export class Player {
       this.client = new Client({
         url: this.serverUrl,
         fingerprint: this.fingerprintUrl,
+        draftVersion: this.draftVersion,
       });
 
       this.connection = await this.client.connect();
 
-      // Update status
+      // Update status with negotiated version
+      const versionStr =
+        this.client.negotiatedVersion === 0xff000010 ? "draft-16" : "draft-14";
       this.statusEl.className = "status connected";
-      this.statusEl.innerHTML = "<span>●</span> Connected";
+      this.statusEl.innerHTML = `<span>●</span> Connected (${versionStr})`;
 
       this.logger.info("Connected to MOQ server successfully!");
 
@@ -368,8 +374,12 @@ export class Player {
           // Re-render the namespace selector with all known namespaces
           this.renderNamespaceSelector();
 
-          // Auto-select the first namespace if none is selected yet
-          if (this.selectedNamespace === null) {
+          // Auto-select the first media namespace if none is selected yet
+          // Skip non-media namespaces (e.g. moq-test/interop)
+          if (
+            this.selectedNamespace === null &&
+            !this.isNonMediaNamespace(namespace)
+          ) {
             this.selectNamespace(namespace);
           }
         },
@@ -387,6 +397,15 @@ export class Player {
         }`,
       );
     }
+  }
+
+  /** Known non-media namespace prefixes (e.g. interop test namespaces) */
+  private static readonly NON_MEDIA_PREFIXES = ["moq-test"];
+
+  private isNonMediaNamespace(namespace: string[]): boolean {
+    return Player.NON_MEDIA_PREFIXES.some(
+      (prefix) => namespace.length > 0 && namespace[0] === prefix,
+    );
   }
 
   /**
@@ -726,11 +745,23 @@ export class Player {
     }
 
     this.publishedNamespacesEl.innerHTML = "";
+    this.publishedNamespacesEl.style.cssText =
+      "display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;";
 
     const selectedStr = this.selectedNamespace?.join("/") ?? "";
 
-    const container = this.publishedNamespacesEl;
-    for (const ns of this.publishedNamespaces) {
+    const mediaNs = this.publishedNamespaces.filter(
+      (ns) => !this.isNonMediaNamespace(ns),
+    );
+    const otherNs = this.publishedNamespaces.filter((ns) =>
+      this.isNonMediaNamespace(ns),
+    );
+
+    // Media namespace buttons on the left
+    const mediaGroup = document.createElement("div");
+    mediaGroup.style.cssText = "display: flex; gap: 0.5rem; flex-wrap: wrap;";
+
+    for (const ns of mediaNs) {
       const nsStr = ns.join("/");
       const isEccp = nsStr.includes("/eccp-");
       const disabled = isEccp && !this.clearKeySupported;
@@ -749,7 +780,26 @@ export class Player {
           }
         });
       }
-      container.appendChild(btn);
+      mediaGroup.appendChild(btn);
+    }
+    this.publishedNamespacesEl.appendChild(mediaGroup);
+
+    // Non-media namespaces as a small list on the right
+    if (otherNs.length > 0) {
+      const otherGroup = document.createElement("div");
+      otherGroup.style.cssText =
+        "max-height: 3rem; overflow-y: auto; text-align: right;";
+
+      for (const ns of otherNs) {
+        const nsStr = ns.join("/");
+        const item = document.createElement("div");
+        item.style.cssText =
+          "font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap; text-decoration: line-through; opacity: 0.5;";
+        item.textContent = nsStr;
+        item.title = "Non-content namespace";
+        otherGroup.appendChild(item);
+      }
+      this.publishedNamespacesEl.appendChild(otherGroup);
     }
   }
 

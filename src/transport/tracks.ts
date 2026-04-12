@@ -19,9 +19,21 @@ import { TrackAliasRegistry } from "./trackaliasregistry";
 
 // Bigint versions of stream types for comparison
 const FETCH_HEADER_BIGINT = 0x05n;
-// Draft-14 SUBGROUP_HEADER stream types: 0x10-0x15 (without EOG), 0x18-0x1D (with EOG)
-const SUBGROUP_HEADER_MIN_BIGINT = 0x10n;
-const SUBGROUP_HEADER_MAX_BIGINT = 0x1dn;
+
+/** Check if a stream type is a valid SUBGROUP_HEADER type.
+ * Draft-14: 0x10-0x15, 0x18-0x1D
+ * Draft-16: adds 0x30-0x35, 0x38-0x3D (with DEFAULT_PRIORITY bit 0x20)
+ */
+function isSubgroupStreamType(streamType: bigint): boolean {
+  // Strip the DEFAULT_PRIORITY bit (0x20) to normalize
+  const low = streamType & 0x1fn;
+  return (low >= 0x10n && low <= 0x15n) || (low >= 0x18n && low <= 0x1dn);
+}
+
+/** Draft-16: returns true when the DEFAULT_PRIORITY bit (0x20) is set */
+function hasDefaultPriority(streamType: bigint): boolean {
+  return (streamType & 0x20n) !== 0n;
+}
 
 // Object received in a data stream
 export interface MOQObject {
@@ -118,12 +130,10 @@ export class TracksManager {
       const streamType = await reader.u62();
       this.logger.debug(`Incoming Unidirectional Stream. Type: ${streamType}`);
 
-      // Check if this is a SUBGROUP_HEADER stream (draft-14: 0x10-0x15, 0x18-0x1D)
-      const isSubgroup =
-        streamType >= SUBGROUP_HEADER_MIN_BIGINT &&
-        streamType <= SUBGROUP_HEADER_MAX_BIGINT &&
-        !(streamType >= 0x16n && streamType <= 0x17n); // gap: 0x16-0x17 are not valid
-      if (isSubgroup) {
+      // Check if this is a SUBGROUP_HEADER stream
+      // Draft-14: 0x10-0x15, 0x18-0x1D
+      // Draft-16: adds 0x30-0x35, 0x38-0x3D (DEFAULT_PRIORITY bit)
+      if (isSubgroupStreamType(streamType)) {
         await this.handleSubgroupStream(reader, streamType);
       } else if (streamType === FETCH_HEADER_BIGINT) {
         await this.handleFetchStream(reader);
@@ -155,31 +165,38 @@ export class TracksManager {
       const groupId = await reader.u62();
       this.logger.debug(`Track alias: ${trackAlias} Group ID: ${groupId}`);
 
-      // Determine subgroup ID based on the stream type (draft-14)
-      // Stream types 0x10-0x15 (no EOG) and 0x18-0x1D (with EOG)
+      // Determine subgroup ID based on the stream type
+      // Strip the DEFAULT_PRIORITY bit (0x20) to get the base type for SID mode
       // Bit 0: has extensions, Bits 1-2: SID mode (00=zero, 01=firstObjID, 10=explicit)
-      // Bit 3: contains End of Group
+      // Bit 3: contains End of Group, Bit 5: DEFAULT_PRIORITY (draft-16)
       let subgroupId: bigint | null = null;
-      const hasExtensions = (streamType & 0x01n) === 0x01n; // odd types have extensions
-      // Strip the high nibble and EOG bit to get the base SID mode from lower 3 bits
-      const baseType = streamType & 0x07n;
+      const normalizedType = streamType & 0x1fn; // strip DEFAULT_PRIORITY bit
+      const hasExtensions = (normalizedType & 0x01n) === 0x01n;
+      const baseType = normalizedType & 0x07n;
 
       if (baseType === 0x00n || baseType === 0x01n) {
-        // ZeroSID: 0x10, 0x11, 0x18, 0x19 - Subgroup ID is implicitly 0
+        // ZeroSID: Subgroup ID is implicitly 0
         subgroupId = 0n;
         this.logger.debug(`Subgroup ID: ${subgroupId} (implicit zero)`);
       } else if (baseType === 0x02n || baseType === 0x03n) {
-        // NoSID: 0x12, 0x13, 0x1A, 0x1B - Subgroup ID is the first Object ID
+        // NoSID: Subgroup ID is the first Object ID
         this.logger.debug("Subgroup ID will be set to the first Object ID");
       } else if (baseType === 0x04n || baseType === 0x05n) {
-        // ExplicitSID: 0x14, 0x15, 0x1C, 0x1D - Subgroup ID is explicitly provided
+        // ExplicitSID: Subgroup ID is explicitly provided
         subgroupId = await reader.u62();
         this.logger.debug(`Subgroup ID: ${subgroupId} (explicit)`);
       }
 
-      // Read the Publisher Priority (as specified in the SUBGROUP_HEADER format)
-      const publisherPriority = await reader.u8();
-      this.logger.debug(`Publisher Priority: ${publisherPriority}`);
+      // Read Publisher Priority unless DEFAULT_PRIORITY bit is set (draft-16)
+      let publisherPriority = 0;
+      if (hasDefaultPriority(streamType)) {
+        this.logger.debug(
+          "Publisher Priority: default (omitted, DEFAULT_PRIORITY bit set)",
+        );
+      } else {
+        publisherPriority = await reader.u8();
+        this.logger.debug(`Publisher Priority: ${publisherPriority}`);
+      }
 
       // Buffer for objects while waiting for track registration
       const bufferedObjects: MOQObject[] = [];

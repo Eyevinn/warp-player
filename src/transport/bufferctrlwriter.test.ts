@@ -509,7 +509,7 @@ describe("BufferCtrlWriter", () => {
   describe("Buffer management", () => {
     it("should resize the buffer when needed", () => {
       // Create a writer with a very small initial buffer
-      const smallWriter = new BufferCtrlWriter(3); // Only enough for type and part of length
+      const smallWriter = new BufferCtrlWriter(undefined, 3); // Only enough for type and part of length
 
       // Create a message that will require more than 3 bytes
       // Since AnnounceOk is now very small, use a Subscribe message instead

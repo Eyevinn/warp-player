@@ -2,16 +2,20 @@ import { ILogger, LoggerFactory } from "../logger";
 
 import { BufferCtrlWriter } from "./bufferctrlwriter";
 import { KeyValuePair, Reader, Writer } from "./stream";
+import { Version, isDraft16 } from "./version";
+
+// Re-export version types for existing consumers
+export {
+  Version,
+  isDraft16,
+  PROTOCOL_DRAFT_14,
+  PROTOCOL_DRAFT_16,
+} from "./version";
 
 // Logger for setup message operations
 const setupLogger: ILogger = LoggerFactory.getInstance().getLogger("Setup");
 
 export type Message = Client | Server;
-
-export enum Version {
-  DRAFT_11 = 0xff00000b,
-  DRAFT_14 = 0xff00000e,
-}
 
 enum SetupType {
   Client = 0x20,
@@ -32,9 +36,9 @@ export class Stream {
   recv: Decoder;
   send: Encoder;
 
-  constructor(r: Reader, w: Writer) {
-    this.recv = new Decoder(r);
-    this.send = new Encoder(w);
+  constructor(r: Reader, w: Writer, version: Version = Version.DRAFT_14) {
+    this.recv = new Decoder(r, version);
+    this.send = new Encoder(w, version);
   }
 }
 
@@ -42,9 +46,11 @@ export type Parameters = KeyValuePair[];
 
 export class Decoder {
   r: Reader;
+  private version: Version;
 
-  constructor(r: Reader) {
+  constructor(r: Reader, version: Version = Version.DRAFT_14) {
     this.r = r;
+    this.version = version;
   }
 
   async client(): Promise<Client> {
@@ -67,39 +73,33 @@ export class Decoder {
     const messageLength = (lengthBytes[0] << 8) | lengthBytes[1]; // MSB format
     setupLogger.debug(`Message length (16-bit MSB): ${messageLength} bytes`);
 
-    const count = await this.r.u53();
-    setupLogger.debug(`Number of supported versions: ${count}`);
+    const versions: number[] = [];
+    if (!isDraft16(this.version)) {
+      // Draft-14: version list is in the message
+      const count = await this.r.u53();
+      setupLogger.debug(`Number of supported versions: ${count}`);
 
-    const versions = [];
-    for (let i = 0; i < count; i++) {
-      const version = await this.r.u53();
-      versions.push(version);
+      for (let i = 0; i < count; i++) {
+        const version = await this.r.u53();
+        versions.push(version);
+        setupLogger.debug(
+          `Supported version ${i + 1}: 0x${version.toString(16)}`,
+        );
+      }
+    } else {
       setupLogger.debug(
-        `Supported version ${i + 1}: 0x${version.toString(16)}`,
+        "Draft-16: version negotiated via protocol, not in SETUP",
       );
     }
 
-    const params = await this.parameters();
+    const params = isDraft16(this.version)
+      ? await this.deltaParameters()
+      : await this.parameters();
     setupLogger.debug(
       `Parameters: ${params ? `${params.length} parameters` : "none"}`,
     );
 
-    // Log each parameter in detail
-    if (params && params.length > 0) {
-      params.forEach((param) => {
-        if (typeof param.value === "bigint") {
-          setupLogger.debug(
-            `Parameter ID: ${param.type}, value: ${param.value} (bigint)`,
-          );
-        } else {
-          setupLogger.debug(
-            `Parameter ID: ${param.type}, length: ${
-              param.value.byteLength
-            } bytes, value: ${this.formatBytes(param.value)}`,
-          );
-        }
-      });
-    }
+    this.logParameters(params);
 
     const result = {
       versions,
@@ -134,30 +134,27 @@ export class Decoder {
     // Store the current position to validate length later
     const startPosition = this.r.getByteLength();
 
-    const version = await this.r.u53();
-    setupLogger.debug(`Server selected version: 0x${version.toString(16)}`);
+    let version: number;
+    if (!isDraft16(this.version)) {
+      // Draft-14: selected version is in the message
+      version = await this.r.u53();
+      setupLogger.debug(`Server selected version: 0x${version.toString(16)}`);
+    } else {
+      // Draft-16: version already negotiated via protocol
+      version = this.version;
+      setupLogger.debug(
+        `Draft-16: using protocol-negotiated version 0x${version.toString(16)}`,
+      );
+    }
 
-    const params = await this.parameters();
+    const params = isDraft16(this.version)
+      ? await this.deltaParameters()
+      : await this.parameters();
     setupLogger.debug(
       `Parameters: ${params ? `${params.length} parameters` : "none"}`,
     );
 
-    // Log each parameter in detail
-    if (params && params.length > 0) {
-      params.forEach((param) => {
-        if (typeof param.value === "bigint") {
-          setupLogger.debug(
-            `Parameter ID: ${param.type}, value: ${param.value} (bigint)`,
-          );
-        } else {
-          setupLogger.debug(
-            `Parameter ID: ${param.type}, length: ${
-              param.value.byteLength
-            } bytes, value: ${this.formatBytes(param.value)}`,
-          );
-        }
-      });
-    }
+    this.logParameters(params);
 
     // Validate that we read the expected number of bytes
     const endPosition = this.r.getByteLength();
@@ -176,6 +173,24 @@ export class Decoder {
 
     setupLogger.debug("Server setup message decoded:", result);
     return result;
+  }
+
+  private logParameters(params: Parameters | undefined): void {
+    if (params && params.length > 0) {
+      params.forEach((param) => {
+        if (typeof param.value === "bigint") {
+          setupLogger.debug(
+            `Parameter ID: ${param.type}, value: ${param.value} (bigint)`,
+          );
+        } else {
+          setupLogger.debug(
+            `Parameter ID: ${param.type}, length: ${
+              param.value.byteLength
+            } bytes, value: ${this.formatBytes(param.value)}`,
+          );
+        }
+      });
+    }
   }
 
   private formatBytes(bytes: Uint8Array): string {
@@ -276,32 +291,78 @@ export class Decoder {
 
     return params;
   }
+
+  /** Draft-16: decode delta-encoded parameters */
+  private async deltaParameters(): Promise<Parameters | undefined> {
+    const countResult = await this.r.u53WithSize();
+    const count = countResult.value;
+
+    setupLogger.debug(
+      `Delta parameter count: ${count}, count field: ${countResult.bytesRead} bytes`,
+    );
+
+    if (count === 0) {
+      return undefined;
+    }
+
+    const params: Parameters = [];
+    let prevType = 0n;
+
+    for (let i = 0; i < count; i++) {
+      // Read delta type
+      const delta = await this.r.u62();
+      const paramType = prevType + delta;
+      prevType = paramType;
+
+      const isEven = paramType % 2n === 0n;
+
+      if (isEven) {
+        const value = await this.r.u62();
+        setupLogger.debug(
+          `Delta parameter ${i + 1}/${count}: Type ${paramType} (delta ${delta}, even), Value: ${value}`,
+        );
+        params.push({ type: paramType, value });
+      } else {
+        const length = await this.r.u53();
+        if (length > 65535) {
+          throw new Error(
+            `Parameter value length exceeds maximum: ${length} > 65535`,
+          );
+        }
+        const value = await this.r.read(length);
+        setupLogger.debug(
+          `Delta parameter ${i + 1}/${count}: Type ${paramType} (delta ${delta}, odd), Length: ${length}`,
+        );
+        params.push({ type: paramType, value });
+      }
+    }
+
+    return params;
+  }
 }
 
 export class Encoder {
   w: Writer;
+  private version: Version;
 
-  constructor(w: Writer) {
+  constructor(w: Writer, version: Version = Version.DRAFT_14) {
     this.w = w;
+    this.version = version;
   }
 
   async client(c: Client): Promise<void> {
     setupLogger.debug("Encoding client setup message:", c);
 
-    // Create a BufferCtrlWriter instance
-    const writer = new BufferCtrlWriter();
+    const writer = new BufferCtrlWriter(this.version);
 
-    // Marshal the client setup message
     writer.marshalClientSetup({
       versions: c.versions,
       params: c.params,
     });
 
-    // Get the bytes from the writer
     const bytes = writer.getBytes();
     setupLogger.debug(`Client setup message created: ${bytes.length} bytes`);
 
-    // Write the entire message in a single operation
     await this.w.write(bytes);
 
     setupLogger.debug("Client setup message sent successfully");
@@ -310,20 +371,16 @@ export class Encoder {
   async server(s: Server): Promise<void> {
     setupLogger.debug("Encoding server setup message:", s);
 
-    // Create a BufferCtrlWriter instance
-    const writer = new BufferCtrlWriter();
+    const writer = new BufferCtrlWriter(this.version);
 
-    // Marshal the server setup message
     writer.marshalServerSetup({
       version: s.version,
       params: s.params,
     });
 
-    // Get the bytes from the writer
     const bytes = writer.getBytes();
     setupLogger.debug(`Server setup message created: ${bytes.length} bytes`);
 
-    // Write the entire message in a single operation
     await this.w.write(bytes);
 
     setupLogger.debug("Server setup message sent successfully");

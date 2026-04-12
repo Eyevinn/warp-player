@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MOQ Player - CMSF (draft-14)</title>
+    <title>MOQ Player - CMSF (draft-14/16)</title>
     <style>
       * {
         margin: 0;
@@ -748,6 +748,24 @@
                 >Learn more</a
               >
             </div>
+          </div>
+          <div class="form-group">
+            <label for="draftVersion">Protocol Version</label>
+            <select
+              id="draftVersion"
+              style="
+                background: var(--input-bg);
+                color: var(--text-primary);
+                border: 1px solid var(--border-color);
+                padding: 0.5rem;
+                border-radius: 0.5rem;
+                width: 100%;
+              "
+            >
+              <option value="auto">Auto (negotiate)</option>
+              <option value="draft-14">Draft 14</option>
+              <option value="draft-16">Draft 16</option>
+            </select>
           </div>
           <div class="connection-controls">
             <div class="button-group">

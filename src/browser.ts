@@ -6,6 +6,7 @@
  */
 import { LoggerFactory, LogLevel } from "./logger";
 import { Player } from "./player";
+import { DraftVersion } from "./transport/client";
 
 // DOM Elements
 let serverUrlInput: HTMLInputElement;
@@ -20,6 +21,7 @@ let logContainerEl: HTMLDivElement;
 // Using a type assertion when needed instead of storing the element
 // let logLevelSelect: HTMLSelectElement;
 let componentFilterSelect: HTMLSelectElement;
+let draftVersionSelect: HTMLSelectElement;
 let startBtn: HTMLButtonElement;
 let stopBtn: HTMLButtonElement;
 let browserWarning: HTMLDivElement;
@@ -129,6 +131,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("logLevel");
   componentFilterSelect = document.getElementById(
     "componentFilter",
+  ) as HTMLSelectElement;
+  draftVersionSelect = document.getElementById(
+    "draftVersion",
   ) as HTMLSelectElement;
   startBtn = document.getElementById("startBtn") as HTMLButtonElement;
   stopBtn = document.getElementById("stopBtn") as HTMLButtonElement;
@@ -242,6 +247,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     statusEl,
     legacyLogMessage,
     fingerprintUrlInput.value || undefined,
+    draftVersionSelect.value as DraftVersion,
   );
 
   // Set connection state callback to manage button states
@@ -650,6 +656,7 @@ async function connect() {
     statusEl,
     legacyLogMessage,
     fingerprintUrlInput.value || undefined,
+    draftVersionSelect.value as DraftVersion,
   );
 
   // Set connection state callback to manage button states
