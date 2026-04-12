@@ -41,7 +41,8 @@ export class Player {
   private draftVersion: DraftVersion = "auto";
 
   // Shared media elements for synchronized playback
-  private sharedMediaSource: MediaSource | null = null;
+  private sharedMediaSource: MediaSource | ManagedMediaSource | null = null;
+  private usingManagedMediaSource = false;
   private videoSourceBuffer: SourceBuffer | null = null;
   private audioSourceBuffer: SourceBuffer | null = null;
   private videoMediaSegmentBuffer: MediaSegmentBuffer | null = null;
@@ -1079,6 +1080,7 @@ export class Player {
     this.videoMediaBuffer = null;
     this.audioMediaBuffer = null;
     this.sharedMediaSource = null;
+    this.usingManagedMediaSource = false;
 
     // Reset error handling state
     this.recoveryInProgress = false;
@@ -2659,7 +2661,7 @@ export class Player {
     initData: ArrayBuffer,
     mediaBuffer: MediaBuffer,
     mediaSegmentBuffer: MediaSegmentBuffer,
-    sourceBuffer: SourceBuffer,
+    sourceBuffer: SourceBuffer | ManagedSourceBuffer,
     type: string,
   ): void {
     this.logger.info(`[${type}MediaBuffer] Processing init segment`);
@@ -2696,11 +2698,31 @@ export class Player {
     // Reset previous source if any
     videoEl.pause();
     videoEl.removeAttribute("src");
+    videoEl.srcObject = null;
     videoEl.load();
 
-    // Create and store the shared MediaSource
-    this.sharedMediaSource = new MediaSource();
-    videoEl.src = URL.createObjectURL(this.sharedMediaSource);
+    // Create the appropriate MediaSource implementation.
+    // iOS Safari does not support MediaSource but provides ManagedMediaSource
+    // (Safari 17+). ManagedMediaSource must be attached via srcObject.
+    if (
+      typeof ManagedMediaSource !== "undefined" &&
+      typeof MediaSource === "undefined"
+    ) {
+      this.sharedMediaSource = new ManagedMediaSource();
+      this.usingManagedMediaSource = true;
+      videoEl.disableRemotePlayback = true;
+      // ManagedMediaSource is a valid MediaProvider in Safari, but our type
+      // declaration doesn't extend MediaSource (the APIs differ), so we cast.
+      videoEl.srcObject = this.sharedMediaSource as unknown as MediaSource;
+      this.logger.info(
+        "[SharedMediaSource] Using ManagedMediaSource (iOS/Safari)",
+      );
+    } else {
+      this.sharedMediaSource = new MediaSource();
+      this.usingManagedMediaSource = false;
+      videoEl.src = URL.createObjectURL(this.sharedMediaSource);
+      this.logger.info("[SharedMediaSource] Using standard MediaSource");
+    }
 
     // Create and store media segment buffers for video
     this.videoMediaSegmentBuffer = new MediaSegmentBuffer({
@@ -3243,10 +3265,14 @@ export class Player {
       return;
     }
 
-    // Check if MediaSource is already open (from video setup)
-    if (!videoEl.src || !videoEl.src.startsWith("blob:")) {
+    // Check if MediaSource is already set up (from video setup).
+    // Standard MediaSource uses a blob: URL, ManagedMediaSource uses srcObject.
+    const mediaSourceAttached = this.usingManagedMediaSource
+      ? videoEl.srcObject !== null
+      : videoEl.src && videoEl.src.startsWith("blob:");
+    if (!mediaSourceAttached) {
       this.logger.info(
-        "MediaSource not set up yet (no blob URL). Audio setup should happen after video setup.",
+        "MediaSource not set up yet. Audio setup should happen after video setup.",
       );
       return;
     }
