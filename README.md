@@ -204,7 +204,7 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 - Synchronized audio and video playback with automatic recovery
 - Configurable logging with support for debug, info, warn, and error levels
 - Clean and intuitive UI with real-time buffer and latency monitoring
-- DRM support for Widevine & ClearKey, with experimental support for PlayReady (since DRM isn't standardised, only the moqlivemock implementation is supported)
+- DRM support for Widevine, PlayReady, and FairPlay, plus ClearKey for development (since DRM isn't standardised, only the moqlivemock implementation is supported)
 
 ## Buffer Control Algorithm
 
