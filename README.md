@@ -31,7 +31,7 @@ This project implements a media player that:
 5. (Optional) Uses EME to handle decryption of protected content
 6. Uses Media Source Extensions (MSE) to decode and play media content
 7. Provides adaptive buffer management for smooth playback experience
-8. This player is intended to work towards [moqlivemock][moqlivemock] publisher and the moqliemock catalog is the only DRM implementation supported
+8. This player is intended to work towards [moqlivemock][moqlivemock] publisher and uses the CMSF ContentProtection signaling ([moq-wg/cmsf](https://github.com/moq-wg/cmsf)) for DRM
 
 ## Requirements
 
@@ -204,7 +204,7 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 - Synchronized audio and video playback with automatic recovery
 - Configurable logging with support for debug, info, warn, and error levels
 - Clean and intuitive UI with real-time buffer and latency monitoring
-- DRM support for Widevine, PlayReady, and FairPlay, plus ClearKey for development (since DRM isn't standardised, only the moqlivemock implementation is supported)
+- DRM support for Widevine, PlayReady, and FairPlay, plus ClearKey for development, using the CMSF ContentProtection signaling now part of the [moq-wg/cmsf](https://github.com/moq-wg/cmsf) specification (also supported by [Shaka Player](https://github.com/shaka-project/shaka-player/pull/9972))
 
 ## Buffer Control Algorithm
 
