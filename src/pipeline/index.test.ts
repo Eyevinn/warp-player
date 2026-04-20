@@ -42,6 +42,11 @@ describe("engineSupports", () => {
     expect(engineSupports("mse", "cmaf", true)).toBe(true);
   });
 
+  it("MSE handles compressed cmaf after reconstruction", () => {
+    expect(engineSupports("mse", "compressed-cmaf", false)).toBe(true);
+    expect(engineSupports("mse", "compressed-cmaf", true)).toBe(true);
+  });
+
   it("MSE does not yet handle loc or unknown packagings", () => {
     // Reserve loc/locmaf reconstruction for a follow-up phase.
     expect(engineSupports("mse", "loc", false)).toBe(false);
@@ -97,6 +102,15 @@ describe("defaultEngineForTracks", () => {
     expect(defaultEngineForTracks(track("cmaf"), track("cmaf"))).toBe("mse");
   });
 
+  it("picks mse for compressed cmaf", () => {
+    expect(
+      defaultEngineForTracks(
+        track("compressed-cmaf"),
+        track("compressed-cmaf"),
+      ),
+    ).toBe("mse");
+  });
+
   it("picks webcodecs for clear loc", () => {
     expect(defaultEngineForTracks(track("loc"), track("loc"))).toBe(
       "webcodecs",
@@ -124,7 +138,17 @@ describe("resolveEngine", () => {
 
   it("respects explicit choices when compatible", () => {
     expect(resolveEngine("mse", track("cmaf"), null)).toBe("mse");
+    expect(resolveEngine("mse", track("compressed-cmaf"), null)).toBe("mse");
     expect(resolveEngine("webcodecs", track("loc"), null)).toBe("webcodecs");
+  });
+
+  it("rejects mixed regular and compressed cmaf selections", () => {
+    expect(() =>
+      defaultEngineForTracks(track("cmaf"), track("compressed-cmaf")),
+    ).toThrow(/mixed packagings/i);
+    expect(() =>
+      resolveEngine("mse", track("cmaf"), track("compressed-cmaf")),
+    ).toThrow(/mixed packagings/i);
   });
 
   it("rejects explicit choices that can't play the selection", () => {

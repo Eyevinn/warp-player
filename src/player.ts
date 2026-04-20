@@ -5,6 +5,12 @@ import {
 } from "@eyevinn/is-drm-supported";
 
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
+import {
+  CompressedCmafTrackState,
+  decompressCompressedCmafFragment,
+  initializeCompressedCmafTrack,
+  isCompressedCmafTrack,
+} from "./cmaf/compressedCmaf";
 import { ILogger, LoggerFactory } from "./logger";
 import { EngineChoice, IPlaybackPipeline, resolveEngine } from "./pipeline";
 import { MsePipeline } from "./pipeline/msePipeline";
@@ -100,6 +106,8 @@ export class Player {
 
   private videoTrack: WarpTrack | null = null;
   private audioTrack: WarpTrack | null = null;
+  private videoCompressedCmafState: CompressedCmafTrackState | null = null;
+  private audioCompressedCmafState: CompressedCmafTrackState | null = null;
 
   /** Active WebCodecs pipeline when LOC playback is engaged. */
   private webcodecsPipeline: WebCodecsLocPipeline | null = null;
@@ -1312,6 +1320,8 @@ export class Player {
     // Reset track references
     this.videoTrack = null;
     this.audioTrack = null;
+    this.videoCompressedCmafState = null;
+    this.audioCompressedCmafState = null;
 
     // Reset buffer flags
     this.videoBufferReady = false;
@@ -1719,6 +1729,7 @@ export class Player {
     // Clear audio state
     this.msePipeline.clearAudio();
     this.audioTrack = null;
+    this.audioCompressedCmafState = null;
     this.audioBufferReady = false;
     this.audioObjectsReceived = 0;
 
@@ -1750,6 +1761,7 @@ export class Player {
     // Clear video state
     this.msePipeline.clearVideo();
     this.videoTrack = null;
+    this.videoCompressedCmafState = null;
     this.videoBufferReady = false;
     this.videoObjectsReceived = 0;
 
@@ -2880,13 +2892,21 @@ export class Player {
     const request = JSON.parse(new TextDecoder().decode(event.message)) as {
       kids: string[];
     };
-    const response = await fetch(licenseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    });
+    let response: Response;
+    try {
+      response = await fetch(licenseUrl, {
+        method: "POST",
+        // Avoid forcing a CORS preflight for ClearKey JSON requests.
+        body: JSON.stringify(request),
+      });
+    } catch (error) {
+      this.logger.error(
+        `ClearKey fetch failed for ${licenseUrl}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
+    }
 
     if (!response.ok) {
       this.logger.error(`ClearKey request failed: ${response.statusText}`);
@@ -3006,6 +3026,128 @@ export class Player {
       this.logger.error("Failed to decode FairPlay CKC response as base64");
       return undefined;
     }
+  }
+
+  private asExactArrayBuffer(
+    data: Uint8Array | ArrayBuffer,
+    logPrefix: string,
+  ): ArrayBuffer {
+    if (data instanceof ArrayBuffer) {
+      if (data.byteLength === 0) {
+        throw new Error(`${logPrefix} Received empty ArrayBuffer (zero bytes)`);
+      }
+      return data;
+    }
+
+    if (data.byteLength === 0) {
+      throw new Error(`${logPrefix} Received empty Uint8Array (zero bytes)`);
+    }
+
+    return data.buffer.slice(
+      data.byteOffset,
+      data.byteOffset + data.byteLength,
+    ) as ArrayBuffer;
+  }
+
+  private getCompressedCmafState(
+    kind: "video" | "audio",
+  ): CompressedCmafTrackState | null {
+    return kind === "video"
+      ? this.videoCompressedCmafState
+      : this.audioCompressedCmafState;
+  }
+
+  private setCompressedCmafState(
+    kind: "video" | "audio",
+    state: CompressedCmafTrackState | null,
+  ): void {
+    if (kind === "video") {
+      this.videoCompressedCmafState = state;
+      return;
+    }
+    this.audioCompressedCmafState = state;
+  }
+
+  private groupIdToSequenceNumber(groupId: bigint, logPrefix: string): number {
+    if (groupId < 0n || groupId > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(
+        `${logPrefix} Group ${groupId} exceeds JavaScript safe integer range`,
+      );
+    }
+    return Number(groupId);
+  }
+
+  private decodeTrackInitSegment(
+    track: WarpTrack,
+    kind: "video" | "audio",
+  ): ArrayBuffer {
+    const type = kind === "video" ? "Video" : "Audio";
+
+    if (!track.initData) {
+      throw new Error(
+        `[${type}InitSegment] No initData found for ${kind} track`,
+      );
+    }
+
+    const encodedInit = this.base64ToArrayBuffer(track.initData);
+    this.logger.info(
+      `[${type}InitSegment] Decoded init segment: ${encodedInit.byteLength} bytes`,
+    );
+
+    if (!isCompressedCmafTrack(track)) {
+      this.setCompressedCmafState(kind, null);
+      return encodedInit;
+    }
+
+    const initializedTrack = initializeCompressedCmafTrack(track, encodedInit);
+    this.setCompressedCmafState(kind, initializedTrack.state);
+
+    if (!initializedTrack.initWasReconstructed) {
+      this.logger.info(
+        `[${type}InitSegment] Using advertised CMAF init segment for compressed CMAF track`,
+      );
+      return this.asExactArrayBuffer(encodedInit, `[${type}InitSegment]`);
+    }
+
+    this.logger.info(
+      `[${type}InitSegment] Reconstructed compressed CMAF init segment: ${initializedTrack.state.initSegment.byteLength} bytes`,
+    );
+
+    return this.asExactArrayBuffer(
+      initializedTrack.state.initSegment,
+      `[${type}InitSegment]`,
+    );
+  }
+
+  private decodeTrackMediaObject(
+    track: WarpTrack,
+    kind: "video" | "audio",
+    obj: MOQObject,
+  ): ArrayBuffer {
+    const type = kind === "video" ? "Video" : "Audio";
+    const logPrefix = `[${type}MediaBuffer]`;
+    const objectData = this.asExactArrayBuffer(obj.data, logPrefix);
+
+    if (!isCompressedCmafTrack(track)) {
+      return objectData;
+    }
+
+    const compressedState = this.getCompressedCmafState(kind);
+    if (!compressedState) {
+      throw new Error(`${logPrefix} Missing compressed CMAF state`);
+    }
+
+    const sequenceNumber = this.groupIdToSequenceNumber(
+      obj.location.group,
+      logPrefix,
+    );
+    const fragment = decompressCompressedCmafFragment(
+      objectData,
+      sequenceNumber,
+      compressedState,
+    );
+
+    return this.asExactArrayBuffer(fragment, logPrefix);
   }
 
   /**
@@ -3140,17 +3282,6 @@ export class Player {
       // Initialize counter for tracking received video objects
       let videoObjectsReceived = 0;
 
-      // Append CMAF init segment for video (base64-decoded)
-      if (!track.initData) {
-        this.logger.error("No initData found for video track");
-        return;
-      }
-
-      const videoInitSegment = this.base64ToArrayBuffer(track.initData);
-      this.logger.info(
-        `[VideoInitSegment] Decoded init segment: ${videoInitSegment.byteLength} bytes`,
-      );
-
       try {
         if (
           !this.videoMediaBuffer ||
@@ -3169,6 +3300,8 @@ export class Player {
           return;
         }
 
+        const videoInitSegment = this.decodeTrackInitSegment(track, "video");
+
         this.msePipeline.processInitSegment(
           videoInitSegment,
           this.videoMediaBuffer,
@@ -3178,7 +3311,7 @@ export class Player {
         );
       } catch (e) {
         this.logger.error(
-          `[VideoInitSegment] Failed to process audio CMAF init segment: ${
+          `[VideoInitSegment] Failed to process video CMAF init segment: ${
             e instanceof Error ? e.message : String(e)
           }`,
         );
@@ -3200,71 +3333,12 @@ export class Player {
           timing?: { baseMediaDecodeTime?: number; timescale?: number };
         }) => {
           try {
-            // Check if we have a valid data object
-            if (!obj.data) {
-              this.logger.error(
-                "[VideoMediaBuffer] Received null or undefined data",
-              );
-              return;
-            }
-
-            let arrayBuffer: ArrayBuffer;
-
-            // If it's already an ArrayBuffer, use it directly
-            if (obj.data instanceof ArrayBuffer) {
-              arrayBuffer = obj.data;
-            }
-            // If it's a TypedArray (like Uint8Array), get its buffer
-            else if (ArrayBuffer.isView(obj.data)) {
-              // Use type assertion to tell TypeScript that this is a TypedArray with a buffer property
-              const typedArray = obj.data as Uint8Array;
-
-              // Check if this is a view with an offset into a larger buffer
-              if (
-                typedArray.byteOffset > 0 ||
-                typedArray.byteLength < typedArray.buffer.byteLength
-              ) {
-                // Create a new ArrayBuffer that contains only the data in this view
-                arrayBuffer = typedArray.buffer.slice(
-                  typedArray.byteOffset,
-                  typedArray.byteOffset + typedArray.byteLength,
-                ) as ArrayBuffer;
-              } else {
-                // Use the buffer directly if it's the full buffer
-                arrayBuffer = typedArray.buffer as ArrayBuffer;
-              }
-
-              // Replace the original data with the ArrayBuffer for downstream processing
-              obj.data = arrayBuffer;
-            }
-            // Otherwise, it's an invalid type
-            else {
-              const type = typeof obj.data;
-              let constructorName = "unknown";
-              try {
-                // Safe way to access constructor name
-                if (typeof obj.data === "object") {
-                  const dataObj: any = obj.data; // Cast to any to bypass TypeScript error
-                  if (dataObj.constructor) {
-                    constructorName = dataObj.constructor.name;
-                  }
-                }
-              } catch {
-                // Ignore any errors when trying to access constructor
-              }
-              this.logger.error(
-                `[VideoMediaBuffer] Received invalid data type: ${type} (${constructorName})`,
-              );
-              return;
-            }
-
-            // Check if the ArrayBuffer is empty
-            if (arrayBuffer.byteLength === 0) {
-              this.logger.error(
-                "[VideoMediaBuffer] Received empty ArrayBuffer (zero bytes)",
-              );
-              return;
-            }
+            const arrayBuffer = this.decodeTrackMediaObject(
+              track,
+              "video",
+              obj as MOQObject,
+            );
+            obj.data = arrayBuffer;
 
             if (!this.videoMediaBuffer || !this.videoMediaSegmentBuffer) {
               this.logger.error(
@@ -3728,20 +3802,7 @@ export class Player {
 
     this.audioMediaSegmentBuffer.setSourceBuffer(this.audioSourceBuffer);
 
-    // Process audio init segment if available
-    if (!this.audioTrack.initData) {
-      this.logger.error("[AudioInitSegment] No initData found for audio track");
-      return;
-    }
-
     try {
-      const audioInitSegment = this.base64ToArrayBuffer(
-        this.audioTrack.initData,
-      );
-      this.logger.info(
-        `[AudioInitSegment] Decoded init segment: ${audioInitSegment.byteLength} bytes`,
-      );
-
       if (
         !this.audioMediaBuffer ||
         !this.audioMediaSegmentBuffer ||
@@ -3758,6 +3819,11 @@ export class Player {
         );
         return;
       }
+
+      const audioInitSegment = this.decodeTrackInitSegment(
+        this.audioTrack,
+        "audio",
+      );
 
       this.msePipeline.processInitSegment(
         audioInitSegment,
@@ -3793,6 +3859,7 @@ export class Player {
     const namespace = this.audioTrack.namespace || "";
     const trackName = this.audioTrack.name;
     const trackKey = `${namespace}/${trackName}`;
+    const audioTrack = this.audioTrack;
 
     this.logger.info(
       `[AudioTrackSubscription] Subscribing to audio track: ${trackKey}`,
@@ -3809,71 +3876,12 @@ export class Player {
       timing?: { baseMediaDecodeTime?: number; timescale?: number };
     }) => {
       try {
-        // Check if we have a valid data object
-        if (!obj.data) {
-          this.logger.error(
-            "[AudioMediaBuffer] Received null or undefined data",
-          );
-          return;
-        }
-
-        let arrayBuffer: ArrayBuffer;
-
-        // If it's already an ArrayBuffer, use it directly
-        if (obj.data instanceof ArrayBuffer) {
-          arrayBuffer = obj.data;
-        }
-        // If it's a TypedArray (like Uint8Array), get its buffer
-        else if (ArrayBuffer.isView(obj.data)) {
-          // Use type assertion to tell TypeScript that this is a TypedArray with a buffer property
-          const typedArray = obj.data as Uint8Array;
-
-          // Check if this is a view with an offset into a larger buffer
-          if (
-            typedArray.byteOffset > 0 ||
-            typedArray.byteLength < typedArray.buffer.byteLength
-          ) {
-            // Create a new ArrayBuffer that contains only the data in this view
-            arrayBuffer = typedArray.buffer.slice(
-              typedArray.byteOffset,
-              typedArray.byteOffset + typedArray.byteLength,
-            ) as ArrayBuffer;
-          } else {
-            // Use the buffer directly if it's the full buffer
-            arrayBuffer = typedArray.buffer as ArrayBuffer;
-          }
-
-          // Replace the original data with the ArrayBuffer for downstream processing
-          obj.data = arrayBuffer;
-        }
-        // Otherwise, it's an invalid type
-        else {
-          const type = typeof obj.data;
-          let constructorName = "unknown";
-          try {
-            // Safe way to access constructor name
-            if (typeof obj.data === "object") {
-              const dataObj: any = obj.data; // Cast to any to bypass TypeScript error
-              if (dataObj.constructor) {
-                constructorName = dataObj.constructor.name;
-              }
-            }
-          } catch {
-            // Ignore any errors when trying to access constructor
-          }
-          this.logger.info(
-            `[AudioMediaBuffer] Received invalid data type: ${type} (${constructorName})`,
-          );
-          return;
-        }
-
-        // Check if the ArrayBuffer is empty
-        if (arrayBuffer.byteLength === 0) {
-          this.logger.warn(
-            "[AudioMediaBuffer] Received empty ArrayBuffer (zero bytes)",
-          );
-          return;
-        }
+        const arrayBuffer = this.decodeTrackMediaObject(
+          audioTrack,
+          "audio",
+          obj as MOQObject,
+        );
+        obj.data = arrayBuffer;
 
         // Make sure audio buffers are initialized
         if (!this.audioMediaBuffer || !this.audioMediaSegmentBuffer) {
