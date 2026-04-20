@@ -1,3 +1,5 @@
+import { jest } from "@jest/globals";
+
 import { TrackAliasRegistry } from "./trackaliasregistry";
 
 describe("TrackAliasRegistry", () => {
