@@ -122,6 +122,10 @@ export function trackIsEncrypted(track: WarpTrack | null | undefined): boolean {
   );
 }
 
+function isMseCmafPackaging(packaging: string | undefined): boolean {
+  return packaging === "cmaf" || packaging === "compressed-cmaf";
+}
+
 /**
  * Capability table — kept as a function so it stays grep-able when LOCMAF or
  * other packagings land. Returns true when the engine can play the
@@ -133,9 +137,11 @@ export function engineSupports(
   encrypted: boolean,
 ): boolean {
   if (engine === "mse") {
-    // MSE handles CMAF natively today. LOC/LOCMAF reconstruction is future
-    // work but the encrypted path is reserved for MSE+EME regardless.
-    if (packaging === "cmaf") {
+    // MSE handles regular CMAF natively and compressed CMAF after Player
+    // reconstructs init/media segments before they enter the buffer pipeline.
+    // LOC/LOCMAF reconstruction is future work but the encrypted path is
+    // reserved for MSE+EME regardless.
+    if (isMseCmafPackaging(packaging)) {
       return true;
     }
     return false;
@@ -173,8 +179,8 @@ export function engineCanPlayTracks(
 
 /**
  * Pick the engine that should play the given tracks when the user has not
- * forced a choice. Prefers MSE for CMAF / encrypted content; prefers
- * WebCodecs for clear LOC. Throws on mixed packagings.
+ * forced a choice. Prefers MSE for CMAF / compressed CMAF / encrypted content;
+ * prefers WebCodecs for clear LOC. Throws on mixed packagings.
  */
 export function defaultEngineForTracks(
   videoTrack: WarpTrack | null,
@@ -208,7 +214,7 @@ export function defaultEngineForTracks(
   if (packaging === "loc") {
     return "webcodecs";
   }
-  if (packaging === "cmaf") {
+  if (isMseCmafPackaging(packaging)) {
     return "mse";
   }
   throw new Error(`Unsupported track packaging: ${packaging}`);
@@ -224,8 +230,9 @@ export function resolveEngine(
   videoTrack: WarpTrack | null,
   audioTrack: WarpTrack | null,
 ): Engine {
+  const defaultEngine = defaultEngineForTracks(videoTrack, audioTrack);
   if (choice === "auto") {
-    return defaultEngineForTracks(videoTrack, audioTrack);
+    return defaultEngine;
   }
   if (!engineCanPlayTracks(choice, videoTrack, audioTrack)) {
     throw new Error(

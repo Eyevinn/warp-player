@@ -59,7 +59,9 @@
     "webpack-dev-server": "^5.2.3"
   },
   "dependencies": {
+    "@svta/cml-iso-bmff": "^1.0.1",
     "@eyevinn/is-drm-supported": "^2.0.0",
-    "codem-isoboxer": "^0.3.10"
+    "codem-isoboxer": "^0.3.10",
+    "uint8-varint": "^2.0.4"
   }
 }

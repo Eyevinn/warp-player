@@ -1,7 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
 import * as ISOBoxer from "codem-isoboxer";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 describe("ISO Box Parsing", () => {
   // Helper function to read a file and convert it to ArrayBuffer
@@ -14,8 +17,14 @@ describe("ISO Box Parsing", () => {
   }
 
   // Test files - update these paths to point to your actual test files
-  const initSegmentPath = path.resolve(__dirname, "../../test/scale_init.mp4");
-  const mediaSegmentPath = path.resolve(__dirname, "../../test/scale_frag.mp4");
+  const initSegmentPath = path.resolve(
+    __dirname,
+    "../../test/media-files/scale_init.mp4",
+  );
+  const mediaSegmentPath = path.resolve(
+    __dirname,
+    "../../test/media-files/scale_frag.mp4",
+  );
 
   let initSegment: ArrayBuffer;
   let mediaSegment: ArrayBuffer;
