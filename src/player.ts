@@ -10,7 +10,7 @@ import {
   decompressCompressedCmafFragment,
   initializeCompressedCmafTrack,
   isCompressedCmafTrack,
-} from "./cmaf/compressedCmaf";
+} from "./compressed-cmaf/compressedCMAF";
 import { ILogger, LoggerFactory } from "./logger";
 import { Client, DraftVersion } from "./transport/client";
 import { MOQObject } from "./transport/tracks";

@@ -3,18 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readIsoBoxes, defaultReaderConfig } from "@svta/cml-iso-bmff";
+import { defaultReaderConfig, readIsoBoxes } from "@svta/cml-iso-bmff";
+
+import type { WarpTrack } from "../warpcatalog";
 
 import {
-  LocMoofDeltaDecoder,
+  CompressedCMAFMoofDeltaDecoder,
+  createCompressedCmafTrackState,
+  decompressCompressedCmafFragment,
+  initializeCompressedCmafTrack,
   assembleCmafFile,
-  createLocMdatBox,
+  createCompressedCMAFMdatBox,
   decompressLocInit,
-  decompressLocMoof,
+  decompressMoof,
   extractInitContextFromInitSegment,
   extractTrackMetadataFromInitSegment,
-  getLocHeaderConstants,
-} from "./loc";
+  getCompressedCMAFHeaderConstants,
+} from "./compressedCMAF";
 
 async function loadFixture(name: string): Promise<Uint8Array> {
   const fixturePath = path.resolve(
@@ -23,6 +28,21 @@ async function loadFixture(name: string): Promise<Uint8Array> {
     name,
   );
   return new Uint8Array(await readFile(fixturePath));
+}
+
+function buildTrack(referenceInit: Uint8Array): WarpTrack {
+  const metadata = extractTrackMetadataFromInitSegment(referenceInit);
+  return {
+    name: "video",
+    packaging: "compressed-cmaf",
+    codec: metadata.codec,
+    timescale: metadata.timescale,
+    width: metadata.width,
+    height: metadata.height,
+    samplerate: metadata.samplerate,
+    role: metadata.role,
+    lang: metadata.lang,
+  };
 }
 
 function findBox(boxes: any[], type: string): any | undefined {
@@ -68,7 +88,57 @@ function summarizeMoof(bytes: Uint8Array) {
   };
 }
 
-describe("LOC reconstruction", () => {
+function encodeGoVarint(value: number): Uint8Array {
+  if (value < 0) {
+    throw new Error("test helper only supports non-negative values");
+  }
+
+  let encoded = BigInt(value) << 1n;
+  const bytes: number[] = [];
+
+  while (encoded >= 0x80n) {
+    bytes.push(Number(encoded & 0x7fn) | 0x80);
+    encoded >>= 7n;
+  }
+  bytes.push(Number(encoded));
+
+  return Uint8Array.from(bytes);
+}
+
+function buildCompressedObject(
+  headerId: number,
+  locPayload: Uint8Array,
+  mdatPayload: Uint8Array,
+): Uint8Array {
+  const header = encodeGoVarint(headerId);
+  const locLength = encodeGoVarint(locPayload.byteLength);
+  const bytes = new Uint8Array(
+    header.byteLength +
+      locLength.byteLength +
+      locPayload.byteLength +
+      mdatPayload.byteLength,
+  );
+
+  let offset = 0;
+  bytes.set(header, offset);
+  offset += header.byteLength;
+  bytes.set(locLength, offset);
+  offset += locLength.byteLength;
+  bytes.set(locPayload, offset);
+  offset += locPayload.byteLength;
+  bytes.set(mdatPayload, offset);
+
+  return bytes;
+}
+
+function buildCompressedInit(
+  headerId: number,
+  locPayload: Uint8Array,
+): Uint8Array {
+  return buildCompressedObject(headerId, locPayload, new Uint8Array());
+}
+
+describe("compressed CMAF reconstruction", () => {
   it("reconstructs an init segment from the compressed header", async () => {
     const compressedInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
@@ -107,20 +177,20 @@ describe("LOC reconstruction", () => {
       referenceInitSegment: referenceInit,
     });
 
-    const deltaDecoder = new LocMoofDeltaDecoder();
-    const headers = getLocHeaderConstants();
+    const deltaDecoder = new CompressedCMAFMoofDeltaDecoder();
+    const headers = getCompressedCMAFHeaderConstants();
 
-    const normal0 = decompressLocMoof(
+    const normal0 = decompressMoof(
       await loadFixture("normalMoof-0"),
       1,
       context,
     );
-    const normal1 = decompressLocMoof(
+    const normal1 = decompressMoof(
       await loadFixture("normalMoof-1"),
       2,
       context,
     );
-    const normal2 = decompressLocMoof(
+    const normal2 = decompressMoof(
       await loadFixture("normalMoof-2"),
       3,
       context,
@@ -160,12 +230,14 @@ describe("LOC reconstruction", () => {
 
     const context = extractInitContextFromInitSegment(reconstructedInit.bytes);
     for (const index of [0, 1, 2]) {
-      const moof = decompressLocMoof(
+      const moof = decompressMoof(
         await loadFixture(`normalMoof-${index}`),
         index + 1,
         context,
       );
-      const mdat = createLocMdatBox(await loadFixture(`mdat-${index}`));
+      const mdat = createCompressedCMAFMdatBox(
+        await loadFixture(`mdat-${index}`),
+      );
 
       const cmafFile = assembleCmafFile({
         initSegment: reconstructedInit.bytes,
@@ -201,12 +273,14 @@ describe("LOC reconstruction", () => {
     });
     const bytesParts: Uint8Array[] = [reconstructedInit.bytes];
     for (const index of [0, 1, 2]) {
-      const moof = decompressLocMoof(
+      const moof = decompressMoof(
         await loadFixture(`normalMoof-${index}`),
         index + 1,
         reconstructedInit.context,
       );
-      const mdat = createLocMdatBox(await loadFixture(`mdat-${index}`));
+      const mdat = createCompressedCMAFMdatBox(
+        await loadFixture(`mdat-${index}`),
+      );
       bytesParts.push(
         assembleCmafFile({
           initSegment: new Uint8Array(),
@@ -219,7 +293,9 @@ describe("LOC reconstruction", () => {
       bytesParts.flatMap((part) => Array.from(part)),
     );
 
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "warp-player-loc-"));
+    const tmpDir = await mkdtemp(
+      path.join(os.tmpdir(), "warp-player-compressed-cmaf-"),
+    );
     const outputPath = path.join(tmpDir, "reconstructed.cmaf.mp4");
     const { writeFile } = await import("node:fs/promises");
     await writeFile(outputPath, bytes);
@@ -228,5 +304,115 @@ describe("LOC reconstruction", () => {
     expect(outputStat.size).toBe(bytes.byteLength);
 
     await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reconstructs a CMAF init segment from compressed init data", async () => {
+    const compressedInit = await loadFixture("init");
+    const referenceInit = await loadFixture("init.cmaf.mp4");
+    const state = createCompressedCmafTrackState(
+      buildTrack(referenceInit),
+      compressedInit,
+    );
+
+    const boxes = readIsoBoxes(
+      state.initSegment,
+      defaultReaderConfig(),
+    ) as Array<{
+      type: string;
+    }>;
+    expect(boxes.map((box) => box.type)).toEqual(["ftyp", "moov"]);
+  });
+
+  it("reconstructs a framed compressed CMAF init segment", async () => {
+    const compressedInit = await loadFixture("init");
+    const referenceInit = await loadFixture("init.cmaf.mp4");
+    const initialized = initializeCompressedCmafTrack(
+      buildTrack(referenceInit),
+      buildCompressedInit(
+        getCompressedCMAFHeaderConstants().moov,
+        compressedInit,
+      ),
+    );
+
+    const boxes = readIsoBoxes(
+      initialized.state.initSegment,
+      defaultReaderConfig(),
+    ) as Array<{ type: string }>;
+    expect(initialized.initWasReconstructed).toBe(true);
+    expect(boxes.map((box) => box.type)).toEqual(["ftyp", "moov"]);
+  });
+
+  it("keeps a regular CMAF init segment when compressed-cmaf advertises one", async () => {
+    const referenceInit = await loadFixture("init.cmaf.mp4");
+    const initialized = initializeCompressedCmafTrack(
+      buildTrack(referenceInit),
+      referenceInit,
+    );
+
+    expect(initialized.initWasReconstructed).toBe(false);
+    expect(Array.from(initialized.state.initSegment)).toEqual(
+      Array.from(referenceInit),
+    );
+  });
+
+  it("reconstructs CMAF fragments from compressed objects", async () => {
+    const compressedInit = await loadFixture("init");
+    const referenceInit = await loadFixture("init.cmaf.mp4");
+    const state = createCompressedCmafTrackState(
+      buildTrack(referenceInit),
+      compressedInit,
+    );
+    const headers = getCompressedCMAFHeaderConstants();
+
+    const loc0 = await loadFixture("deltaMoof-0");
+    const loc1 = await loadFixture("deltaMoof-1");
+    const mdat0 = await loadFixture("mdat-0");
+    const mdat1 = await loadFixture("mdat-1");
+
+    const fragment0 = decompressCompressedCmafFragment(
+      buildCompressedObject(headers.moof, loc0, mdat0),
+      1,
+      state,
+    );
+    const fragment1 = decompressCompressedCmafFragment(
+      buildCompressedObject(headers.moofDelta, loc1, mdat1),
+      2,
+      state,
+    );
+
+    const expected0Moof = decompressMoof(loc0, 1, state.initContext);
+    const expected1Moof = decompressMoof(
+      await loadFixture("normalMoof-1"),
+      2,
+      state.initContext,
+    );
+    const expected0 = assembleCmafFile({
+      initSegment: new Uint8Array(),
+      moof: expected0Moof.box,
+      mdat: createCompressedCMAFMdatBox(mdat0),
+    });
+    const expected1 = assembleCmafFile({
+      initSegment: new Uint8Array(),
+      moof: expected1Moof.box,
+      mdat: createCompressedCMAFMdatBox(mdat1),
+    });
+
+    const actual0Boxes = readIsoBoxes(
+      fragment0,
+      defaultReaderConfig(),
+    ) as Array<{
+      type: string;
+    }>;
+    const actual1Boxes = readIsoBoxes(
+      fragment1,
+      defaultReaderConfig(),
+    ) as Array<{
+      type: string;
+    }>;
+
+    expect(actual0Boxes.map((box) => box.type)).toEqual(["moof", "mdat"]);
+    expect(actual1Boxes.map((box) => box.type)).toEqual(["moof", "mdat"]);
+    expect(Array.from(fragment0)).toEqual(Array.from(expected0));
+    expect(Array.from(fragment1)).toEqual(Array.from(expected1));
   });
 });
