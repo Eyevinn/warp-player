@@ -7,7 +7,7 @@ import {
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import {
   CompressedCmafTrackState,
-  decompressCompressedCmafFragment,
+  decompressMoof,
   initializeCompressedCmafTrack,
   isCompressedCmafTrack,
 } from "./compressed-cmaf/compressedCMAF";
@@ -3141,7 +3141,7 @@ export class Player {
       obj.location.group,
       logPrefix,
     );
-    const fragment = decompressCompressedCmafFragment(
+    const fragment = decompressMoof(
       objectData,
       sequenceNumber,
       compressedState,

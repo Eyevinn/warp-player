@@ -164,6 +164,7 @@ const moofFieldIds = {
   defaultSampleFlags: 8,
   baseMediaDecodeTime: 10,
   firstSampleFlags: 12,
+  sampleCount: 16,
   sampleSizes: 1,
   sampleDurations: 3,
   sampleCompositionTimeOffsets: 5,
@@ -1094,6 +1095,7 @@ function buildMoofFromFields(
   fieldMap: RawFieldMap,
   sequenceNumber: number,
   context: CompressedCMAFInitContext,
+  mdatPayloadLength: number,
 ): MovieFragmentBox {
   const baseMediaDecodeTime = maybeGetVarint(
     fieldMap,
@@ -1107,11 +1109,19 @@ function buildMoofFromFields(
     fieldMap,
     moofFieldIds.sampleCompositionTimeOffsets,
   );
-  if (!compositionOffsets) {
-    throw new Error("compressed CMAF moof is missing composition time offsets");
+  const sampleCountValue = maybeGetVarint(fieldMap, moofFieldIds.sampleCount);
+  if (sampleCountValue === undefined) {
+    throw new Error("compressed CMAF moof is missing sample count");
   }
-
-  const sampleCount = compositionOffsets.length;
+  const sampleCount = asSafeNumber(sampleCountValue, "sample count");
+  const hasCompositionOffsets = compositionOffsets !== undefined;
+  const resolvedCompositionOffsets =
+    compositionOffsets ?? repeatValue(0n, sampleCount);
+  if (resolvedCompositionOffsets.length !== sampleCount) {
+    throw new Error(
+      "compressed CMAF moof composition time offsets length does not match sample count",
+    );
+  }
   const tfhdDefaultSampleDuration =
     maybeGetVarint(fieldMap, moofFieldIds.defaultSampleDuration) ??
     BigInt(context.defaultSampleDuration);
@@ -1123,7 +1133,17 @@ function buildMoofFromFields(
     BigInt(context.defaultSampleFlags);
   const sampleSizes =
     maybeGetVarintList(fieldMap, moofFieldIds.sampleSizes) ??
-    repeatValue(tfhdDefaultSampleSize, sampleCount);
+    (() => {
+      if (sampleCount === 1 && !fieldMap.has(moofFieldIds.defaultSampleSize)) {
+        if (mdatPayloadLength <= 0) {
+          throw new Error(
+            "compressed CMAF moof is missing sample size for a single-sample fragment from mdat payload length",
+          );
+        }
+        return [BigInt(mdatPayloadLength)];
+      }
+      return repeatValue(tfhdDefaultSampleSize, sampleCount);
+    })();
   const sampleDurations =
     maybeGetVarintList(fieldMap, moofFieldIds.sampleDurations) ??
     repeatValue(tfhdDefaultSampleDuration, sampleCount);
@@ -1202,18 +1222,21 @@ function buildMoofFromFields(
     );
   }
 
-  const samples: TrackRunSample[] = compositionOffsets.map((offset, index) => ({
-    sampleDuration: asSafeNumber(
-      sampleDurations[index],
-      `sample ${index} duration`,
-    ),
-    sampleSize: asSafeNumber(sampleSizes[index], `sample ${index} size`),
-    sampleFlags: asSafeNumber(sampleFlags[index], `sample ${index} flags`),
-    sampleCompositionTimeOffset: asSafeNumber(
-      offset,
-      `sample ${index} composition offset`,
-    ),
-  }));
+  const samples: TrackRunSample[] = Array.from(
+    { length: sampleCount },
+    (_, index) => ({
+      sampleDuration: asSafeNumber(
+        sampleDurations[index],
+        `sample ${index} duration`,
+      ),
+      sampleSize: asSafeNumber(sampleSizes[index], `sample ${index} size`),
+      sampleFlags: asSafeNumber(sampleFlags[index], `sample ${index} flags`),
+      sampleCompositionTimeOffset: asSafeNumber(
+        resolvedCompositionOffsets[index],
+        `sample ${index} composition offset`,
+      ),
+    }),
+  );
 
   const trun: TrackRunBox = {
     type: "trun",
@@ -1228,7 +1251,7 @@ function buildMoofFromFields(
       TRUN_SAMPLE_DURATION_PRESENT |
       TRUN_SAMPLE_SIZE_PRESENT |
       TRUN_SAMPLE_FLAGS_PRESENT |
-      TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT,
+      (hasCompositionOffsets ? TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT : 0),
     sampleCount,
     dataOffset: 0,
     samples,
@@ -1503,7 +1526,7 @@ export function extractInitContextFromInitSegment(
   };
 }
 
-export function decompressLocInit(
+export function decompressCompressedCMAFInit(
   payload: Uint8Array | ArrayBuffer,
   track: CompressedCMAFTrackMetadata,
   options?: {
@@ -1531,19 +1554,6 @@ export function decompressLocInit(
   };
 }
 
-export function decompressMoof(
-  payload: Uint8Array | ArrayBuffer,
-  sequenceNumber: number,
-  context: CompressedCMAFInitContext,
-): CompressedCMAFMoofDecompressionResult {
-  const fieldMap = separateFields(ensureUint8Array(payload));
-  const box = buildMoofFromFields(fieldMap, sequenceNumber, context);
-  return {
-    box,
-    bytes: encodeMoof(box),
-  };
-}
-
 export class CompressedCMAFMoofDeltaDecoder {
   private previous?: RawFieldMap;
 
@@ -1554,6 +1564,7 @@ export class CompressedCMAFMoofDeltaDecoder {
     payload: Uint8Array | ArrayBuffer,
     sequenceNumber: number,
     context: CompressedCMAFInitContext,
+    mdatPayloadLength: number,
   ): CompressedCMAFMoofDecompressionResult {
     const fieldMap = separateFields(ensureUint8Array(payload));
     let currentFields: RawFieldMap;
@@ -1572,7 +1583,12 @@ export class CompressedCMAFMoofDeltaDecoder {
     }
 
     this.previous = cloneFieldMap(currentFields);
-    const box = buildMoofFromFields(currentFields, sequenceNumber, context);
+    const box = buildMoofFromFields(
+      currentFields,
+      sequenceNumber,
+      context,
+      mdatPayloadLength,
+    );
     return {
       box,
       bytes: encodeMoof(box),
@@ -1720,7 +1736,7 @@ export function createCompressedCmafTrackState(
     // Backward compatibility for pre-framed test fixtures / older catalogs.
   }
 
-  const reconstructedInit = decompressLocInit(
+  const reconstructedInit = decompressCompressedCMAFInit(
     locPayload,
     compressedCMAFTrackMetadataFromWarpTrack(track),
   );
@@ -1767,7 +1783,7 @@ export function initializeCompressedCmafTrack(
   }
 }
 
-export function decompressCompressedCmafFragment(
+export function decompressMoof(
   payload: Uint8Array | ArrayBuffer,
   sequenceNumber: number,
   state: CompressedCmafTrackState,
@@ -1785,6 +1801,7 @@ export function decompressCompressedCmafFragment(
     locPayload,
     sequenceNumber,
     state.initContext,
+    mdatPayload.byteLength,
   );
   const mdat = createCompressedCMAFMdatBox(mdatPayload);
 
@@ -1793,4 +1810,12 @@ export function decompressCompressedCmafFragment(
     moof: moof.box,
     mdat,
   });
+}
+
+export function decompressCompressedCmafFragment(
+  payload: Uint8Array | ArrayBuffer,
+  sequenceNumber: number,
+  state: CompressedCmafTrackState,
+): Uint8Array {
+  return decompressMoof(payload, sequenceNumber, state);
 }
