@@ -12,6 +12,7 @@ import {
   initializeCompressedCmafTrack,
   decompressCompressedCMAFInit,
   decompressMoof,
+  decompressMoofWithTrackInfo,
   extractTrackMetadataFromInitSegment,
   getCompressedCMAFHeaderConstants,
 } from "./compressedCMAF";
@@ -335,6 +336,35 @@ describe("compressed CMAF reconstruction", () => {
     expect(summarizeMoof(normal0)).toEqual(summarizeMoof(delta0));
     expect(summarizeMoof(normal1)).toEqual(summarizeMoof(delta1));
     expect(summarizeMoof(normal2)).toEqual(summarizeMoof(delta2));
+  });
+
+  it("returns track timing metadata while reconstructing a compressed moof", async () => {
+    const compressedInit = await loadFixture("init");
+    const referenceInit = await loadFixture("init.cmaf.mp4");
+    const state = createCompressedCmafTrackState(
+      buildTrack(referenceInit),
+      compressedInit,
+    );
+
+    const result = decompressMoofWithTrackInfo(
+      await loadFixture("normalMoof-1"),
+      2,
+      state,
+    );
+    const summary = summarizeMoof(result.bytes);
+    const expectedDuration = (summary.samples ?? []).reduce(
+      (sum: number, sample: any) => sum + (sample.sampleDuration ?? 0),
+      0,
+    );
+
+    expect(result.trackInfo.timescale).toBe(
+      extractTrackMetadataFromInitSegment(referenceInit).timescale,
+    );
+    expect(result.trackInfo.baseMediaDecodeTime).toBe(
+      summary.baseMediaDecodeTime,
+    );
+    expect(result.trackInfo.sequenceNumber).toBe(summary.sequenceNumber);
+    expect(result.trackInfo.duration).toBe(expectedDuration);
   });
 
   it("reconstructs a single-sample moof without sampleSizes", async () => {

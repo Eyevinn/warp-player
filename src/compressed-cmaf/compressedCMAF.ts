@@ -37,6 +37,7 @@ import type {
   VisualSampleEntryBox,
 } from "@svta/cml-iso-bmff/dist/index.js";
 
+import type { MediaTrackInfo } from "../buffer/mediaBuffer";
 import type { WarpTrack } from "../warpcatalog";
 
 const COMPRESSED_CMAF_HEADER_MOOV = 21;
@@ -191,6 +192,7 @@ export interface CompressedCMAFTrackMetadata {
 
 export interface CompressedCMAFInitContext {
   trackId: number;
+  timescale: number;
   defaultSampleDescriptionIndex: number;
   defaultSampleDuration: number;
   defaultSampleSize: number;
@@ -207,6 +209,7 @@ export interface CompressedCMAFInitDecompressionResult {
 export interface CompressedCMAFMoofDecompressionResult {
   box: MovieFragmentBox;
   bytes: Uint8Array;
+  trackInfo: MediaTrackInfo;
 }
 
 export interface CompressedCmafTrackState {
@@ -954,6 +957,7 @@ function buildInitBoxes(
 
   const context: CompressedCMAFInitContext = {
     trackId,
+    timescale: trackTimescale,
     defaultSampleDescriptionIndex,
     defaultSampleDuration,
     defaultSampleSize,
@@ -1096,7 +1100,7 @@ function buildMoofFromFields(
   sequenceNumber: number,
   context: CompressedCMAFInitContext,
   mdatPayloadLength: number,
-): MovieFragmentBox {
+): { box: MovieFragmentBox; trackInfo: MediaTrackInfo } {
   const baseMediaDecodeTime = maybeGetVarint(
     fieldMap,
     moofFieldIds.baseMediaDecodeTime,
@@ -1273,6 +1277,10 @@ function buildMoofFromFields(
       "base media decode time",
     ),
   };
+  const totalDuration = sampleDurations.reduce(
+    (sum, duration) => sum + asSafeNumber(duration, "sample duration"),
+    0,
+  );
 
   const trafBoxes: TrackFragmentBox["boxes"] = [tfhd, tfdt, trun];
   const senc = createSencBox(fieldMap, sampleCount, perSampleIVSize);
@@ -1281,19 +1289,27 @@ function buildMoofFromFields(
   }
 
   return {
-    type: "moof",
-    boxes: [
-      {
-        type: "mfhd",
-        version: 0,
-        flags: 0,
-        sequenceNumber,
-      },
-      {
-        type: "traf",
-        boxes: trafBoxes,
-      },
-    ],
+    box: {
+      type: "moof",
+      boxes: [
+        {
+          type: "mfhd",
+          version: 0,
+          flags: 0,
+          sequenceNumber,
+        },
+        {
+          type: "traf",
+          boxes: trafBoxes,
+        },
+      ],
+    },
+    trackInfo: {
+      timescale: context.timescale,
+      baseMediaDecodeTime: tfdt.baseMediaDecodeTime,
+      duration: totalDuration,
+      sequenceNumber,
+    },
   };
 }
 
@@ -1496,10 +1512,8 @@ export function extractTrackMetadataFromInitSegment(
 export function extractInitContextFromInitSegment(
   initSegment: Uint8Array | ArrayBuffer,
 ): CompressedCMAFInitContext {
-  const parsed = readIsoBoxes(
-    ensureUint8Array(initSegment),
-    readerConfig,
-  ) as any[];
+  const initBytes = ensureUint8Array(initSegment);
+  const parsed = readIsoBoxes(initBytes, readerConfig) as any[];
   const moov = parsed.find((box) => box.type === "moov") as
     | MovieBox
     | undefined;
@@ -1515,9 +1529,14 @@ export function extractInitContextFromInitSegment(
         defaultIvSize?: number;
       }
     | undefined;
+  const metadata = extractTrackMetadataFromInitSegment(initBytes);
+  if (metadata.timescale === undefined) {
+    throw new Error("init segment does not contain track timescale");
+  }
 
   return {
     trackId: trex.trackId,
+    timescale: metadata.timescale,
     defaultSampleDescriptionIndex: trex.defaultSampleDescriptionIndex,
     defaultSampleDuration: trex.defaultSampleDuration,
     defaultSampleSize: trex.defaultSampleSize,
@@ -1583,15 +1602,16 @@ export class CompressedCMAFMoofDeltaDecoder {
     }
 
     this.previous = cloneFieldMap(currentFields);
-    const box = buildMoofFromFields(
+    const moof = buildMoofFromFields(
       currentFields,
       sequenceNumber,
       context,
       mdatPayloadLength,
     );
     return {
-      box,
-      bytes: encodeMoof(box),
+      box: moof.box,
+      bytes: encodeMoof(moof.box),
+      trackInfo: moof.trackInfo,
     };
   }
 
@@ -1788,6 +1808,14 @@ export function decompressMoof(
   sequenceNumber: number,
   state: CompressedCmafTrackState,
 ): Uint8Array {
+  return decompressMoofWithTrackInfo(payload, sequenceNumber, state).bytes;
+}
+
+export function decompressMoofWithTrackInfo(
+  payload: Uint8Array | ArrayBuffer,
+  sequenceNumber: number,
+  state: CompressedCmafTrackState,
+): { bytes: Uint8Array; trackInfo: MediaTrackInfo } {
   const { headerId, locPayload, mdatPayload } =
     parseCompressedCMAFObject(payload);
   const headers = getCompressedCMAFHeaderConstants();
@@ -1805,11 +1833,14 @@ export function decompressMoof(
   );
   const mdat = createCompressedCMAFMdatBox(mdatPayload);
 
-  return assembleCmafFile({
-    initSegment: new Uint8Array(),
-    moof: moof.box,
-    mdat,
-  });
+  return {
+    bytes: assembleCmafFile({
+      initSegment: new Uint8Array(),
+      moof: moof.box,
+      mdat,
+    }),
+    trackInfo: moof.trackInfo,
+  };
 }
 
 export function decompressCompressedCmafFragment(

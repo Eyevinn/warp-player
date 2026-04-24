@@ -4,10 +4,10 @@ import {
   isFairplaySupported,
 } from "@eyevinn/is-drm-supported";
 
-import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
+import { MediaBuffer, MediaSegmentBuffer, MediaTrackInfo } from "./buffer";
 import {
   CompressedCmafTrackState,
-  decompressMoof,
+  decompressMoofWithTrackInfo,
   initializeCompressedCmafTrack,
   isCompressedCmafTrack,
 } from "./compressed-cmaf/compressedCMAF";
@@ -2794,13 +2794,13 @@ export class Player {
     track: WarpTrack,
     kind: "video" | "audio",
     obj: MOQObject,
-  ): ArrayBuffer {
+  ): { data: ArrayBuffer; trackInfo?: MediaTrackInfo } {
     const type = kind === "video" ? "Video" : "Audio";
     const logPrefix = `[${type}MediaBuffer]`;
     const objectData = this.asExactArrayBuffer(obj.data, logPrefix);
 
     if (!isCompressedCmafTrack(track)) {
-      return objectData;
+      return { data: objectData };
     }
 
     const compressedState = this.getCompressedCmafState(kind);
@@ -2812,13 +2812,16 @@ export class Player {
       obj.location.group,
       logPrefix,
     );
-    const fragment = decompressMoof(
+    const fragment = decompressMoofWithTrackInfo(
       objectData,
       sequenceNumber,
       compressedState,
     );
 
-    return this.asExactArrayBuffer(fragment, logPrefix);
+    return {
+      data: this.asExactArrayBuffer(fragment.bytes, logPrefix),
+      trackInfo: fragment.trackInfo,
+    };
   }
 
   /**
@@ -2995,12 +2998,12 @@ export class Player {
           timing?: { baseMediaDecodeTime?: number; timescale?: number };
         }) => {
           try {
-            const arrayBuffer = this.decodeTrackMediaObject(
+            const decoded = this.decodeTrackMediaObject(
               track,
               "video",
               obj as MOQObject,
             );
-            obj.data = arrayBuffer;
+            obj.data = decoded.data;
 
             if (!this.videoMediaBuffer || !this.videoMediaSegmentBuffer) {
               this.logger.error(
@@ -3010,7 +3013,9 @@ export class Player {
             }
 
             // Parse the media segment to extract timing information
-            const trackInfo = this.videoMediaBuffer.parseMediaSegment(obj.data);
+            const trackInfo =
+              decoded.trackInfo ??
+              this.videoMediaBuffer.parseMediaSegment(obj.data);
 
             // Add timing information to the object
             obj.timing = {
@@ -3021,6 +3026,7 @@ export class Player {
             // Add the media segment to the media segment buffer and get the segment object
             const mediaSegment = this.videoMediaSegmentBuffer.addMediaSegment(
               obj.data,
+              trackInfo,
             );
 
             // Track buffer level before appending (this is the minimum point)
@@ -3536,12 +3542,12 @@ export class Player {
       timing?: { baseMediaDecodeTime?: number; timescale?: number };
     }) => {
       try {
-        const arrayBuffer = this.decodeTrackMediaObject(
+        const decoded = this.decodeTrackMediaObject(
           audioTrack,
           "audio",
           obj as MOQObject,
         );
-        obj.data = arrayBuffer;
+        obj.data = decoded.data;
 
         // Make sure audio buffers are initialized
         if (!this.audioMediaBuffer || !this.audioMediaSegmentBuffer) {
@@ -3550,7 +3556,9 @@ export class Player {
         }
 
         // Parse the media segment to extract timing information
-        const trackInfo = this.audioMediaBuffer.parseMediaSegment(obj.data);
+        const trackInfo =
+          decoded.trackInfo ??
+          this.audioMediaBuffer.parseMediaSegment(obj.data);
 
         // Add timing information to the object
         obj.timing = {
@@ -3561,6 +3569,7 @@ export class Player {
         // Add the media segment to the media segment buffer and get the segment object
         const mediaSegment = this.audioMediaSegmentBuffer.addMediaSegment(
           obj.data,
+          trackInfo,
         );
 
         // Track buffer level before appending (this is the minimum point)
