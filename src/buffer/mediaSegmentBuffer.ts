@@ -140,14 +140,18 @@ export class MediaSegmentBuffer {
    * @param data The media segment data
    * @returns The parsed segment with timing information
    */
-  public addMediaSegment(data: ArrayBuffer): MediaSegment {
+  public addMediaSegment(
+    data: ArrayBuffer,
+    trackInfoOverride?: MediaTrackInfo,
+  ): MediaSegment {
     if (!this.isInitialized) {
       throw new Error("Buffer not initialized. Call addInitSegment first.");
     }
 
     try {
-      // Parse the media segment
-      const trackInfo = this.mediaBuffer.parseMediaSegment(data);
+      // Parse the media segment unless the caller already reconstructed timing metadata.
+      const trackInfo =
+        trackInfoOverride ?? this.mediaBuffer.parseMediaSegment(data);
 
       // Create a segment object
       const segment: MediaSegment = {
