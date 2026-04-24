@@ -40,9 +40,9 @@ import type {
 import type { MediaTrackInfo } from "../buffer/mediaBuffer";
 import type { WarpTrack } from "../warpcatalog";
 
-const COMPRESSED_CMAF_HEADER_MOOV = 21;
-const COMPRESSED_CMAF_HEADER_MOOF = 23;
-const COMPRESSED_CMAF_HEADER_MOOF_DELTA = 25;
+const LOCMAF_HEADER_MOOV = 21;
+const LOCMAF_HEADER_MOOF = 23;
+const LOCMAF_HEADER_MOOF_DELTA = 25;
 
 const DEFAULT_TRACK_ID = 1;
 const DEFAULT_MOVIE_BRANDS = ["iso6", "cmfc", "mp41"];
@@ -127,14 +127,14 @@ type ExtendedSampleEncryptionBox = {
   samples: SampleEncryptionEntry[];
 };
 
-type CompressedCMAFBox =
+type LocmafBox =
   | MovieBox
   | MovieFragmentBox
   | FileTypeBox
   | MediaDataBox
   | RawBox;
 
-const moovFieldIds = {
+const moovLocmafIDs = {
   codecConfigurationBox: 1,
   colr: 3,
   pasp: 5,
@@ -158,7 +158,7 @@ const moovFieldIds = {
   tencVersion: 36,
 } as const;
 
-const moofFieldIds = {
+const moofLocmafIDs = {
   sampleDescriptionIndex: 2,
   defaultSampleDuration: 4,
   defaultSampleSize: 6,
@@ -177,9 +177,9 @@ const moofFieldIds = {
   bytesOfProtectedData: 15,
 } as const;
 
-const moofDeltaDeletedFieldId = 17;
+const moofDeltaDeletedLocmafID = 17;
 
-export interface CompressedCMAFTrackMetadata {
+export interface LocmafTrackMetadata {
   codec?: string;
   timescale?: number;
   width?: number;
@@ -190,7 +190,7 @@ export interface CompressedCMAFTrackMetadata {
   lang?: string;
 }
 
-export interface CompressedCMAFInitContext {
+export interface LocmafInitContext {
   trackId: number;
   timescale: number;
   defaultSampleDescriptionIndex: number;
@@ -200,26 +200,26 @@ export interface CompressedCMAFInitContext {
   defaultPerSampleIVSize: number;
 }
 
-export interface CompressedCMAFInitDecompressionResult {
+export interface LocmafInitDecompressionResult {
   bytes: Uint8Array;
-  boxes: CompressedCMAFBox[];
-  context: CompressedCMAFInitContext;
+  boxes: LocmafBox[];
+  context: LocmafInitContext;
 }
 
-export interface CompressedCMAFMoofDecompressionResult {
+export interface LocmafMoofDecompressionResult {
   box: MovieFragmentBox;
   bytes: Uint8Array;
   trackInfo: MediaTrackInfo;
 }
 
-export interface CompressedCmafTrackState {
-  initContext: CompressedCMAFInitContext;
+export interface LocmafTrackState {
+  initContext: LocmafInitContext;
   initSegment: Uint8Array;
-  moofDecoder: CompressedCMAFMoofDeltaDecoder;
+  moofDecoder: LocmafMoofDeltaDecoder;
 }
 
-export interface InitializedCompressedCmafTrack {
-  state: CompressedCmafTrackState;
+export interface InitializedLocmafTrack {
+  state: LocmafTrackState;
   initWasReconstructed: boolean;
 }
 
@@ -324,12 +324,12 @@ function decodeGoUvarint(
   for (let i = 0; i < 10; i++) {
     const index = offset + i;
     if (index >= bytes.length) {
-      throw new Error("unexpected end of compressed CMAF payload");
+      throw new Error("unexpected end of locmaf payload");
     }
     const byte = BigInt(bytes[index]);
     if (byte < 0x80n) {
       if (i === 9 && byte > 1n) {
-        throw new Error("compressed CMAF varint overflow");
+        throw new Error("locmaf varint overflow");
       }
       return {
         value: value | (byte << shift),
@@ -340,7 +340,7 @@ function decodeGoUvarint(
     shift += 7n;
   }
 
-  throw new Error("compressed CMAF varint overflow");
+  throw new Error("locmaf varint overflow");
 }
 
 function decodeGoVarint(
@@ -375,7 +375,7 @@ function encodeGoVarint(value: bigint): Uint8Array {
 function readSingleVarint(value: Uint8Array): bigint {
   const decoded = decodeGoVarint(value, 0);
   if (decoded.bytesRead !== value.byteLength) {
-    throw new Error("compressed CMAF scalar field has trailing bytes");
+    throw new Error("locmaf scalar field has trailing bytes");
   }
   return decoded.value;
 }
@@ -445,10 +445,7 @@ function separateFields(data: Uint8Array): RawFieldMap {
   while (offset < data.byteLength) {
     const fieldIdDecoded = decodeGoVarint(data, offset);
     offset += fieldIdDecoded.bytesRead;
-    const fieldId = asSafeNumber(
-      fieldIdDecoded.value,
-      "compressed CMAF field id",
-    );
+    const fieldId = asSafeNumber(fieldIdDecoded.value, "locmaf id");
 
     if (fieldId % 2 === 0) {
       const valueDecoded = decodeGoVarint(data, offset);
@@ -459,15 +456,10 @@ function separateFields(data: Uint8Array): RawFieldMap {
 
     const lengthDecoded = decodeGoVarint(data, offset);
     offset += lengthDecoded.bytesRead;
-    const length = asSafeNumber(
-      lengthDecoded.value,
-      "compressed CMAF field length",
-    );
+    const length = asSafeNumber(lengthDecoded.value, "locmaf field length");
     const nextOffset = offset + length;
     if (length < 0 || nextOffset > data.byteLength) {
-      throw new Error(
-        `compressed CMAF field ${fieldId} exceeds payload length`,
-      );
+      throw new Error(`locmaf field ${fieldId} exceeds payload length`);
     }
     fields.set(fieldId, data.slice(offset, nextOffset));
     offset = nextOffset;
@@ -496,7 +488,7 @@ function isAudioCodec(format: string): boolean {
 
 function inferMediaType(
   format: string,
-  track: CompressedCMAFTrackMetadata,
+  track: LocmafTrackMetadata,
 ): "video" | "audio" {
   if (track.role === "audio" || isAudioCodec(format)) {
     return "audio";
@@ -515,7 +507,7 @@ function getRawBoxField(
 function createSampleEntry(
   format: string,
   mediaType: "video" | "audio",
-  track: CompressedCMAFTrackMetadata,
+  track: LocmafTrackMetadata,
   fieldMap: RawFieldMap,
 ): AudioSampleEntryBox | VisualSampleEntryBox {
   if (mediaType === "audio") {
@@ -526,7 +518,7 @@ function createSampleEntry(
       reserved2: [0, 0],
       channelcount:
         track.channelCount ??
-        Number(maybeGetVarint(fieldMap, moovFieldIds.channelCount) ?? 2n),
+        Number(maybeGetVarint(fieldMap, moovLocmafIDs.channelCount) ?? 2n),
       samplesize: 16,
       preDefined: 0,
       reserved3: 0,
@@ -536,9 +528,9 @@ function createSampleEntry(
 
     const codecConfigurationBox = getRawBoxField(
       fieldMap,
-      moovFieldIds.codecConfigurationBox,
+      moovLocmafIDs.codecConfigurationBox,
     );
-    const chnlBox = getRawBoxField(fieldMap, moovFieldIds.chnl);
+    const chnlBox = getRawBoxField(fieldMap, moovLocmafIDs.chnl);
     if (codecConfigurationBox) {
       entry.boxes.push(codecConfigurationBox as any);
     }
@@ -574,10 +566,10 @@ function createSampleEntry(
 
   const codecConfigurationBox = getRawBoxField(
     fieldMap,
-    moovFieldIds.codecConfigurationBox,
+    moovLocmafIDs.codecConfigurationBox,
   );
-  const colrBox = getRawBoxField(fieldMap, moovFieldIds.colr);
-  const paspBox = getRawBoxField(fieldMap, moovFieldIds.pasp);
+  const colrBox = getRawBoxField(fieldMap, moovLocmafIDs.colr);
+  const paspBox = getRawBoxField(fieldMap, moovLocmafIDs.pasp);
   if (codecConfigurationBox) {
     entry.boxes.push(codecConfigurationBox as any);
   }
@@ -598,7 +590,7 @@ function createSampleEntry(
 function createProtectionSchemeBox(
   format: string,
   fieldMap: RawFieldMap,
-  track?: CompressedCMAFTrackMetadata,
+  track?: LocmafTrackMetadata,
 ):
   | {
       type: "sinf";
@@ -615,11 +607,11 @@ function createProtectionSchemeBox(
       >;
     }
   | undefined {
-  const schemeType = maybeGetVarint(fieldMap, moovFieldIds.schemeType);
-  const defaultKid = fieldMap.get(moovFieldIds.defaultKID);
+  const schemeType = maybeGetVarint(fieldMap, moovLocmafIDs.schemeType);
+  const defaultKid = fieldMap.get(moovLocmafIDs.defaultKID);
   const defaultPerSampleIVSize = maybeGetVarint(
     fieldMap,
-    moovFieldIds.defaultPerSampleIVSize,
+    moovLocmafIDs.defaultPerSampleIVSize,
   );
 
   if (!schemeType && !defaultKid && defaultPerSampleIVSize === undefined) {
@@ -627,18 +619,18 @@ function createProtectionSchemeBox(
   }
 
   const tencVersion = asSafeNumber(
-    maybeGetVarint(fieldMap, moovFieldIds.tencVersion) ?? 0n,
+    maybeGetVarint(fieldMap, moovLocmafIDs.tencVersion) ?? 0n,
     "tenc version",
   );
   const defaultCryptByteBlock = maybeGetVarint(
     fieldMap,
-    moovFieldIds.defaultCryptByteBlock,
+    moovLocmafIDs.defaultCryptByteBlock,
   );
   const defaultSkipByteBlock = maybeGetVarint(
     fieldMap,
-    moovFieldIds.defaultSkipByteBlock,
+    moovLocmafIDs.defaultSkipByteBlock,
   );
-  const defaultConstantIv = fieldMap.get(moovFieldIds.defaultConstantIV);
+  const defaultConstantIv = fieldMap.get(moovLocmafIDs.defaultConstantIV);
 
   const tenc: ExtendedTrackEncryptionBox = {
     type: "tenc",
@@ -723,19 +715,19 @@ function createFtypBox(reference?: Uint8Array): FileTypeBox {
 
 function buildInitBoxes(
   fieldMap: RawFieldMap,
-  track: CompressedCMAFTrackMetadata,
+  track: LocmafTrackMetadata,
   ftypBox: FileTypeBox,
-  referenceContext?: CompressedCMAFInitContext,
-): { boxes: CompressedCMAFBox[]; context: CompressedCMAFInitContext } {
-  const formatValue = maybeGetVarint(fieldMap, moovFieldIds.format);
+  referenceContext?: LocmafInitContext,
+): { boxes: LocmafBox[]; context: LocmafInitContext } {
+  const formatValue = maybeGetVarint(fieldMap, moovLocmafIDs.format);
   if (formatValue === undefined) {
     throw new Error(
-      "compressed CMAF init header does not contain a sample entry format",
+      "locmaf init header does not contain a sample entry format",
     );
   }
 
   const movieTimescale = asSafeNumber(
-    maybeGetVarint(fieldMap, moovFieldIds.movieTimescale) ??
+    maybeGetVarint(fieldMap, moovLocmafIDs.movieTimescale) ??
       BigInt(track.timescale ?? 90000),
     "movie timescale",
   );
@@ -744,10 +736,10 @@ function buildInitBoxes(
   const trackTimescale = track.timescale ?? movieTimescale;
   const trackId = DEFAULT_TRACK_ID;
   const trackFlags = asSafeNumber(
-    maybeGetVarint(fieldMap, moovFieldIds.tkhdFlags) ?? 7n,
+    maybeGetVarint(fieldMap, moovLocmafIDs.tkhdFlags) ?? 7n,
     "tkhd flags",
   );
-  const mediaTime = maybeGetVarint(fieldMap, moovFieldIds.mediaTime);
+  const mediaTime = maybeGetVarint(fieldMap, moovLocmafIDs.mediaTime);
 
   const sampleEntry = createSampleEntry(format, mediaType, track, fieldMap);
   const stsd: SampleDescriptionBox = {
@@ -897,22 +889,22 @@ function buildInitBoxes(
     "default sample description index",
   );
   const defaultSampleDuration = asSafeNumber(
-    maybeGetVarint(fieldMap, moovFieldIds.defaultSampleDuration) ??
+    maybeGetVarint(fieldMap, moovLocmafIDs.defaultSampleDuration) ??
       BigInt(referenceContext?.defaultSampleDuration ?? 0),
     "default sample duration",
   );
   const defaultSampleSize = asSafeNumber(
-    maybeGetVarint(fieldMap, moovFieldIds.defaultSampleSize) ??
+    maybeGetVarint(fieldMap, moovLocmafIDs.defaultSampleSize) ??
       BigInt(referenceContext?.defaultSampleSize ?? 0),
     "default sample size",
   );
   const defaultSampleFlags = asSafeNumber(
-    maybeGetVarint(fieldMap, moovFieldIds.defaultSampleFlags) ??
+    maybeGetVarint(fieldMap, moovLocmafIDs.defaultSampleFlags) ??
       BigInt(referenceContext?.defaultSampleFlags ?? 0),
     "default sample flags",
   );
   const defaultPerSampleIVSize = asSafeNumber(
-    maybeGetVarint(fieldMap, moovFieldIds.defaultPerSampleIVSize) ??
+    maybeGetVarint(fieldMap, moovLocmafIDs.defaultPerSampleIVSize) ??
       BigInt(referenceContext?.defaultPerSampleIVSize ?? 0),
     "default per-sample IV size",
   );
@@ -955,7 +947,7 @@ function buildInitBoxes(
     boxes: [mvhd, trak, mvex],
   };
 
-  const context: CompressedCMAFInitContext = {
+  const context: LocmafInitContext = {
     trackId,
     timescale: trackTimescale,
     defaultSampleDescriptionIndex,
@@ -1004,16 +996,19 @@ function createSencBox(
 ): ExtendedSampleEncryptionBox | undefined {
   const ivValues = maybeGetVarintList(
     fieldMap,
-    moofFieldIds.initializationVector,
+    moofLocmafIDs.initializationVector,
   );
   const subsampleCounts = maybeGetVarintList(
     fieldMap,
-    moofFieldIds.subsampleCount,
+    moofLocmafIDs.subsampleCount,
   );
-  const clearData = maybeGetVarintList(fieldMap, moofFieldIds.bytesOfClearData);
+  const clearData = maybeGetVarintList(
+    fieldMap,
+    moofLocmafIDs.bytesOfClearData,
+  );
   const protectedData = maybeGetVarintList(
     fieldMap,
-    moofFieldIds.bytesOfProtectedData,
+    moofLocmafIDs.bytesOfProtectedData,
   );
 
   if (!ivValues && !subsampleCounts && !clearData && !protectedData) {
@@ -1022,23 +1017,19 @@ function createSencBox(
 
   if (ivValues) {
     if (perSampleIVSize === 0) {
-      throw new Error(
-        "compressed CMAF moof includes IV data but IV size is zero",
-      );
+      throw new Error("locmaf moof includes IV data but IV size is zero");
     }
     if (ivValues.length !== sampleCount * perSampleIVSize) {
-      throw new Error(
-        "compressed CMAF IV field length does not match sample count",
-      );
+      throw new Error("locmaf IV field length does not match sample count");
     }
   }
 
   if (subsampleCounts && subsampleCounts.length !== sampleCount) {
-    throw new Error("compressed CMAF subsample count length mismatch");
+    throw new Error("locmaf subsample count length mismatch");
   }
   if ((clearData || protectedData) && !subsampleCounts) {
     throw new Error(
-      "compressed CMAF subsample encryption data requires subsample counts",
+      "locmaf subsample encryption data requires subsample counts",
     );
   }
 
@@ -1098,24 +1089,24 @@ function createSencBox(
 function buildMoofFromFields(
   fieldMap: RawFieldMap,
   sequenceNumber: number,
-  context: CompressedCMAFInitContext,
+  context: LocmafInitContext,
   mdatPayloadLength: number,
 ): { box: MovieFragmentBox; trackInfo: MediaTrackInfo } {
   const baseMediaDecodeTime = maybeGetVarint(
     fieldMap,
-    moofFieldIds.baseMediaDecodeTime,
+    moofLocmafIDs.baseMediaDecodeTime,
   );
   if (baseMediaDecodeTime === undefined) {
-    throw new Error("compressed CMAF moof is missing baseMediaDecodeTime");
+    throw new Error("locmaf moof is missing baseMediaDecodeTime");
   }
 
   const compositionOffsets = maybeGetVarintList(
     fieldMap,
-    moofFieldIds.sampleCompositionTimeOffsets,
+    moofLocmafIDs.sampleCompositionTimeOffsets,
   );
-  const sampleCountValue = maybeGetVarint(fieldMap, moofFieldIds.sampleCount);
+  const sampleCountValue = maybeGetVarint(fieldMap, moofLocmafIDs.sampleCount);
   if (sampleCountValue === undefined) {
-    throw new Error("compressed CMAF moof is missing sample count");
+    throw new Error("locmaf moof is missing sample count");
   }
   const sampleCount = asSafeNumber(sampleCountValue, "sample count");
   const hasCompositionOffsets = compositionOffsets !== undefined;
@@ -1123,25 +1114,25 @@ function buildMoofFromFields(
     compositionOffsets ?? repeatValue(0n, sampleCount);
   if (resolvedCompositionOffsets.length !== sampleCount) {
     throw new Error(
-      "compressed CMAF moof composition time offsets length does not match sample count",
+      "locmaf moof composition time offsets length does not match sample count",
     );
   }
   const tfhdDefaultSampleDuration =
-    maybeGetVarint(fieldMap, moofFieldIds.defaultSampleDuration) ??
+    maybeGetVarint(fieldMap, moofLocmafIDs.defaultSampleDuration) ??
     BigInt(context.defaultSampleDuration);
   const tfhdDefaultSampleSize =
-    maybeGetVarint(fieldMap, moofFieldIds.defaultSampleSize) ??
+    maybeGetVarint(fieldMap, moofLocmafIDs.defaultSampleSize) ??
     BigInt(context.defaultSampleSize);
   const tfhdDefaultSampleFlags =
-    maybeGetVarint(fieldMap, moofFieldIds.defaultSampleFlags) ??
+    maybeGetVarint(fieldMap, moofLocmafIDs.defaultSampleFlags) ??
     BigInt(context.defaultSampleFlags);
   const sampleSizes =
-    maybeGetVarintList(fieldMap, moofFieldIds.sampleSizes) ??
+    maybeGetVarintList(fieldMap, moofLocmafIDs.sampleSizes) ??
     (() => {
-      if (sampleCount === 1 && !fieldMap.has(moofFieldIds.defaultSampleSize)) {
+      if (sampleCount === 1 && !fieldMap.has(moofLocmafIDs.defaultSampleSize)) {
         if (mdatPayloadLength <= 0) {
           throw new Error(
-            "compressed CMAF moof is missing sample size for a single-sample fragment from mdat payload length",
+            "locmaf moof is missing sample size for a single-sample fragment from mdat payload length",
           );
         }
         return [BigInt(mdatPayloadLength)];
@@ -1149,17 +1140,17 @@ function buildMoofFromFields(
       return repeatValue(tfhdDefaultSampleSize, sampleCount);
     })();
   const sampleDurations =
-    maybeGetVarintList(fieldMap, moofFieldIds.sampleDurations) ??
+    maybeGetVarintList(fieldMap, moofLocmafIDs.sampleDurations) ??
     repeatValue(tfhdDefaultSampleDuration, sampleCount);
   const sampleFlags =
-    maybeGetVarintList(fieldMap, moofFieldIds.sampleFlags) ??
+    maybeGetVarintList(fieldMap, moofLocmafIDs.sampleFlags) ??
     repeatValue(tfhdDefaultSampleFlags, sampleCount);
   const firstSampleFlags = maybeGetVarint(
     fieldMap,
-    moofFieldIds.firstSampleFlags,
+    moofLocmafIDs.firstSampleFlags,
   );
   const perSampleIVSize = asSafeNumber(
-    maybeGetVarint(fieldMap, moofFieldIds.perSampleIVSize) ??
+    maybeGetVarint(fieldMap, moofLocmafIDs.perSampleIVSize) ??
       BigInt(context.defaultPerSampleIVSize),
     "per-sample IV size",
   );
@@ -1169,21 +1160,21 @@ function buildMoofFromFields(
     sampleDurations.length !== sampleCount ||
     sampleFlags.length !== sampleCount
   ) {
-    throw new Error("compressed CMAF moof sample field lengths do not match");
+    throw new Error("locmaf moof sample field lengths do not match");
   }
 
   const tfhdFlags =
     TFHD_DEFAULT_BASE_IS_MOOF |
-    (fieldMap.has(moofFieldIds.sampleDescriptionIndex)
+    (fieldMap.has(moofLocmafIDs.sampleDescriptionIndex)
       ? TFHD_SAMPLE_DESCRIPTION_INDEX_PRESENT
       : 0) |
-    (fieldMap.has(moofFieldIds.defaultSampleDuration)
+    (fieldMap.has(moofLocmafIDs.defaultSampleDuration)
       ? TFHD_DEFAULT_SAMPLE_DURATION_PRESENT
       : 0) |
-    (fieldMap.has(moofFieldIds.defaultSampleSize)
+    (fieldMap.has(moofLocmafIDs.defaultSampleSize)
       ? TFHD_DEFAULT_SAMPLE_SIZE_PRESENT
       : 0) |
-    (fieldMap.has(moofFieldIds.defaultSampleFlags)
+    (fieldMap.has(moofLocmafIDs.defaultSampleFlags)
       ? TFHD_DEFAULT_SAMPLE_FLAGS_PRESENT
       : 0);
 
@@ -1196,7 +1187,7 @@ function buildMoofFromFields(
 
   const sampleDescriptionIndex = maybeGetVarint(
     fieldMap,
-    moofFieldIds.sampleDescriptionIndex,
+    moofLocmafIDs.sampleDescriptionIndex,
   );
   if (sampleDescriptionIndex !== undefined) {
     tfhd.sampleDescriptionIndex = asSafeNumber(
@@ -1205,21 +1196,21 @@ function buildMoofFromFields(
     );
   }
 
-  if (fieldMap.has(moofFieldIds.defaultSampleDuration)) {
+  if (fieldMap.has(moofLocmafIDs.defaultSampleDuration)) {
     tfhd.defaultSampleDuration = asSafeNumber(
       tfhdDefaultSampleDuration,
       "default sample duration",
     );
   }
 
-  if (fieldMap.has(moofFieldIds.defaultSampleSize)) {
+  if (fieldMap.has(moofLocmafIDs.defaultSampleSize)) {
     tfhd.defaultSampleSize = asSafeNumber(
       tfhdDefaultSampleSize,
       "default sample size",
     );
   }
 
-  if (fieldMap.has(moofFieldIds.defaultSampleFlags)) {
+  if (fieldMap.has(moofLocmafIDs.defaultSampleFlags)) {
     tfhd.defaultSampleFlags = asSafeNumber(
       tfhdDefaultSampleFlags,
       "default sample flags",
@@ -1330,17 +1321,15 @@ function applyMoofDelta(
   delta: RawFieldMap,
 ): RawFieldMap {
   const current = cloneFieldMap(previous);
-  const deletedFields = maybeGetVarintList(delta, moofDeltaDeletedFieldId);
+  const deletedFields = maybeGetVarintList(delta, moofDeltaDeletedLocmafID);
   if (deletedFields) {
     for (const deletedField of deletedFields) {
-      current.delete(
-        asSafeNumber(deletedField, "deleted compressed CMAF field id"),
-      );
+      current.delete(asSafeNumber(deletedField, "deleted locmaf id"));
     }
   }
 
   for (const [fieldId, deltaValue] of delta.entries()) {
-    if (fieldId === moofDeltaDeletedFieldId) {
+    if (fieldId === moofDeltaDeletedLocmafID) {
       continue;
     }
 
@@ -1398,9 +1387,7 @@ function fourCcToUint32(value: string): number {
   );
 }
 
-function readSampleEntryMetadata(
-  initSegment: Uint8Array,
-): CompressedCMAFTrackMetadata {
+function readSampleEntryMetadata(initSegment: Uint8Array): LocmafTrackMetadata {
   const parsed = readIsoBoxes(initSegment, readerConfig) as any[];
   const moov = parsed.find((box) => box.type === "moov") as
     | MovieBox
@@ -1489,9 +1476,9 @@ function writeTenc(box: ExtendedTrackEncryptionBox): IsoBoxWriteView {
   return writer;
 }
 
-export function compressedCMAFTrackMetadataFromWarpTrack(
+export function locmafTrackMetadataFromWarpTrack(
   track: WarpTrack,
-): CompressedCMAFTrackMetadata {
+): LocmafTrackMetadata {
   return {
     codec: track.codec,
     timescale: track.timescale,
@@ -1505,13 +1492,13 @@ export function compressedCMAFTrackMetadataFromWarpTrack(
 
 export function extractTrackMetadataFromInitSegment(
   initSegment: Uint8Array | ArrayBuffer,
-): CompressedCMAFTrackMetadata {
+): LocmafTrackMetadata {
   return readSampleEntryMetadata(ensureUint8Array(initSegment));
 }
 
 export function extractInitContextFromInitSegment(
   initSegment: Uint8Array | ArrayBuffer,
-): CompressedCMAFInitContext {
+): LocmafInitContext {
   const initBytes = ensureUint8Array(initSegment);
   const parsed = readIsoBoxes(initBytes, readerConfig) as any[];
   const moov = parsed.find((box) => box.type === "moov") as
@@ -1545,13 +1532,13 @@ export function extractInitContextFromInitSegment(
   };
 }
 
-export function decompressCompressedCMAFInit(
+export function decompressLocmafInit(
   payload: Uint8Array | ArrayBuffer,
-  track: CompressedCMAFTrackMetadata,
+  track: LocmafTrackMetadata,
   options?: {
     referenceInitSegment?: Uint8Array | ArrayBuffer;
   },
-): CompressedCMAFInitDecompressionResult {
+): LocmafInitDecompressionResult {
   const fieldMap = separateFields(ensureUint8Array(payload));
   const referenceInit = options?.referenceInitSegment
     ? ensureUint8Array(options.referenceInitSegment)
@@ -1573,32 +1560,28 @@ export function decompressCompressedCMAFInit(
   };
 }
 
-export class CompressedCMAFMoofDeltaDecoder {
+export class LocmafMoofDeltaDecoder {
   private previous?: RawFieldMap;
 
   public decode(
-    headerType:
-      | typeof COMPRESSED_CMAF_HEADER_MOOF
-      | typeof COMPRESSED_CMAF_HEADER_MOOF_DELTA,
+    headerType: typeof LOCMAF_HEADER_MOOF | typeof LOCMAF_HEADER_MOOF_DELTA,
     payload: Uint8Array | ArrayBuffer,
     sequenceNumber: number,
-    context: CompressedCMAFInitContext,
+    context: LocmafInitContext,
     mdatPayloadLength: number,
-  ): CompressedCMAFMoofDecompressionResult {
+  ): LocmafMoofDecompressionResult {
     const fieldMap = separateFields(ensureUint8Array(payload));
     let currentFields: RawFieldMap;
 
-    if (headerType === COMPRESSED_CMAF_HEADER_MOOF) {
+    if (headerType === LOCMAF_HEADER_MOOF) {
       currentFields = cloneFieldMap(fieldMap);
-    } else if (headerType === COMPRESSED_CMAF_HEADER_MOOF_DELTA) {
+    } else if (headerType === LOCMAF_HEADER_MOOF_DELTA) {
       if (!this.previous) {
         throw new Error("cannot decode delta moof without a previous moof");
       }
       currentFields = applyMoofDelta(this.previous, fieldMap);
     } else {
-      throw new Error(
-        `unsupported compressed CMAF moof header type ${headerType}`,
-      );
+      throw new Error(`unsupported locmaf moof header type ${headerType}`);
     }
 
     this.previous = cloneFieldMap(currentFields);
@@ -1620,7 +1603,7 @@ export class CompressedCMAFMoofDeltaDecoder {
   }
 }
 
-export function createCompressedCMAFMdatBox(
+export function createLocmafMdatBox(
   fragmentOrMdat: Uint8Array | ArrayBuffer,
 ): MediaDataBox {
   const input = ensureUint8Array(fragmentOrMdat);
@@ -1664,19 +1647,19 @@ export function assembleCmafFile(parts: {
   return concatBytes(initSegment, moofBytes, mdatBytes);
 }
 
-export function getCompressedCMAFHeaderConstants(): Readonly<{
-  moov: typeof COMPRESSED_CMAF_HEADER_MOOV;
-  moof: typeof COMPRESSED_CMAF_HEADER_MOOF;
-  moofDelta: typeof COMPRESSED_CMAF_HEADER_MOOF_DELTA;
+export function getLocmafHeaderConstants(): Readonly<{
+  moov: typeof LOCMAF_HEADER_MOOV;
+  moof: typeof LOCMAF_HEADER_MOOF;
+  moofDelta: typeof LOCMAF_HEADER_MOOF_DELTA;
 }> {
   return {
-    moov: COMPRESSED_CMAF_HEADER_MOOV,
-    moof: COMPRESSED_CMAF_HEADER_MOOF,
-    moofDelta: COMPRESSED_CMAF_HEADER_MOOF_DELTA,
+    moov: LOCMAF_HEADER_MOOV,
+    moof: LOCMAF_HEADER_MOOF,
+    moofDelta: LOCMAF_HEADER_MOOF_DELTA,
   } as const;
 }
 
-function parseCompressedCMAFObject(payload: Uint8Array | ArrayBuffer): {
+function parseLocmafObject(payload: Uint8Array | ArrayBuffer): {
   headerId: number;
   locPayload: Uint8Array;
   mdatPayload: Uint8Array;
@@ -1684,19 +1667,16 @@ function parseCompressedCMAFObject(payload: Uint8Array | ArrayBuffer): {
   const bytes = ensureUint8Array(payload);
   const header = decodeGoVarint(bytes, 0);
   const locLength = decodeGoVarint(bytes, header.bytesRead);
-  const headerId = asSafeNumber(
-    header.value,
-    "compressed CMAF object header id",
-  );
+  const headerId = asSafeNumber(header.value, "locmaf object header id");
   const locPayloadLength = asSafeNumber(
     locLength.value,
-    "compressed CMAF object payload length",
+    "locmaf object payload length",
   );
   const locStart = header.bytesRead + locLength.bytesRead;
   const locEnd = locStart + locPayloadLength;
 
   if (locPayloadLength < 0 || locEnd > bytes.byteLength) {
-    throw new Error("compressed CMAF LOC payload exceeds object length");
+    throw new Error("locmaf LOC payload exceeds object length");
   }
 
   return {
@@ -1706,23 +1686,23 @@ function parseCompressedCMAFObject(payload: Uint8Array | ArrayBuffer): {
   };
 }
 
-function parseCompressedCmafInit(payload: Uint8Array | ArrayBuffer): {
+function parseLocmafInit(payload: Uint8Array | ArrayBuffer): {
   headerId: number;
   locPayload: Uint8Array;
 } {
   const bytes = ensureUint8Array(payload);
   const header = decodeGoVarint(bytes, 0);
   const locLength = decodeGoVarint(bytes, header.bytesRead);
-  const headerId = asSafeNumber(header.value, "compressed CMAF init header id");
+  const headerId = asSafeNumber(header.value, "locmaf init header id");
   const locPayloadLength = asSafeNumber(
     locLength.value,
-    "compressed CMAF init payload length",
+    "locmaf init payload length",
   );
   const locStart = header.bytesRead + locLength.bytesRead;
   const locEnd = locStart + locPayloadLength;
 
   if (locPayloadLength < 0 || locEnd > bytes.byteLength) {
-    throw new Error("compressed CMAF init payload exceeds object length");
+    throw new Error("locmaf init payload exceeds object length");
   }
 
   return {
@@ -1731,59 +1711,55 @@ function parseCompressedCmafInit(payload: Uint8Array | ArrayBuffer): {
   };
 }
 
-export function isCompressedCmafTrack(
-  track: Pick<WarpTrack, "packaging">,
-): boolean {
-  return track.packaging === "compressed-cmaf";
+export function isLocmafTrack(track: Pick<WarpTrack, "packaging">): boolean {
+  return track.packaging === "locmaf";
 }
 
-export function createCompressedCmafTrackState(
+export function createLocmafTrackState(
   track: WarpTrack,
-  compressedInitSegment: Uint8Array | ArrayBuffer,
-): CompressedCmafTrackState {
-  const headers = getCompressedCMAFHeaderConstants();
-  let locPayload = ensureUint8Array(compressedInitSegment);
+  locmafInitSegment: Uint8Array | ArrayBuffer,
+): LocmafTrackState {
+  const headers = getLocmafHeaderConstants();
+  let locPayload = ensureUint8Array(locmafInitSegment);
 
   try {
-    const parsedInit = parseCompressedCmafInit(compressedInitSegment);
+    const parsedInit = parseLocmafInit(locmafInitSegment);
     if (parsedInit.headerId !== headers.moov) {
-      throw new Error(
-        `unsupported compressed CMAF init header ${parsedInit.headerId}`,
-      );
+      throw new Error(`unsupported locmaf init header ${parsedInit.headerId}`);
     }
     locPayload = parsedInit.locPayload;
   } catch {
     // Backward compatibility for pre-framed test fixtures / older catalogs.
   }
 
-  const reconstructedInit = decompressCompressedCMAFInit(
+  const reconstructedInit = decompressLocmafInit(
     locPayload,
-    compressedCMAFTrackMetadataFromWarpTrack(track),
+    locmafTrackMetadataFromWarpTrack(track),
   );
 
   return {
     initContext: reconstructedInit.context,
     initSegment: reconstructedInit.bytes,
-    moofDecoder: new CompressedCMAFMoofDeltaDecoder(),
+    moofDecoder: new LocmafMoofDeltaDecoder(),
   };
 }
 
-export function initializeCompressedCmafTrack(
+export function initializeLocmafTrack(
   track: WarpTrack,
   initSegment: Uint8Array | ArrayBuffer,
-): InitializedCompressedCmafTrack {
+): InitializedLocmafTrack {
   const initBytes = ensureUint8Array(initSegment);
 
   try {
-    const parsedInit = parseCompressedCmafInit(initBytes);
-    if (parsedInit.headerId === getCompressedCMAFHeaderConstants().moov) {
+    const parsedInit = parseLocmafInit(initBytes);
+    if (parsedInit.headerId === getLocmafHeaderConstants().moov) {
       return {
-        state: createCompressedCmafTrackState(track, initBytes),
+        state: createLocmafTrackState(track, initBytes),
         initWasReconstructed: true,
       };
     }
   } catch {
-    // Not a framed compressed init.
+    // Not a framed locmaf init.
   }
 
   try {
@@ -1791,13 +1767,13 @@ export function initializeCompressedCmafTrack(
       state: {
         initContext: extractInitContextFromInitSegment(initBytes),
         initSegment: initBytes,
-        moofDecoder: new CompressedCMAFMoofDeltaDecoder(),
+        moofDecoder: new LocmafMoofDeltaDecoder(),
       },
       initWasReconstructed: false,
     };
   } catch {
     return {
-      state: createCompressedCmafTrackState(track, initBytes),
+      state: createLocmafTrackState(track, initBytes),
       initWasReconstructed: true,
     };
   }
@@ -1806,7 +1782,7 @@ export function initializeCompressedCmafTrack(
 export function decompressMoof(
   payload: Uint8Array | ArrayBuffer,
   sequenceNumber: number,
-  state: CompressedCmafTrackState,
+  state: LocmafTrackState,
 ): Uint8Array {
   return decompressMoofWithTrackInfo(payload, sequenceNumber, state).bytes;
 }
@@ -1814,14 +1790,13 @@ export function decompressMoof(
 export function decompressMoofWithTrackInfo(
   payload: Uint8Array | ArrayBuffer,
   sequenceNumber: number,
-  state: CompressedCmafTrackState,
+  state: LocmafTrackState,
 ): { bytes: Uint8Array; trackInfo: MediaTrackInfo } {
-  const { headerId, locPayload, mdatPayload } =
-    parseCompressedCMAFObject(payload);
-  const headers = getCompressedCMAFHeaderConstants();
+  const { headerId, locPayload, mdatPayload } = parseLocmafObject(payload);
+  const headers = getLocmafHeaderConstants();
 
   if (headerId !== headers.moof && headerId !== headers.moofDelta) {
-    throw new Error(`unsupported compressed CMAF moof header ${headerId}`);
+    throw new Error(`unsupported locmaf moof header ${headerId}`);
   }
 
   const moof = state.moofDecoder.decode(
@@ -1831,7 +1806,7 @@ export function decompressMoofWithTrackInfo(
     state.initContext,
     mdatPayload.byteLength,
   );
-  const mdat = createCompressedCMAFMdatBox(mdatPayload);
+  const mdat = createLocmafMdatBox(mdatPayload);
 
   return {
     bytes: assembleCmafFile({
@@ -1843,10 +1818,10 @@ export function decompressMoofWithTrackInfo(
   };
 }
 
-export function decompressCompressedCmafFragment(
+export function decompressLocmafFragment(
   payload: Uint8Array | ArrayBuffer,
   sequenceNumber: number,
-  state: CompressedCmafTrackState,
+  state: LocmafTrackState,
 ): Uint8Array {
   return decompressMoof(payload, sequenceNumber, state);
 }

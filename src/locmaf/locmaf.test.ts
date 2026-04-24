@@ -8,14 +8,14 @@ import { defaultReaderConfig, readIsoBoxes } from "@svta/cml-iso-bmff";
 import type { WarpTrack } from "../warpcatalog";
 
 import {
-  createCompressedCmafTrackState,
-  initializeCompressedCmafTrack,
-  decompressCompressedCMAFInit,
+  createLocmafTrackState,
+  initializeLocmafTrack,
+  decompressLocmafInit,
   decompressMoof,
   decompressMoofWithTrackInfo,
   extractTrackMetadataFromInitSegment,
-  getCompressedCMAFHeaderConstants,
-} from "./compressedCMAF";
+  getLocmafHeaderConstants,
+} from "./locmaf";
 
 const SAMPLE_SIZES_FIELD_ID = 1;
 const DEFAULT_SAMPLE_SIZE_FIELD_ID = 6;
@@ -36,7 +36,7 @@ function buildTrack(referenceInit: Uint8Array): WarpTrack {
   const metadata = extractTrackMetadataFromInitSegment(referenceInit);
   return {
     name: "video",
-    packaging: "compressed-cmaf",
+    packaging: "locmaf",
     codec: metadata.codec,
     timescale: metadata.timescale,
     width: metadata.width,
@@ -117,7 +117,7 @@ function decodeGoVarint(
   for (let index = 0; index < 10; index++) {
     const current = offset + index;
     if (current >= bytes.length) {
-      throw new Error("unexpected end of compressed CMAF payload");
+      throw new Error("unexpected end of locmaf payload");
     }
 
     const byte = BigInt(bytes[current]);
@@ -126,7 +126,7 @@ function decodeGoVarint(
       const decoded = (encoded & 1n) === 0n ? encoded >> 1n : ~(encoded >> 1n);
       const value = Number(decoded);
       if (!Number.isSafeInteger(value)) {
-        throw new Error("compressed CMAF varint exceeds safe integer range");
+        throw new Error("locmaf varint exceeds safe integer range");
       }
       return {
         value,
@@ -137,12 +137,10 @@ function decodeGoVarint(
     shift += 7n;
   }
 
-  throw new Error("compressed CMAF varint overflow");
+  throw new Error("locmaf varint overflow");
 }
 
-function separateCompressedFields(
-  payload: Uint8Array,
-): Map<number, Uint8Array> {
+function separateLocmafFields(payload: Uint8Array): Map<number, Uint8Array> {
   const fields = new Map<number, Uint8Array>();
   let offset = 0;
 
@@ -170,7 +168,7 @@ function separateCompressedFields(
   return fields;
 }
 
-function encodeCompressedFields(fields: Map<number, Uint8Array>): Uint8Array {
+function encodeLocmafFields(fields: Map<number, Uint8Array>): Uint8Array {
   const encoded: Uint8Array[] = [];
 
   for (const [fieldId, value] of fields.entries()) {
@@ -193,7 +191,7 @@ function encodeCompressedFields(fields: Map<number, Uint8Array>): Uint8Array {
   return bytes;
 }
 
-function buildCompressedObject(
+function buildLocmafObject(
   headerId: number,
   locPayload: Uint8Array,
   mdatPayload: Uint8Array,
@@ -219,14 +217,11 @@ function buildCompressedObject(
   return bytes;
 }
 
-function buildCompressedInit(
-  headerId: number,
-  locPayload: Uint8Array,
-): Uint8Array {
-  return buildCompressedObject(headerId, locPayload, new Uint8Array());
+function buildLocmafInit(headerId: number, locPayload: Uint8Array): Uint8Array {
+  return buildLocmafObject(headerId, locPayload, new Uint8Array());
 }
 
-function parseCompressedObject(payload: Uint8Array): {
+function parseLocmafObject(payload: Uint8Array): {
   headerId: number;
   locPayload: Uint8Array;
   mdatPayload: Uint8Array;
@@ -254,18 +249,14 @@ function concatBytes(...parts: Uint8Array[]): Uint8Array {
   return bytes;
 }
 
-describe("compressed CMAF reconstruction", () => {
-  it("reconstructs an init segment from the compressed header", async () => {
-    const compressedInit = await loadFixture("init");
+describe("locmaf reconstruction", () => {
+  it("reconstructs an init segment from the locmaf header", async () => {
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
     const trackMetadata = extractTrackMetadataFromInitSegment(referenceInit);
-    const reconstructed = decompressCompressedCMAFInit(
-      compressedInit,
-      trackMetadata,
-      {
-        referenceInitSegment: referenceInit,
-      },
-    );
+    const reconstructed = decompressLocmafInit(locmafInit, trackMetadata, {
+      referenceInitSegment: referenceInit,
+    });
 
     const parsed = readIsoBoxes(reconstructed.bytes, defaultReaderConfig());
     const ftyp = parsed.find((box: { type: string }) => box.type === "ftyp");
@@ -290,15 +281,15 @@ describe("compressed CMAF reconstruction", () => {
   });
 
   it("reconstructs the same moof from normal and delta headers", async () => {
-    const compressedInit = await loadFixture("init");
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const normalState = createCompressedCmafTrackState(
+    const normalState = createLocmafTrackState(
       buildTrack(referenceInit),
-      compressedInit,
+      locmafInit,
     );
-    const deltaState = createCompressedCmafTrackState(
+    const deltaState = createLocmafTrackState(
       buildTrack(referenceInit),
-      compressedInit,
+      locmafInit,
     );
 
     const normal0 = decompressMoof(
@@ -338,13 +329,10 @@ describe("compressed CMAF reconstruction", () => {
     expect(summarizeMoof(normal2)).toEqual(summarizeMoof(delta2));
   });
 
-  it("returns track timing metadata while reconstructing a compressed moof", async () => {
-    const compressedInit = await loadFixture("init");
+  it("returns track timing metadata while reconstructing a locmaf moof", async () => {
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const state = createCompressedCmafTrackState(
-      buildTrack(referenceInit),
-      compressedInit,
-    );
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
 
     const result = decompressMoofWithTrackInfo(
       await loadFixture("normalMoof-1"),
@@ -368,23 +356,23 @@ describe("compressed CMAF reconstruction", () => {
   });
 
   it("reconstructs a single-sample moof without sampleSizes", async () => {
-    const compressedInit = await loadFixture("init");
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
     const trackMetadata = extractTrackMetadataFromInitSegment(referenceInit);
-    decompressCompressedCMAFInit(compressedInit, trackMetadata, {
+    decompressLocmafInit(locmafInit, trackMetadata, {
       referenceInitSegment: referenceInit,
     });
 
     const originalPayload = await loadFixture("normalMoof-0");
-    const originalState = createCompressedCmafTrackState(
+    const originalState = createLocmafTrackState(
       buildTrack(referenceInit),
-      compressedInit,
+      locmafInit,
     );
     const originalMoof = decompressMoof(originalPayload, 1, originalState);
     const originalSummary = summarizeMoof(originalMoof);
 
-    const parsedObject = parseCompressedObject(originalPayload);
-    const fields = separateCompressedFields(parsedObject.locPayload);
+    const parsedObject = parseLocmafObject(originalPayload);
+    const fields = separateLocmafFields(parsedObject.locPayload);
     expect(originalSummary.sampleCount).toBe(1);
     expect(fields.get(SAMPLE_COUNT_FIELD_ID)).toBeDefined();
 
@@ -393,14 +381,14 @@ describe("compressed CMAF reconstruction", () => {
     }
     fields.delete(DEFAULT_SAMPLE_SIZE_FIELD_ID);
 
-    const reconstructedObject = buildCompressedObject(
+    const reconstructedObject = buildLocmafObject(
       parsedObject.headerId,
-      encodeCompressedFields(fields),
+      encodeLocmafFields(fields),
       parsedObject.mdatPayload,
     );
-    const reconstructedState = createCompressedCmafTrackState(
+    const reconstructedState = createLocmafTrackState(
       buildTrack(referenceInit),
-      compressedInit,
+      locmafInit,
     );
     const reconstructed = decompressMoof(
       reconstructedObject,
@@ -411,12 +399,12 @@ describe("compressed CMAF reconstruction", () => {
 
     expect(reconstructedSummary.sampleCount).toBe(1);
     expect(
-      separateCompressedFields(encodeCompressedFields(fields)).has(
+      separateLocmafFields(encodeLocmafFields(fields)).has(
         SAMPLE_SIZES_FIELD_ID,
       ),
     ).toBe(false);
     expect(
-      separateCompressedFields(encodeCompressedFields(fields)).has(
+      separateLocmafFields(encodeLocmafFields(fields)).has(
         DEFAULT_SAMPLE_SIZE_FIELD_ID,
       ),
     ).toBe(false);
@@ -427,51 +415,41 @@ describe("compressed CMAF reconstruction", () => {
   });
 
   it("requires an explicit sampleCount field when reconstructing a moof", async () => {
-    const compressedInit = await loadFixture("init");
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const parsedObject = parseCompressedObject(
-      await loadFixture("normalMoof-0"),
-    );
-    const fields = separateCompressedFields(parsedObject.locPayload);
+    const parsedObject = parseLocmafObject(await loadFixture("normalMoof-0"));
+    const fields = separateLocmafFields(parsedObject.locPayload);
 
     fields.delete(SAMPLE_COUNT_FIELD_ID);
 
-    const state = createCompressedCmafTrackState(
-      buildTrack(referenceInit),
-      compressedInit,
-    );
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
 
     expect(() =>
       decompressMoof(
-        buildCompressedObject(
+        buildLocmafObject(
           parsedObject.headerId,
-          encodeCompressedFields(fields),
+          encodeLocmafFields(fields),
           parsedObject.mdatPayload,
         ),
         1,
         state,
       ),
-    ).toThrow("compressed CMAF moof is missing sample count");
+    ).toThrow("locmaf moof is missing sample count");
   });
 
   it("defaults missing composition time offsets to zero and clears the trun flag", async () => {
-    const compressedInit = await loadFixture("init");
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const parsedObject = parseCompressedObject(
-      await loadFixture("normalMoof-1"),
-    );
-    const fields = separateCompressedFields(parsedObject.locPayload);
+    const parsedObject = parseLocmafObject(await loadFixture("normalMoof-1"));
+    const fields = separateLocmafFields(parsedObject.locPayload);
 
     fields.delete(SAMPLE_COMPOSITION_TIME_OFFSETS_FIELD_ID);
 
-    const state = createCompressedCmafTrackState(
-      buildTrack(referenceInit),
-      compressedInit,
-    );
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
     const fragment = decompressMoof(
-      buildCompressedObject(
+      buildLocmafObject(
         parsedObject.headerId,
-        encodeCompressedFields(fields),
+        encodeLocmafFields(fields),
         parsedObject.mdatPayload,
       ),
       2,
@@ -491,21 +469,14 @@ describe("compressed CMAF reconstruction", () => {
   });
 
   it("assembles a playable CMAF file layout with init, moof and mdat", async () => {
-    const compressedInit = await loadFixture("init");
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
     const trackMetadata = extractTrackMetadataFromInitSegment(referenceInit);
-    const reconstructedInit = decompressCompressedCMAFInit(
-      compressedInit,
-      trackMetadata,
-      {
-        referenceInitSegment: referenceInit,
-      },
-    );
+    const reconstructedInit = decompressLocmafInit(locmafInit, trackMetadata, {
+      referenceInitSegment: referenceInit,
+    });
 
-    const state = createCompressedCmafTrackState(
-      buildTrack(referenceInit),
-      compressedInit,
-    );
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
     for (const index of [0, 1, 2]) {
       const fragment = decompressMoof(
         await loadFixture(`normalMoof-${index}`),
@@ -538,21 +509,14 @@ describe("compressed CMAF reconstruction", () => {
   });
 
   it("writes the reconstructed file bytes to disk", async () => {
-    const compressedInit = await loadFixture("init");
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
     const trackMetadata = extractTrackMetadataFromInitSegment(referenceInit);
-    const reconstructedInit = decompressCompressedCMAFInit(
-      compressedInit,
-      trackMetadata,
-      {
-        referenceInitSegment: referenceInit,
-      },
-    );
+    const reconstructedInit = decompressLocmafInit(locmafInit, trackMetadata, {
+      referenceInitSegment: referenceInit,
+    });
     const bytesParts: Uint8Array[] = [reconstructedInit.bytes];
-    const state = createCompressedCmafTrackState(
-      buildTrack(referenceInit),
-      compressedInit,
-    );
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
     for (const index of [0, 1, 2]) {
       const fragment = decompressMoof(
         await loadFixture(`normalMoof-${index}`),
@@ -565,9 +529,7 @@ describe("compressed CMAF reconstruction", () => {
       bytesParts.flatMap((part) => Array.from(part)),
     );
 
-    const tmpDir = await mkdtemp(
-      path.join(os.tmpdir(), "warp-player-compressed-cmaf-"),
-    );
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "warp-player-locmaf-"));
     const outputPath = path.join(tmpDir, "reconstructed.cmaf.mp4");
     const { writeFile } = await import("node:fs/promises");
     await writeFile(outputPath, bytes);
@@ -578,13 +540,10 @@ describe("compressed CMAF reconstruction", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("reconstructs a CMAF init segment from compressed init data", async () => {
-    const compressedInit = await loadFixture("init");
+  it("reconstructs a CMAF init segment from locmaf init data", async () => {
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const state = createCompressedCmafTrackState(
-      buildTrack(referenceInit),
-      compressedInit,
-    );
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
 
     const boxes = readIsoBoxes(
       state.initSegment,
@@ -595,15 +554,12 @@ describe("compressed CMAF reconstruction", () => {
     expect(boxes.map((box) => box.type)).toEqual(["ftyp", "moov"]);
   });
 
-  it("reconstructs a framed compressed CMAF init segment", async () => {
-    const compressedInit = await loadFixture("init");
+  it("reconstructs a framed locmaf init segment", async () => {
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const initialized = initializeCompressedCmafTrack(
+    const initialized = initializeLocmafTrack(
       buildTrack(referenceInit),
-      buildCompressedInit(
-        getCompressedCMAFHeaderConstants().moov,
-        compressedInit,
-      ),
+      buildLocmafInit(getLocmafHeaderConstants().moov, locmafInit),
     );
 
     const boxes = readIsoBoxes(
@@ -614,9 +570,9 @@ describe("compressed CMAF reconstruction", () => {
     expect(boxes.map((box) => box.type)).toEqual(["ftyp", "moov"]);
   });
 
-  it("keeps a regular CMAF init segment when compressed-cmaf advertises one", async () => {
+  it("keeps a regular CMAF init segment when locmaf advertises one", async () => {
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const initialized = initializeCompressedCmafTrack(
+    const initialized = initializeLocmafTrack(
       buildTrack(referenceInit),
       referenceInit,
     );
@@ -627,16 +583,13 @@ describe("compressed CMAF reconstruction", () => {
     );
   });
 
-  it("reconstructs CMAF fragments from compressed objects", async () => {
-    const compressedInit = await loadFixture("init");
+  it("reconstructs CMAF fragments from locmaf objects", async () => {
+    const locmafInit = await loadFixture("init");
     const referenceInit = await loadFixture("init.cmaf.mp4");
-    const state = createCompressedCmafTrackState(
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
+    const expectedState = createLocmafTrackState(
       buildTrack(referenceInit),
-      compressedInit,
-    );
-    const expectedState = createCompressedCmafTrackState(
-      buildTrack(referenceInit),
-      compressedInit,
+      locmafInit,
     );
 
     const fragment0 = decompressMoof(

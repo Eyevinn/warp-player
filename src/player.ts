@@ -6,11 +6,11 @@ import {
 
 import { MediaBuffer, MediaSegmentBuffer, MediaTrackInfo } from "./buffer";
 import {
-  CompressedCmafTrackState,
+  LocmafTrackState,
   decompressMoofWithTrackInfo,
-  initializeCompressedCmafTrack,
-  isCompressedCmafTrack,
-} from "./compressed-cmaf/compressedCMAF";
+  initializeLocmafTrack,
+  isLocmafTrack,
+} from "./locmaf/locmaf";
 import { ILogger, LoggerFactory } from "./logger";
 import { Client, DraftVersion } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
@@ -57,8 +57,8 @@ export class Player {
   private audioMediaBuffer: MediaBuffer | null = null;
   private videoTrack: WarpTrack | null = null;
   private audioTrack: WarpTrack | null = null;
-  private videoCompressedCmafState: CompressedCmafTrackState | null = null;
-  private audioCompressedCmafState: CompressedCmafTrackState | null = null;
+  private videoLocmafState: LocmafTrackState | null = null;
+  private audioLocmafState: LocmafTrackState | null = null;
 
   // Synchronization state
   private videoBufferReady = false;
@@ -1070,8 +1070,8 @@ export class Player {
     // Reset track references
     this.videoTrack = null;
     this.audioTrack = null;
-    this.videoCompressedCmafState = null;
-    this.audioCompressedCmafState = null;
+    this.videoLocmafState = null;
+    this.audioLocmafState = null;
 
     // Reset buffer flags
     this.videoBufferReady = false;
@@ -1483,7 +1483,7 @@ export class Player {
     this.audioMediaSegmentBuffer = null;
     this.audioMediaBuffer = null;
     this.audioTrack = null;
-    this.audioCompressedCmafState = null;
+    this.audioLocmafState = null;
     this.audioBufferReady = false;
     this.audioObjectsReceived = 0;
 
@@ -1517,7 +1517,7 @@ export class Player {
     this.videoMediaSegmentBuffer = null;
     this.videoMediaBuffer = null;
     this.videoTrack = null;
-    this.videoCompressedCmafState = null;
+    this.videoLocmafState = null;
     this.videoBufferReady = false;
     this.videoObjectsReceived = 0;
 
@@ -2720,23 +2720,19 @@ export class Player {
     ) as ArrayBuffer;
   }
 
-  private getCompressedCmafState(
-    kind: "video" | "audio",
-  ): CompressedCmafTrackState | null {
-    return kind === "video"
-      ? this.videoCompressedCmafState
-      : this.audioCompressedCmafState;
+  private getLocmafState(kind: "video" | "audio"): LocmafTrackState | null {
+    return kind === "video" ? this.videoLocmafState : this.audioLocmafState;
   }
 
-  private setCompressedCmafState(
+  private setLocmafState(
     kind: "video" | "audio",
-    state: CompressedCmafTrackState | null,
+    state: LocmafTrackState | null,
   ): void {
     if (kind === "video") {
-      this.videoCompressedCmafState = state;
+      this.videoLocmafState = state;
       return;
     }
-    this.audioCompressedCmafState = state;
+    this.audioLocmafState = state;
   }
 
   private groupIdToSequenceNumber(groupId: bigint, logPrefix: string): number {
@@ -2765,23 +2761,23 @@ export class Player {
       `[${type}InitSegment] Decoded init segment: ${encodedInit.byteLength} bytes`,
     );
 
-    if (!isCompressedCmafTrack(track)) {
-      this.setCompressedCmafState(kind, null);
+    if (!isLocmafTrack(track)) {
+      this.setLocmafState(kind, null);
       return encodedInit;
     }
 
-    const initializedTrack = initializeCompressedCmafTrack(track, encodedInit);
-    this.setCompressedCmafState(kind, initializedTrack.state);
+    const initializedTrack = initializeLocmafTrack(track, encodedInit);
+    this.setLocmafState(kind, initializedTrack.state);
 
     if (!initializedTrack.initWasReconstructed) {
       this.logger.info(
-        `[${type}InitSegment] Using advertised CMAF init segment for compressed CMAF track`,
+        `[${type}InitSegment] Using advertised CMAF init segment for locmaf track`,
       );
       return this.asExactArrayBuffer(encodedInit, `[${type}InitSegment]`);
     }
 
     this.logger.info(
-      `[${type}InitSegment] Reconstructed compressed CMAF init segment: ${initializedTrack.state.initSegment.byteLength} bytes`,
+      `[${type}InitSegment] Reconstructed locmaf init segment: ${initializedTrack.state.initSegment.byteLength} bytes`,
     );
 
     return this.asExactArrayBuffer(
@@ -2799,13 +2795,13 @@ export class Player {
     const logPrefix = `[${type}MediaBuffer]`;
     const objectData = this.asExactArrayBuffer(obj.data, logPrefix);
 
-    if (!isCompressedCmafTrack(track)) {
+    if (!isLocmafTrack(track)) {
       return { data: objectData };
     }
 
-    const compressedState = this.getCompressedCmafState(kind);
-    if (!compressedState) {
-      throw new Error(`${logPrefix} Missing compressed CMAF state`);
+    const locmafState = this.getLocmafState(kind);
+    if (!locmafState) {
+      throw new Error(`${logPrefix} Missing locmaf state`);
     }
 
     const sequenceNumber = this.groupIdToSequenceNumber(
@@ -2815,7 +2811,7 @@ export class Player {
     const fragment = decompressMoofWithTrackInfo(
       objectData,
       sequenceNumber,
-      compressedState,
+      locmafState,
     );
 
     return {
