@@ -90,54 +90,65 @@ function summarizeMoof(bytes: Uint8Array) {
   };
 }
 
-function encodeGoVarint(value: number): Uint8Array {
+function encodeQuicVarint(value: number): Uint8Array {
   if (value < 0) {
     throw new Error("test helper only supports non-negative values");
   }
 
-  let encoded = BigInt(value) << 1n;
-  const bytes: number[] = [];
-
-  while (encoded >= 0x80n) {
-    bytes.push(Number(encoded & 0x7fn) | 0x80);
-    encoded >>= 7n;
+  const encoded = BigInt(value);
+  if (encoded < 64n) {
+    return Uint8Array.of(Number(encoded));
   }
-  bytes.push(Number(encoded));
-
-  return Uint8Array.from(bytes);
+  if (encoded < 16384n) {
+    return Uint8Array.of(
+      Number(((encoded >> 8n) & 0x3fn) | 0x40n),
+      Number(encoded & 0xffn),
+    );
+  }
+  if (encoded < 1073741824n) {
+    return Uint8Array.of(
+      Number(((encoded >> 24n) & 0x3fn) | 0x80n),
+      Number((encoded >> 16n) & 0xffn),
+      Number((encoded >> 8n) & 0xffn),
+      Number(encoded & 0xffn),
+    );
+  }
+  return Uint8Array.of(
+    Number(((encoded >> 56n) & 0x3fn) | 0xc0n),
+    Number((encoded >> 48n) & 0xffn),
+    Number((encoded >> 40n) & 0xffn),
+    Number((encoded >> 32n) & 0xffn),
+    Number((encoded >> 24n) & 0xffn),
+    Number((encoded >> 16n) & 0xffn),
+    Number((encoded >> 8n) & 0xffn),
+    Number(encoded & 0xffn),
+  );
 }
 
-function decodeGoVarint(
+function decodeQuicVarint(
   bytes: Uint8Array,
   offset: number,
 ): { value: number; bytesRead: number } {
-  let encoded = 0n;
-  let shift = 0n;
-
-  for (let index = 0; index < 10; index++) {
-    const current = offset + index;
-    if (current >= bytes.length) {
-      throw new Error("unexpected end of locmaf payload");
-    }
-
-    const byte = BigInt(bytes[current]);
-    encoded |= (byte & 0x7fn) << shift;
-    if (byte < 0x80n) {
-      const decoded = (encoded & 1n) === 0n ? encoded >> 1n : ~(encoded >> 1n);
-      const value = Number(decoded);
-      if (!Number.isSafeInteger(value)) {
-        throw new Error("locmaf varint exceeds safe integer range");
-      }
-      return {
-        value,
-        bytesRead: index + 1,
-      };
-    }
-
-    shift += 7n;
+  const first = bytes[offset];
+  if (first === undefined) {
+    throw new Error("unexpected end of locmaf payload");
   }
 
-  throw new Error("locmaf varint overflow");
+  const bytesRead = 1 << (first >> 6);
+  if (offset + bytesRead > bytes.byteLength) {
+    throw new Error("unexpected end of locmaf payload");
+  }
+
+  let encoded = BigInt(first & 0x3f);
+  for (let index = 1; index < bytesRead; index++) {
+    encoded = (encoded << 8n) | BigInt(bytes[offset + index]);
+  }
+
+  const value = Number(encoded);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error("locmaf varint exceeds safe integer range");
+  }
+  return { value, bytesRead };
 }
 
 function separateLocmafFields(payload: Uint8Array): Map<number, Uint8Array> {
@@ -145,11 +156,11 @@ function separateLocmafFields(payload: Uint8Array): Map<number, Uint8Array> {
   let offset = 0;
 
   while (offset < payload.length) {
-    const fieldId = decodeGoVarint(payload, offset);
+    const fieldId = decodeQuicVarint(payload, offset);
     offset += fieldId.bytesRead;
 
     if (fieldId.value % 2 === 0) {
-      const value = decodeGoVarint(payload, offset);
+      const value = decodeQuicVarint(payload, offset);
       fields.set(
         fieldId.value,
         payload.slice(offset, offset + value.bytesRead),
@@ -158,7 +169,7 @@ function separateLocmafFields(payload: Uint8Array): Map<number, Uint8Array> {
       continue;
     }
 
-    const length = decodeGoVarint(payload, offset);
+    const length = decodeQuicVarint(payload, offset);
     offset += length.bytesRead;
     const nextOffset = offset + length.value;
     fields.set(fieldId.value, payload.slice(offset, nextOffset));
@@ -172,12 +183,12 @@ function encodeLocmafFields(fields: Map<number, Uint8Array>): Uint8Array {
   const encoded: Uint8Array[] = [];
 
   for (const [fieldId, value] of fields.entries()) {
-    encoded.push(encodeGoVarint(fieldId));
+    encoded.push(encodeQuicVarint(fieldId));
     if (fieldId % 2 === 0) {
       encoded.push(value);
       continue;
     }
-    encoded.push(encodeGoVarint(value.byteLength));
+    encoded.push(encodeQuicVarint(value.byteLength));
     encoded.push(value);
   }
 
@@ -196,8 +207,8 @@ function buildLocmafObject(
   locPayload: Uint8Array,
   mdatPayload: Uint8Array,
 ): Uint8Array {
-  const header = encodeGoVarint(headerId);
-  const locLength = encodeGoVarint(locPayload.byteLength);
+  const header = encodeQuicVarint(headerId);
+  const locLength = encodeQuicVarint(locPayload.byteLength);
   const bytes = new Uint8Array(
     header.byteLength +
       locLength.byteLength +
@@ -226,8 +237,8 @@ function parseLocmafObject(payload: Uint8Array): {
   locPayload: Uint8Array;
   mdatPayload: Uint8Array;
 } {
-  const header = decodeGoVarint(payload, 0);
-  const locLength = decodeGoVarint(payload, header.bytesRead);
+  const header = decodeQuicVarint(payload, 0);
+  const locLength = decodeQuicVarint(payload, header.bytesRead);
   const locStart = header.bytesRead + locLength.bytesRead;
   const locEnd = locStart + locLength.value;
 
