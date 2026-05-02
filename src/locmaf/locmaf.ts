@@ -1380,11 +1380,61 @@ function encodeMoof(box: MovieFragmentBox): Uint8Array {
   return writeIsoBox(box as any, writerConfig);
 }
 
+function deriveNextBaseMediaDecodeTime(
+  previous: RawFieldMap,
+  context: LocmafInitContext,
+): bigint {
+  const baseMediaDecodeTime = maybeGetVarint(
+    previous,
+    moofLocmafIDs.baseMediaDecodeTime,
+  );
+  if (baseMediaDecodeTime === undefined) {
+    throw new Error("locmaf delta is missing previous baseMediaDecodeTime");
+  }
+
+  return baseMediaDecodeTime + moofFieldDuration(previous, context);
+}
+
+function moofFieldDuration(
+  fields: RawFieldMap,
+  context: LocmafInitContext,
+): bigint {
+  const sampleCountValue = maybeGetVarint(fields, moofLocmafIDs.sampleCount);
+  if (sampleCountValue === undefined) {
+    throw new Error("locmaf delta is missing previous sample count");
+  }
+  const sampleCount = asSafeNumber(sampleCountValue, "sample count");
+
+  const sampleDurations = maybeGetVarintList(
+    fields,
+    moofLocmafIDs.sampleDurations,
+  );
+  if (sampleDurations !== undefined) {
+    if (sampleDurations.length !== sampleCount) {
+      throw new Error(
+        "locmaf moof sample durations length does not match sample count",
+      );
+    }
+    return sampleDurations.reduce((sum, duration) => sum + duration, 0n);
+  }
+
+  const defaultSampleDuration =
+    maybeGetVarint(fields, moofLocmafIDs.defaultSampleDuration) ??
+    BigInt(context.defaultSampleDuration);
+  return defaultSampleDuration * sampleCountValue;
+}
+
 function applyMoofDelta(
   previous: RawFieldMap,
   delta: RawFieldMap,
+  context: LocmafInitContext,
 ): RawFieldMap {
   const current = cloneFieldMap(previous);
+  current.set(
+    moofLocmafIDs.baseMediaDecodeTime,
+    encodeQuicVarint(deriveNextBaseMediaDecodeTime(previous, context)),
+  );
+
   const deletedFields = maybeGetVarintList(delta, moofDeltaDeletedLocmafID);
   if (deletedFields) {
     for (const deletedField of deletedFields) {
@@ -1397,7 +1447,7 @@ function applyMoofDelta(
       continue;
     }
 
-    const previousValue = current.get(fieldId);
+    const previousValue = previous.get(fieldId);
     if (fieldId % 2 === 0) {
       const nextValue =
         readSingleSignedVarint(deltaValue) +
@@ -1646,7 +1696,7 @@ export class LocmafMoofDeltaDecoder {
       if (!this.previous) {
         throw new Error("cannot decode delta moof without a previous moof");
       }
-      currentFields = applyMoofDelta(this.previous, fieldMap);
+      currentFields = applyMoofDelta(this.previous, fieldMap, context);
     } else {
       throw new Error(`unsupported locmaf moof header type ${headerType}`);
     }

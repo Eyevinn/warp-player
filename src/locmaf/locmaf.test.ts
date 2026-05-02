@@ -19,6 +19,7 @@ import {
 
 const SAMPLE_SIZES_FIELD_ID = 1;
 const DEFAULT_SAMPLE_SIZE_FIELD_ID = 6;
+const BASE_MEDIA_DECODE_TIME_FIELD_ID = 10;
 const SAMPLE_COUNT_FIELD_ID = 16;
 const SAMPLE_COMPOSITION_TIME_OFFSETS_FIELD_ID = 5;
 const TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT = 0x000800;
@@ -364,6 +365,37 @@ describe("locmaf reconstruction", () => {
     );
     expect(result.trackInfo.sequenceNumber).toBe(summary.sequenceNumber);
     expect(result.trackInfo.duration).toBe(expectedDuration);
+  });
+
+  it("derives baseMediaDecodeTime for delta moofs", async () => {
+    const locmafInit = await loadFixture("init");
+    const referenceInit = await loadFixture("init.cmaf.mp4");
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
+
+    decompressMoof(await loadFixture("deltaMoof-0"), 1, state);
+
+    const deltaObject = parseLocmafObject(await loadFixture("deltaMoof-1"));
+    const fields = separateLocmafFields(deltaObject.locPayload);
+    fields.delete(BASE_MEDIA_DECODE_TIME_FIELD_ID);
+
+    const derivedDelta = buildLocmafObject(
+      deltaObject.headerId,
+      encodeLocmafFields(fields),
+      deltaObject.mdatPayload,
+    );
+    const derivedMoof = decompressMoof(derivedDelta, 2, state);
+
+    const normalState = createLocmafTrackState(
+      buildTrack(referenceInit),
+      locmafInit,
+    );
+    const normalMoof = decompressMoof(
+      await loadFixture("normalMoof-1"),
+      2,
+      normalState,
+    );
+
+    expect(summarizeMoof(derivedMoof)).toEqual(summarizeMoof(normalMoof));
   });
 
   it("reconstructs a single-sample moof without sampleSizes", async () => {
