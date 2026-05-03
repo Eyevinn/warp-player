@@ -143,8 +143,14 @@ export class WarpCatalogManager {
   /**
    * Handle received catalog data
    * @param data The catalog data received from the server
+   * @param announceNamespace The namespace under which the catalog track was
+   *   announced. Per draft-ietf-moq-msf-00 §5.1.10, tracks without an explicit
+   *   namespace inherit it from the catalog track.
    */
-  public handleCatalogData(data: WarpCatalog): void {
+  public handleCatalogData(
+    data: WarpCatalog,
+    announceNamespace?: string,
+  ): void {
     try {
       this.logger.info("Received catalog data");
 
@@ -152,6 +158,20 @@ export class WarpCatalogManager {
       if (!data || typeof data !== "object" || !Array.isArray(data.tracks)) {
         this.logger.error("Invalid catalog data format");
         return;
+      }
+
+      if (announceNamespace) {
+        const inherit = (tracks?: WarpTrack[]) => {
+          tracks?.forEach((t) => {
+            if (!t.namespace) {
+              t.namespace = announceNamespace;
+            }
+          });
+        };
+        inherit(data.tracks);
+        inherit(data.addTracks);
+        inherit(data.removeTracks);
+        inherit(data.cloneTracks);
       }
 
       // Store the catalog data
