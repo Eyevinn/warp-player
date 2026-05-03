@@ -103,6 +103,12 @@ export class Player {
 
   /** Active WebCodecs pipeline when LOC playback is engaged. */
   private webcodecsPipeline: WebCodecsLocPipeline | null = null;
+  /**
+   * Display label for the DRM system negotiated for the current playback.
+   * One of "Widevine" | "PlayReady" | "FairPlay" | "ClearKey", or null when
+   * the session is clear. Surfaced in the engine-legend overlay.
+   */
+  private activeDrmLabel: string | null = null;
   /** Timer feeding the metric panels while the WebCodecs pipeline is active. */
   private webcodecsMetricsTimer: ReturnType<typeof setInterval> | null = null;
   /**
@@ -112,6 +118,15 @@ export class Player {
    * engine-agnostic.
    */
   private currentPipeline: IPlaybackPipeline | null = null;
+
+  /**
+   * Re-render the Mute/Unmute button label from currentPipeline.getMuted().
+   * Assigned by wireMuteButton(); call after every currentPipeline change so
+   * the label reflects the active engine, not the previous one. Null until
+   * the button has been wired (the user can change currentPipeline before
+   * the tracks UI is built, e.g. on disconnect, so callers must guard).
+   */
+  private refreshMuteLabel: (() => void) | null = null;
 
   // Synchronization state
   private videoBufferReady = false;
@@ -198,6 +213,59 @@ export class Player {
 
     // Create published namespaces section
     this.createPublishedNamespacesSection();
+
+    // When the user changes the render-engine choice, re-render the
+    // namespace picker so incompatible namespaces dim out.
+    const engineSelect = document.getElementById(
+      "engineChoice",
+    ) as HTMLSelectElement | null;
+    if (engineSelect) {
+      engineSelect.addEventListener("change", () => {
+        this.renderNamespaceSelector();
+        this.ensureSelectableNamespace();
+      });
+    }
+  }
+
+  /**
+   * After an engine-choice change, if the currently selected namespace is
+   * no longer selectable, switch to the first one that is. Keeps the
+   * current selection when it remains compatible.
+   */
+  private ensureSelectableNamespace(): void {
+    const choice = this.currentEngineChoice();
+    if (
+      this.selectedNamespace &&
+      this.isNamespaceSelectable(this.selectedNamespace, choice)
+    ) {
+      return;
+    }
+    const next = this.publishedNamespaces.find((ns) =>
+      this.isNamespaceSelectable(ns, choice),
+    );
+    if (next) {
+      this.selectNamespace(next);
+    }
+  }
+
+  /**
+   * True when a namespace is a media namespace, the user's render-engine
+   * choice can play it, and (if it's a ClearKey/ECCP namespace) the
+   * browser actually supports ClearKey. Used by both the namespace
+   * selector renderer and the auto-select-on-engine-change logic.
+   */
+  private isNamespaceSelectable(
+    namespace: string[],
+    engineChoice: EngineChoice,
+  ): boolean {
+    if (this.isNonMediaNamespace(namespace)) {
+      return false;
+    }
+    const joined = namespace.join("/");
+    if (joined.includes("/eccp-") && !this.clearKeySupported) {
+      return false;
+    }
+    return this.namespaceMatchesEngineChoice(namespace, engineChoice);
   }
 
   /**
@@ -465,12 +533,59 @@ export class Player {
     }
   }
 
-  /** Known non-media namespace prefixes (e.g. interop test namespaces) */
-  private static readonly NON_MEDIA_PREFIXES = ["moq-test"];
+  /**
+   * Known non-media namespace prefixes. These are surfaced in the namespace
+   * picker as inert labels rather than selectable buttons because warp-player
+   * has no playback path for them today: `moq-test` is the interop test
+   * namespace, `moq-mi/*` carries moq-mi packaging which doesn't have a
+   * pipeline implementation yet.
+   */
+  private static readonly NON_MEDIA_PREFIXES = ["moq-test", "moq-mi"];
+
+  /** Read the current value of the render-engine dropdown, default "auto". */
+  private currentEngineChoice(): EngineChoice {
+    const sel = document.getElementById(
+      "engineChoice",
+    ) as HTMLSelectElement | null;
+    const v = sel?.value ?? "auto";
+    return v === "mse" || v === "webcodecs" ? v : "auto";
+  }
+
+  /**
+   * Decide whether a published namespace is compatible with the user's
+   * render-engine choice. mlmpub's namespace prefix encodes the packaging:
+   *   cmsf/* -> CMAF (MSE)
+   *   msf/*  -> LOC (WebCodecs)
+   * For Auto we accept everything; for unknown prefixes we accept too,
+   * since the wire doesn't otherwise tell us packaging until we subscribe
+   * to the catalog.
+   */
+  private namespaceMatchesEngineChoice(
+    namespace: string[],
+    engineChoice: EngineChoice,
+  ): boolean {
+    if (engineChoice === "auto") {
+      return true;
+    }
+    const joined = namespace.join("/");
+    if (joined.startsWith("cmsf/")) {
+      return engineChoice === "mse";
+    }
+    if (joined.startsWith("msf/")) {
+      return engineChoice === "webcodecs";
+    }
+    return true;
+  }
 
   private isNonMediaNamespace(namespace: string[]): boolean {
+    // Namespaces arrive on the wire either as a real multi-element tuple
+    // (e.g. ["moq-test", "interop"]) or as a single tuple element that
+    // already contains slashes (e.g. ["moq-mi/clear"], the form mlmpub
+    // emits for its content namespaces). Compare against the slash-joined
+    // form so both shapes are recognised.
+    const joined = namespace.join("/");
     return Player.NON_MEDIA_PREFIXES.some(
-      (prefix) => namespace.length > 0 && namespace[0] === prefix,
+      (prefix) => joined === prefix || joined.startsWith(prefix + "/"),
     );
   }
 
@@ -823,6 +938,8 @@ export class Player {
       this.isNonMediaNamespace(ns),
     );
 
+    const engineChoice = this.currentEngineChoice();
+
     // Media namespace buttons on the left
     const mediaGroup = document.createElement("div");
     mediaGroup.style.cssText = "display: flex; gap: 0.5rem; flex-wrap: wrap;";
@@ -830,7 +947,11 @@ export class Player {
     for (const ns of mediaNs) {
       const nsStr = ns.join("/");
       const isEccp = nsStr.includes("/eccp-");
-      const disabled = isEccp && !this.clearKeySupported;
+      const engineCompatible = this.namespaceMatchesEngineChoice(
+        ns,
+        engineChoice,
+      );
+      const disabled = (isEccp && !this.clearKeySupported) || !engineCompatible;
 
       const btn = document.createElement("button");
       btn.className =
@@ -838,6 +959,11 @@ export class Player {
         (nsStr === selectedStr ? " selected" : "") +
         (disabled ? " disabled" : "");
       btn.textContent = nsStr;
+      if (!engineCompatible) {
+        btn.title = `${engineChoice === "mse" ? "MSE" : "WebCodecs"} engine cannot play this namespace`;
+      } else if (disabled) {
+        btn.title = "ClearKey not supported in this browser";
+      }
 
       if (!disabled) {
         btn.addEventListener("click", () => {
@@ -1009,6 +1135,49 @@ export class Player {
       };
       stopBtn.style.display = "";
     }
+
+    this.wireMuteButton();
+  }
+
+  /**
+   * Activate and wire up the Mute / Unmute toggle. Routed through the
+   * active pipeline so it works regardless of engine: MsePipeline forwards
+   * to videoElement.muted, WebCodecsLocPipeline drives a GainNode between
+   * each AudioBufferSourceNode and the AudioContext destination. We need
+   * a custom button because (a) Safari's native video controls don't
+   * expose a mute toggle the same way Chrome's do, and (b) the WebCodecs
+   * path hides the <video> entirely.
+   */
+  private wireMuteButton(): void {
+    const muteBtn = document.getElementById(
+      "muteBtn",
+    ) as HTMLButtonElement | null;
+    if (!muteBtn) {
+      return;
+    }
+    this.refreshMuteLabel = () => {
+      const muted = this.currentPipeline?.getMuted() ?? true;
+      // 🔇 = speaker with cancellation stroke (muted state, click to unmute)
+      // 🔊 = speaker with three sound waves (audible state, click to mute)
+      const icon = document.createElement("span");
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = muted ? "🔇" : "🔊";
+      muteBtn.replaceChildren(
+        icon,
+        document.createTextNode(muted ? " Unmute" : " Mute"),
+      );
+    };
+    muteBtn.disabled = false;
+    this.refreshMuteLabel();
+    muteBtn.onclick = () => {
+      const pipeline = this.currentPipeline;
+      if (!pipeline) {
+        return;
+      }
+      const next = !pipeline.getMuted();
+      pipeline.setMuted(next);
+      this.refreshMuteLabel?.();
+    };
   }
 
   // Track subscriptions are managed through the trackSubscriptions map
@@ -1157,6 +1326,9 @@ export class Player {
     // to await it here — the legacy MSE flow tears down synchronously.
     void this.msePipeline.dispose();
     this.currentPipeline = null;
+    this.refreshMuteLabel?.();
+    this.activeDrmLabel = null;
+    this.updateEngineLegend();
 
     // Reset error handling state
     this.recoveryInProgress = false;
@@ -2295,7 +2467,9 @@ export class Player {
 
     this.webcodecsPipeline = pipeline;
     this.currentPipeline = pipeline;
+    this.refreshMuteLabel?.();
     this.playbackStarted = true;
+    this.updateEngineLegend();
 
     // The hidden <video> element doesn't fire timeupdate while WebCodecs is
     // active, so drive the metric-panel refresh ourselves.
@@ -2510,6 +2684,7 @@ export class Player {
             selectedSystemID = candidate.drmSystem.systemID;
             selectedDrmSystem = candidate.drmSystem;
             selectedInitDataType = attempt.initDataType;
+            this.activeDrmLabel = this.drmDisplayLabel(selectedSystemID);
             const resolvedConfig = access.getConfiguration();
             this.logger.info(
               `DRM accepted: keySystem=${attempt.keySystem}, initDataType=${attempt.initDataType}, resolvedConfig=${JSON.stringify(resolvedConfig)}`,
@@ -2853,6 +3028,8 @@ export class Player {
     // hand it the <video> element so it can read currentTime / playbackRate.
     this.msePipeline.attachVideoElement(videoEl);
     this.currentPipeline = this.msePipeline;
+    this.refreshMuteLabel?.();
+    this.updateEngineLegend();
 
     // Reset previous source if any
     videoEl.pause();
@@ -4236,6 +4413,68 @@ export class Player {
         rateEl.style.color = "#ef4444";
       }
     }
+  }
+
+  /** Map a DRM system UUID to a human-readable label for the legend overlay. */
+  private drmDisplayLabel(systemId: string): string {
+    switch (systemId) {
+      case this.widevine:
+        return "Widevine";
+      case this.playready:
+        return "PlayReady";
+      case this.fairplay:
+        return "FairPlay";
+      case this.clearkey:
+        return "ClearKey";
+      default:
+        return systemId;
+    }
+  }
+
+  /**
+   * Refresh the top-right overlay listing the active engine, DRM, and the
+   * selected video / audio track names. Hidden when no playback is active.
+   */
+  private updateEngineLegend(): void {
+    const el = document.getElementById("engineLegend");
+    if (!el) {
+      return;
+    }
+    if (!this.currentPipeline) {
+      el.classList.remove("active");
+      el.replaceChildren();
+      return;
+    }
+
+    const engineLabel =
+      this.currentPipeline.engine === "webcodecs" ? "WebCodecs" : "MSE";
+    const rows: Array<[string, string]> = [];
+    if (this.selectedNamespace && this.selectedNamespace.length > 0) {
+      rows.push(["Namespace", this.selectedNamespace.join("/")]);
+    }
+    rows.push(["Engine", engineLabel]);
+    rows.push(["DRM", this.activeDrmLabel ?? "None"]);
+    if (this.videoTrack?.name) {
+      rows.push(["Video", this.videoTrack.name]);
+    }
+    if (this.audioTrack?.name) {
+      rows.push(["Audio", this.audioTrack.name]);
+    }
+
+    el.replaceChildren();
+    for (const [key, val] of rows) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const k = document.createElement("span");
+      k.className = "key";
+      k.textContent = `${key}:`;
+      const v = document.createElement("span");
+      v.className = "val";
+      v.textContent = val;
+      row.append(k, v);
+      el.appendChild(row);
+    }
+    el.classList.add("active");
   }
 
   /**
