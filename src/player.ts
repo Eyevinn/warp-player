@@ -6,7 +6,9 @@ import {
 
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
+import { EngineChoice, IPlaybackPipeline, resolveEngine } from "./pipeline";
 import { MsePipeline } from "./pipeline/msePipeline";
+import { WebCodecsLocPipeline } from "./pipeline/webcodecsLocPipeline";
 import { Client, DraftVersion } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
 import {
@@ -98,6 +100,18 @@ export class Player {
 
   private videoTrack: WarpTrack | null = null;
   private audioTrack: WarpTrack | null = null;
+
+  /** Active WebCodecs pipeline when LOC playback is engaged. */
+  private webcodecsPipeline: WebCodecsLocPipeline | null = null;
+  /** Timer feeding the metric panels while the WebCodecs pipeline is active. */
+  private webcodecsMetricsTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Pipeline currently driving the metric panels — points at msePipeline for
+   * MSE/CMAF sessions and webcodecsPipeline for LOC sessions. Both implement
+   * IPlaybackPipeline.getLatencySnapshot()/getPlaybackRate(), so the UI is
+   * engine-agnostic.
+   */
+  private currentPipeline: IPlaybackPipeline | null = null;
 
   // Synchronization state
   private videoBufferReady = false;
@@ -1071,6 +1085,22 @@ export class Player {
       }
     }
 
+    // Tear down the WebCodecs pipeline if active.
+    if (this.webcodecsMetricsTimer !== null) {
+      clearInterval(this.webcodecsMetricsTimer);
+      this.webcodecsMetricsTimer = null;
+    }
+    if (this.webcodecsPipeline) {
+      try {
+        await this.webcodecsPipeline.dispose();
+      } catch (e) {
+        this.logger.warn(
+          `Error disposing WebCodecsLoc pipeline: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      this.webcodecsPipeline = null;
+    }
+
     // Reset video element
     const videoEl = document.getElementById("videoPlayer") as HTMLVideoElement;
     if (videoEl) {
@@ -1123,8 +1153,10 @@ export class Player {
     this.videoObjectsReceived = 0;
     this.audioObjectsReceived = 0;
 
-    // Reset buffer variables
-    this.msePipeline.dispose();
+    // Reset buffer variables. dispose() returns a promise but we don't need
+    // to await it here — the legacy MSE flow tears down synchronously.
+    void this.msePipeline.dispose();
+    this.currentPipeline = null;
 
     // Reset error handling state
     this.recoveryInProgress = false;
@@ -2171,12 +2203,146 @@ export class Player {
       this.logger.info("DRM information not found, skipping DRM setup");
     }
 
+    // Pick the render engine. The dropdown lets the user force MSE or
+    // WebCodecs; "auto" falls back to packaging-based selection.
+    const engineSelect = document.getElementById(
+      "engineChoice",
+    ) as HTMLSelectElement | null;
+    const engineChoice = (engineSelect?.value ?? "auto") as EngineChoice;
+    let engine: "mse" | "webcodecs";
+    try {
+      engine = resolveEngine(
+        engineChoice,
+        videoTrack ?? null,
+        audioTrack ?? null,
+      );
+    } catch (e) {
+      this.logger.error(
+        `Engine choice "${engineChoice}" cannot play the selected tracks: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    }
+
+    if (engine === "webcodecs") {
+      if (!videoTrack) {
+        this.logger.error(
+          "WebCodecs engine requires a video track; aborting Start",
+        );
+        return;
+      }
+      const locAudio =
+        audioTrack && audioTrack.packaging === "loc" ? audioTrack : null;
+      await this.setupLocPlayback(videoTrack, locAudio);
+      return;
+    }
+
     // Setup MediaSource and SourceBuffer for audio and video
     if (audioTrack) {
       this.setupAudioPlayback(audioTrack);
     }
     if (videoTrack) {
       this.setupVideoPlayback(videoTrack);
+    }
+  }
+
+  /**
+   * WebCodecs LOC playback entry point. Subscribes to the LOC video and (if
+   * present) LOC audio track and routes objects into the pipeline.
+   */
+  private async setupLocPlayback(
+    videoTrack: WarpTrack,
+    audioTrack: WarpTrack | null,
+  ): Promise<void> {
+    this.logger.info(
+      `[WebCodecsLoc] Setting up LOC playback for ${videoTrack.namespace}/${videoTrack.name}` +
+        (audioTrack ? ` + ${audioTrack.namespace}/${audioTrack.name}` : ""),
+    );
+    this.videoTrack = videoTrack;
+    if (audioTrack) {
+      this.audioTrack = audioTrack;
+    }
+
+    const videoEl = document.getElementById("videoPlayer") as HTMLVideoElement;
+    if (!videoEl) {
+      this.logger.error("Video element not found");
+      return;
+    }
+    // Stop and detach the legacy MSE element so its decoder doesn't fight
+    // with the canvas overlay.
+    videoEl.pause();
+    videoEl.removeAttribute("src");
+    videoEl.srcObject = null;
+    videoEl.load();
+
+    const pipeline = new WebCodecsLocPipeline();
+    try {
+      await pipeline.setup({
+        videoTrack,
+        audioTrack,
+        targets: { videoElement: videoEl },
+        buffer: {
+          minimalBufferMs: this.minimalBufferMs,
+          targetLatencyMs: this.targetLatencyMs,
+        },
+        logger: this.logger,
+      });
+    } catch (e) {
+      this.logger.error(
+        `[WebCodecsLoc] setup failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    }
+
+    this.webcodecsPipeline = pipeline;
+    this.currentPipeline = pipeline;
+    this.playbackStarted = true;
+
+    // The hidden <video> element doesn't fire timeupdate while WebCodecs is
+    // active, so drive the metric-panel refresh ourselves.
+    this.webcodecsMetricsTimer = setInterval(() => {
+      this.updateBufferLevelUI();
+    }, 250);
+
+    await this.subscribeToVideoTrack(videoTrack, (obj) => {
+      pipeline.routeObject("video", obj as unknown as MOQObject);
+    });
+    if (audioTrack) {
+      await this.subscribeLocAudioTrack(audioTrack, (obj) => {
+        pipeline.routeObject("audio", obj);
+      });
+    }
+  }
+
+  /**
+   * Subscribe to a LOC audio track and route MOQObjects into the pipeline.
+   * The legacy MSE-aware subscribeToAudioTrack assumes a SourceBuffer pipeline
+   * and pre-existing MediaSegmentBuffer state, neither of which apply to
+   * WebCodecs LOC.
+   */
+  private async subscribeLocAudioTrack(
+    track: WarpTrack,
+    onObject: (obj: MOQObject) => void,
+  ): Promise<void> {
+    if (!this.client) {
+      this.logger.error("Client not initialized");
+      return;
+    }
+    const namespace = track.namespace || "";
+    const trackKey = `${namespace}/${track.name}`;
+    this.logger.info(`Subscribing to LOC audio track: ${trackKey}`);
+    try {
+      const trackAlias = await this.client.subscribeTrack(
+        namespace,
+        track.name,
+        onObject,
+      );
+      this.trackSubscriptions.set(trackKey, trackAlias);
+    } catch (error) {
+      this.logger.error(
+        `Error subscribing to LOC audio track ${trackKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -2682,6 +2848,11 @@ export class Player {
       this.logger.error("Video element not found");
       return;
     }
+
+    // The MsePipeline now drives the metric panels through getLatencySnapshot();
+    // hand it the <video> element so it can read currentTime / playbackRate.
+    this.msePipeline.attachVideoElement(videoEl);
+    this.currentPipeline = this.msePipeline;
 
     // Reset previous source if any
     videoEl.pause();
@@ -3981,7 +4152,166 @@ export class Player {
   private lastUpdateTime: number = 0;
 
   /**
-   * Update the buffer level and playback latency UI elements
+   * Paint the Playback-Information cards (Video Buffer, Audio Buffer,
+   * Latency, Playback Rate) from a pipeline-supplied snapshot. Used by the
+   * WebCodecs LOC path; the MSE path still reads from <video>/SourceBuffer
+   * directly further below.
+   */
+  private renderMetricPanelsFromSnapshot(
+    snapshot: {
+      currentLatencyMs: number | null;
+      videoBufferedAheadS: number;
+      audioBufferedAheadS: number;
+    },
+    playbackRate: number,
+  ): void {
+    const minimalBufferMs = this.minimalBufferMs;
+    const paintBuffer = (
+      el: HTMLElement | null,
+      ms: number,
+      hasTrack: boolean,
+    ) => {
+      if (!el) {
+        return;
+      }
+      el.textContent = hasTrack ? `${Math.round(ms)} ms` : "N/A";
+      if (!hasTrack) {
+        el.style.color = "#6b7280";
+        if (el.parentElement) {
+          el.parentElement.style.backgroundColor = "";
+        }
+        return;
+      }
+      if (ms < minimalBufferMs) {
+        el.style.color = "#ef4444";
+        if (el.parentElement) {
+          el.parentElement.style.backgroundColor = "#fee2e2";
+        }
+      } else if (ms < minimalBufferMs + 50) {
+        el.style.color = "#f59e0b";
+        if (el.parentElement) {
+          el.parentElement.style.backgroundColor = "#fef3c7";
+        }
+      } else {
+        el.style.color = "";
+        if (el.parentElement) {
+          el.parentElement.style.backgroundColor = "";
+        }
+      }
+    };
+
+    paintBuffer(
+      document.getElementById("videoBufferLevel"),
+      snapshot.videoBufferedAheadS * 1000,
+      this.videoTrack !== null,
+    );
+    paintBuffer(
+      document.getElementById("audioBufferLevel"),
+      snapshot.audioBufferedAheadS * 1000,
+      this.audioTrack !== null,
+    );
+
+    const latencyEl = document.getElementById("playbackLatency");
+    if (latencyEl) {
+      if (snapshot.currentLatencyMs === null) {
+        latencyEl.textContent = "N/A";
+        latencyEl.style.color = "#6b7280";
+      } else {
+        latencyEl.textContent = `${Math.round(snapshot.currentLatencyMs)} ms`;
+        latencyEl.style.color = "";
+      }
+    }
+
+    const rateEl = document.getElementById("playbackRate");
+    if (rateEl) {
+      rateEl.textContent = `${playbackRate.toFixed(3)}x`;
+      // Tri-state coloring matches the legacy MSE indicator so MSE and
+      // WebCodecs sessions render identically.
+      const delta = Math.abs(playbackRate - 1.0);
+      if (delta < 0.005) {
+        rateEl.style.color = "#10b981";
+      } else if (delta < 0.02) {
+        rateEl.style.color = "#f59e0b";
+      } else {
+        rateEl.style.color = "#ef4444";
+      }
+    }
+  }
+
+  /**
+   * Buffer-health rate controller for the WebCodecs pipeline. Mirrors the
+   * latency-targeting branches of checkBufferHealth(), but reads/writes
+   * through IPlaybackPipeline instead of <video>. No stall-recovery branch:
+   * WebCodecs has no native "stalled" state — the decoder just empties.
+   */
+  private adjustWebCodecsRate(
+    pipeline: IPlaybackPipeline,
+    snap: {
+      currentLatencyMs: number | null;
+      videoBufferedAheadS: number;
+      audioBufferedAheadS: number;
+    },
+    currentRate: number,
+  ): void {
+    if (snap.currentLatencyMs === null) {
+      return;
+    }
+
+    const minimalBufferSec = this.minimalBufferMs / 1000;
+    const targetLatencyMs = this.targetLatencyMs;
+    const currentLatencyMs = snap.currentLatencyMs;
+
+    // Use the lower of the two buffers when audio is present, otherwise just
+    // video — matches the legacy controller's effectiveMinBuffer semantics.
+    const effectiveMinBuffer = this.audioTrack
+      ? Math.min(snap.videoBufferedAheadS, snap.audioBufferedAheadS)
+      : snap.videoBufferedAheadS;
+    const belowMinimalBuffer = effectiveMinBuffer < minimalBufferSec;
+    const aboveTargetLatency = currentLatencyMs > targetLatencyMs;
+    const belowTargetLatency = currentLatencyMs < targetLatencyMs;
+
+    let newRate: number | null = null;
+    if (belowMinimalBuffer) {
+      // Buffer underrun risk — slow down to let it grow.
+      newRate = 0.97;
+    } else if (aboveTargetLatency) {
+      // Above target latency — speed up modestly, capped at 1.02.
+      const latencyError =
+        (currentLatencyMs - targetLatencyMs) / targetLatencyMs;
+      const baseGain = 0.03;
+      const gainReduction = Math.exp(-Math.abs(latencyError) * 10);
+      const effectiveGain = baseGain * (1 - gainReduction * 0.8);
+      newRate = Math.min(1.02, 1.0 + latencyError * effectiveGain);
+    } else if (belowTargetLatency) {
+      // Below target latency — slow down modestly, floored at 0.95.
+      const latencyError =
+        (targetLatencyMs - currentLatencyMs) / targetLatencyMs;
+      const baseGain = 0.05;
+      const gainReduction = Math.exp(-Math.abs(latencyError) * 15);
+      const effectiveGain = baseGain * (1 - gainReduction * 0.9);
+      newRate = Math.max(0.95, 1.0 - latencyError * effectiveGain);
+    }
+
+    if (newRate === null) {
+      return;
+    }
+    if (Math.abs(currentRate - newRate) < 0.001) {
+      return;
+    }
+    pipeline.setPlaybackRate(newRate);
+    if (Math.random() < 0.1) {
+      this.logger.debug(
+        `[BufferHealth] WebCodecs rate ${currentRate.toFixed(3)}→${newRate.toFixed(3)}` +
+          ` (latency ${currentLatencyMs.toFixed(0)}ms target ${targetLatencyMs}ms,` +
+          ` minBuf ${(effectiveMinBuffer * 1000).toFixed(0)}ms)`,
+      );
+    }
+  }
+
+  /**
+   * Update the buffer level and playback latency UI elements through the
+   * active pipeline's snapshot. Both MsePipeline and WebCodecsLocPipeline
+   * implement IPlaybackPipeline, so the UI is engine-agnostic.
    */
   private updateBufferLevelUI(): void {
     const now = Date.now();
@@ -3993,170 +4323,41 @@ export class Player {
 
     this.lastUpdateTime = now;
 
-    // Get video element
-    const videoEl = document.getElementById("videoPlayer") as HTMLVideoElement;
-    if (!videoEl) {
+    const pipeline = this.currentPipeline;
+    if (pipeline && this.playbackStarted) {
+      try {
+        const snap = pipeline.getLatencySnapshot();
+        const rate = pipeline.getPlaybackRate();
+        this.renderMetricPanelsFromSnapshot(snap, rate);
+        // The legacy MSE controller in checkBufferHealth() runs from
+        // monitorSync (timeupdate-driven) and writes videoEl.playbackRate
+        // directly. With WebCodecs the <video> never advances, so route the
+        // pipeline through a snapshot-based equivalent.
+        if (pipeline.engine === "webcodecs") {
+          this.adjustWebCodecsRate(pipeline, snap, rate);
+        }
+      } catch (e) {
+        this.logger.error(`[UI] Error updating buffer level UI: ${e}`);
+      }
       return;
     }
 
-    try {
-      // Get buffer parameters for UI display
-      const minimalBufferMs = this.minimalBufferMs;
-      const targetLatencyMs = this.targetLatencyMs;
-
-      // Debug log occasionally
-      if (Math.random() < 0.02) {
-        this.logger.debug(
-          `[UI] Minimal buffer: ${minimalBufferMs}ms, Target latency: ${targetLatencyMs}ms`,
-        );
+    // No active pipeline yet — show inactive placeholders.
+    const inactive = (id: string) => {
+      const el = document.getElementById(id);
+      if (!el) {
+        return;
       }
-
-      // Calculate current buffer levels
-      const currentTime = videoEl.currentTime;
-      let videoBufferAhead = 0;
-      let audioBufferAhead = 0;
-
-      // Find how much buffer we have ahead of the current position
-      if (this.videoSourceBuffer) {
-        for (let i = 0; i < this.videoSourceBuffer.buffered.length; i++) {
-          if (
-            currentTime >= this.videoSourceBuffer.buffered.start(i) &&
-            currentTime < this.videoSourceBuffer.buffered.end(i)
-          ) {
-            videoBufferAhead =
-              this.videoSourceBuffer.buffered.end(i) - currentTime;
-            break;
-          }
-        }
+      el.textContent = "N/A";
+      el.style.color = "#6b7280";
+      if (el.parentElement) {
+        el.parentElement.style.backgroundColor = "";
       }
-
-      if (this.audioSourceBuffer) {
-        for (let i = 0; i < this.audioSourceBuffer.buffered.length; i++) {
-          if (
-            currentTime >= this.audioSourceBuffer.buffered.start(i) &&
-            currentTime < this.audioSourceBuffer.buffered.end(i)
-          ) {
-            audioBufferAhead =
-              this.audioSourceBuffer.buffered.end(i) - currentTime;
-            break;
-          }
-        }
-      }
-
-      // Update stored values for other uses
-      this.lastVideoBufferAhead = videoBufferAhead;
-      this.lastAudioBufferAhead = audioBufferAhead;
-
-      // Update video buffer level display
-      const videoBufferEl = document.getElementById("videoBufferLevel");
-      if (videoBufferEl) {
-        const videoBufferMs = Math.round(videoBufferAhead * 1000);
-        videoBufferEl.textContent = this.videoSourceBuffer
-          ? `${videoBufferMs} ms`
-          : "N/A";
-
-        // Add color coding based on comparison to minimal buffer
-        // Red if below minimal buffer, orange if close (within 50ms)
-        if (this.videoSourceBuffer) {
-          if (videoBufferMs < minimalBufferMs) {
-            videoBufferEl.style.color = "#ef4444"; // Red for below minimal
-            if (videoBufferEl.parentElement) {
-              videoBufferEl.parentElement.style.backgroundColor = "#fee2e2"; // Light red background
-            }
-          } else if (videoBufferMs < minimalBufferMs + 50) {
-            videoBufferEl.style.color = "#f59e0b"; // Orange for close to minimal
-            if (videoBufferEl.parentElement) {
-              videoBufferEl.parentElement.style.backgroundColor = "#fef3c7"; // Light orange background
-            }
-          } else {
-            videoBufferEl.style.color = ""; // Reset to CSS default
-            if (videoBufferEl.parentElement) {
-              videoBufferEl.parentElement.style.backgroundColor = ""; // Reset background
-            }
-          }
-        } else {
-          videoBufferEl.style.color = "#6b7280"; // Gray for inactive
-        }
-      }
-
-      // Update audio buffer level display
-      const audioBufferEl = document.getElementById("audioBufferLevel");
-      if (audioBufferEl) {
-        const audioBufferMs = Math.round(audioBufferAhead * 1000);
-        audioBufferEl.textContent = this.audioSourceBuffer
-          ? `${audioBufferMs} ms`
-          : "N/A";
-
-        // Add color coding based on comparison to minimal buffer
-        // Red if below minimal buffer, orange if close (within 50ms)
-        if (this.audioSourceBuffer) {
-          if (audioBufferMs < minimalBufferMs) {
-            audioBufferEl.style.color = "#ef4444"; // Red for below minimal
-            if (audioBufferEl.parentElement) {
-              audioBufferEl.parentElement.style.backgroundColor = "#fee2e2"; // Light red background
-            }
-          } else if (audioBufferMs < minimalBufferMs + 50) {
-            audioBufferEl.style.color = "#f59e0b"; // Orange for close to minimal
-            if (audioBufferEl.parentElement) {
-              audioBufferEl.parentElement.style.backgroundColor = "#fef3c7"; // Light orange background
-            }
-          } else {
-            audioBufferEl.style.color = ""; // Reset to CSS default
-            if (audioBufferEl.parentElement) {
-              audioBufferEl.parentElement.style.backgroundColor = ""; // Reset background
-            }
-          }
-        } else {
-          audioBufferEl.style.color = "#6b7280"; // Gray for inactive
-        }
-      }
-
-      // Calculate and update playback latency
-      const playbackLatencyEl = document.getElementById("playbackLatency");
-      if (playbackLatencyEl) {
-        if (this.playbackStarted) {
-          // Calculate playback latency (now - videoEl.currentTime)
-          // Latency is the difference between wall clock time and playback time
-          // This is always positive in our real-time streaming scenario
-          if (videoEl) {
-            // Calculate estimated latency in milliseconds given that the media time
-            // is synchronized with UTC time
-            const latencyMs = Math.round(now - videoEl.currentTime * 1000);
-            playbackLatencyEl.textContent = `${latencyMs} ms`;
-
-            // Keep default orange color from CSS
-            playbackLatencyEl.style.color = ""; // Use CSS default
-          }
-        } else {
-          playbackLatencyEl.textContent = "N/A";
-          playbackLatencyEl.style.color = "#6b7280"; // Gray for inactive
-        }
-      }
-
-      // Update playback rate display
-      const playbackRateEl = document.getElementById("playbackRate");
-      if (playbackRateEl) {
-        if (videoEl && this.playbackStarted) {
-          const rate = videoEl.playbackRate;
-          playbackRateEl.textContent = `${rate.toFixed(3)}x`; // Show 3 decimal places
-
-          // Color coding based on playback rate
-          // Green for very close to normal, orange for minor adjustments, red for significant adjustments
-          if (Math.abs(rate - 1.0) < 0.005) {
-            playbackRateEl.style.color = "#10b981"; // Green for very close to normal
-          } else if (Math.abs(rate - 1.0) < 0.02) {
-            playbackRateEl.style.color = "#f59e0b"; // Orange for minor adjustment
-          } else {
-            playbackRateEl.style.color = "#ef4444"; // Red for significant adjustment
-          }
-        } else {
-          playbackRateEl.textContent = "N/A";
-          playbackRateEl.style.color = "#6b7280"; // Gray for inactive
-        }
-      }
-    } catch (e) {
-      this.logger.error(`[UI] Error updating buffer level UI: ${e}`);
-    }
+    };
+    inactive("videoBufferLevel");
+    inactive("audioBufferLevel");
+    inactive("playbackLatency");
+    inactive("playbackRate");
   }
 
   /**
