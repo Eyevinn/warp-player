@@ -18,9 +18,13 @@
 import { buildAacConfigFromCatalog } from "../loc/aac";
 import {
   buildAvcDecoderConfigDescription,
-  extractParameterSetsAndChunk,
+  extractParameterSetsAndChunk as extractAvcParameterSetsAndChunk,
 } from "../loc/avc";
 import { getLocCaptureTimestampUs } from "../loc/extensions";
+import {
+  buildHevcDecoderConfigDescription,
+  extractParameterSetsAndChunk as extractHevcParameterSetsAndChunk,
+} from "../loc/hevc";
 import { buildOpusHeadFromCatalog } from "../loc/opus";
 import { ILogger } from "../logger";
 import { MOQObject } from "../transport/tracks";
@@ -52,7 +56,8 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
   private ctx: CanvasRenderingContext2D | null = null;
 
   private decoder: VideoDecoder | null = null;
-  /** Last SPS bytes used to configure the decoder, to detect parameter changes. */
+  /** Last parameter-set bytes used to configure the decoder, to detect parameter changes. */
+  private lastVps: Uint8Array | null = null;
   private lastSps: Uint8Array | null = null;
   private lastPps: Uint8Array | null = null;
 
@@ -266,8 +271,21 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
 
     const captureUsBig = getLocCaptureTimestampUs(obj.extensions);
     const captureUs = captureUsBig === null ? null : Number(captureUsBig);
+    const timestampUs = captureUs ?? this.deriveTimestampUs(obj);
 
-    const extracted = extractParameterSetsAndChunk(payload);
+    if (this.isHevcCodec()) {
+      this.routeHevcVideo(decoder, payload, timestampUs);
+    } else {
+      this.routeAvcVideo(decoder, payload, timestampUs);
+    }
+  }
+
+  private routeAvcVideo(
+    decoder: VideoDecoder,
+    payload: Uint8Array,
+    timestampUs: number,
+  ): void {
+    const extracted = extractAvcParameterSetsAndChunk(payload);
     const isKey = extracted.isKey;
 
     if (isKey) {
@@ -315,7 +333,6 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     }
 
     if (decoder.state !== "configured") {
-      // Still waiting for the first keyframe.
       return;
     }
 
@@ -328,7 +345,7 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
       decoder.decode(
         new EncodedVideoChunk({
           type: isKey ? "key" : "delta",
-          timestamp: captureUs ?? this.deriveTimestampUs(obj),
+          timestamp: timestampUs,
           data: chunkBytes,
         }),
       );
@@ -337,6 +354,96 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
         `[WebCodecsLoc] decode failed: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+  }
+
+  private routeHevcVideo(
+    decoder: VideoDecoder,
+    payload: Uint8Array,
+    timestampUs: number,
+  ): void {
+    const extracted = extractHevcParameterSetsAndChunk(payload);
+    const isKey = extracted.isKey;
+
+    if (isKey) {
+      if (
+        extracted.vps.length === 0 ||
+        extracted.sps.length === 0 ||
+        extracted.pps.length === 0
+      ) {
+        this.logger.warn(
+          "[WebCodecsLoc] Keyframe missing VPS/SPS/PPS — dropping",
+        );
+        return;
+      }
+      const newVps = extracted.vps[0];
+      const newSps = extracted.sps[0];
+      const newPps = extracted.pps[0];
+      const needsConfigure =
+        decoder.state === "unconfigured" ||
+        !this.bytesEqual(this.lastVps, newVps) ||
+        !this.bytesEqual(this.lastSps, newSps) ||
+        !this.bytesEqual(this.lastPps, newPps);
+      if (needsConfigure) {
+        const description = buildHevcDecoderConfigDescription(
+          extracted.vps,
+          extracted.sps,
+          extracted.pps,
+        );
+        // Normalise hev1 -> hvc1 for WebCodecs. Both describe identical
+        // bitstreams; the difference is whether parameter sets travel in
+        // the sample stream (hev1) or in the hvcC box (hvc1). Since we
+        // feed VPS+SPS+PPS via `description` (the hvcC equivalent), hvc1
+        // is the correct label and broadly accepted across browsers.
+        const catalogCodec = this.videoTrack?.codec ?? "hvc1.1.6.L93.B0";
+        const codec = catalogCodec.replace(/^hev1\./i, "hvc1.");
+        const config: VideoDecoderConfig = {
+          codec,
+          codedWidth: this.videoTrack?.width,
+          codedHeight: this.videoTrack?.height,
+          description,
+          optimizeForLatency: true,
+        };
+        decoder.configure(config);
+        this.lastVps = newVps;
+        this.lastSps = newSps;
+        this.lastPps = newPps;
+        this.logger.info(
+          `[WebCodecsLoc] VideoDecoder configured (codec=${codec}` +
+            (catalogCodec !== codec
+              ? `, normalised from ${catalogCodec}`
+              : "") +
+            ")",
+        );
+      }
+    }
+
+    if (decoder.state !== "configured") {
+      return;
+    }
+
+    const chunkBytes = isKey ? extracted.chunk : payload;
+    if (chunkBytes.byteLength === 0) {
+      return;
+    }
+
+    try {
+      decoder.decode(
+        new EncodedVideoChunk({
+          type: isKey ? "key" : "delta",
+          timestamp: timestampUs,
+          data: chunkBytes,
+        }),
+      );
+    } catch (e) {
+      this.logger.error(
+        `[WebCodecsLoc] decode failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  private isHevcCodec(): boolean {
+    const codec = this.videoTrack?.codec?.toLowerCase() ?? "";
+    return codec.startsWith("hvc1") || codec.startsWith("hev1");
   }
 
   getLatencySnapshot(): PipelineLatencySnapshot {
@@ -462,6 +569,7 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     if (this.videoEl) {
       this.videoEl.style.display = "";
     }
+    this.lastVps = null;
     this.lastSps = null;
     this.lastPps = null;
     this.anchorWallMs = null;
