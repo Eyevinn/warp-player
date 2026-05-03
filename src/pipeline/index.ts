@@ -99,6 +99,9 @@ export interface IPlaybackPipeline {
   /** Apply a playback-rate multiplier (1.0 = real-time). */
   setPlaybackRate(rate: number): void;
 
+  /** Current playback-rate multiplier surfaced to the UI. */
+  getPlaybackRate(): number;
+
   /** Tear down decoders, source buffers, render scheduling. */
   dispose(): Promise<void>;
 }

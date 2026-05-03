@@ -767,6 +767,24 @@
               <option value="draft-16">Draft 16</option>
             </select>
           </div>
+          <div class="form-group">
+            <label for="engineChoice">Render engine</label>
+            <select
+              id="engineChoice"
+              style="
+                background: var(--input-bg);
+                color: var(--text-primary);
+                border: 1px solid var(--border-color);
+                padding: 0.5rem;
+                border-radius: 0.5rem;
+                width: 100%;
+              "
+            >
+              <option value="auto">Auto (best for tracks)</option>
+              <option value="mse">MSE (CMAF)</option>
+              <option value="webcodecs">WebCodecs (LOC)</option>
+            </select>
+          </div>
           <div class="connection-controls">
             <div class="button-group">
               <button id="connectBtn" class="btn btn-primary">Connect</button>
