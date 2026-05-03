@@ -59,6 +59,17 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
   private audioDecoder: AudioDecoder | null = null;
   private audioContext: AudioContext | null = null;
   /**
+   * GainNode sitting between every AudioBufferSourceNode and the
+   * destination. Driven by setMuted(): 1 when audible, 0 when muted.
+   */
+  private audioGain: GainNode | null = null;
+  /**
+   * Start muted to mirror the MSE path, where the <video muted> attribute
+   * makes the legacy session start silent until the user unmutes. Both
+   * engines keep the same Mute / Unmute UX this way.
+   */
+  private muted = true;
+  /**
    * Wallclock ms at which AudioContext.currentTime was 0. Used to convert
    * wallclock-anchored presentation times into AudioContext schedule times.
    */
@@ -209,6 +220,9 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
         // chunk where currentTime is captured.
       });
     }
+    this.audioGain = this.audioContext.createGain();
+    this.audioGain.gain.value = this.muted ? 0 : 1;
+    this.audioGain.connect(this.audioContext.destination);
 
     this.audioDecoder = new AudioDecoder({
       output: (data) => this.onDecodedAudio(data),
@@ -380,6 +394,17 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     return this.playbackRate;
   }
 
+  setMuted(muted: boolean): void {
+    this.muted = muted;
+    if (this.audioGain) {
+      this.audioGain.gain.value = muted ? 0 : 1;
+    }
+  }
+
+  getMuted(): boolean {
+    return this.muted;
+  }
+
   async dispose(): Promise<void> {
     this.disposed = true;
     if (this.rafHandle !== null) {
@@ -409,6 +434,14 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     }
     this.audioDecoder = null;
 
+    if (this.audioGain) {
+      try {
+        this.audioGain.disconnect();
+      } catch {
+        // ignore
+      }
+      this.audioGain = null;
+    }
     if (this.audioContext) {
       try {
         await this.audioContext.close();
@@ -616,7 +649,7 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     const source = audioCtx.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = this.playbackRate;
-    source.connect(audioCtx.destination);
+    source.connect(this.audioGain ?? audioCtx.destination);
     try {
       source.start(when);
     } catch (e) {

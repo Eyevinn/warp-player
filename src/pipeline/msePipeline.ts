@@ -174,6 +174,16 @@ export class MsePipeline implements IPlaybackPipeline {
     }
   }
 
+  setMuted(muted: boolean): void {
+    if (this.videoElement) {
+      this.videoElement.muted = muted;
+    }
+  }
+
+  getMuted(): boolean {
+    return this.videoElement?.muted ?? true;
+  }
+
   /** Drop all references — used during disconnect/reset. */
   async dispose(): Promise<void> {
     this.clearVideo();

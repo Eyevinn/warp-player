@@ -102,6 +102,12 @@ export interface IPlaybackPipeline {
   /** Current playback-rate multiplier surfaced to the UI. */
   getPlaybackRate(): number;
 
+  /** Mute or unmute audio output. */
+  setMuted(muted: boolean): void;
+
+  /** True when audio output is muted. */
+  getMuted(): boolean;
+
   /** Tear down decoders, source buffers, render scheduling. */
   dispose(): Promise<void>;
 }
