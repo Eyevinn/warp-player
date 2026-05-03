@@ -6,6 +6,7 @@ import {
 
 import { MediaBuffer, MediaSegmentBuffer } from "./buffer";
 import { ILogger, LoggerFactory } from "./logger";
+import { MsePipeline } from "./pipeline/msePipeline";
 import { Client, DraftVersion } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
 import {
@@ -40,15 +41,61 @@ export class Player {
   private onConnectionStateChange: ((connected: boolean) => void) | null = null;
   private draftVersion: DraftVersion = "auto";
 
-  // Shared media elements for synchronized playback
-  private sharedMediaSource: MediaSource | ManagedMediaSource | null = null;
-  private usingManagedMediaSource = false;
-  private videoSourceBuffer: SourceBuffer | null = null;
-  private audioSourceBuffer: SourceBuffer | null = null;
-  private videoMediaSegmentBuffer: MediaSegmentBuffer | null = null;
-  private audioMediaSegmentBuffer: MediaSegmentBuffer | null = null;
-  private videoMediaBuffer: MediaBuffer | null = null;
-  private audioMediaBuffer: MediaBuffer | null = null;
+  // MSE state lives on MsePipeline; the getters/setters below keep
+  // existing call-sites in this file unchanged while the source of truth
+  // moves out. Future phases will replace direct delegate access with
+  // explicit MsePipeline method calls (attachToVideoElement, etc.).
+  private msePipeline!: MsePipeline;
+
+  private get sharedMediaSource(): MediaSource | ManagedMediaSource | null {
+    return this.msePipeline.sharedMediaSource;
+  }
+  private set sharedMediaSource(v: MediaSource | ManagedMediaSource | null) {
+    this.msePipeline.sharedMediaSource = v;
+  }
+  private get usingManagedMediaSource(): boolean {
+    return this.msePipeline.usingManagedMediaSource;
+  }
+  private set usingManagedMediaSource(v: boolean) {
+    this.msePipeline.usingManagedMediaSource = v;
+  }
+  private get videoSourceBuffer(): SourceBuffer | null {
+    return this.msePipeline.videoSourceBuffer;
+  }
+  private set videoSourceBuffer(v: SourceBuffer | null) {
+    this.msePipeline.videoSourceBuffer = v;
+  }
+  private get audioSourceBuffer(): SourceBuffer | null {
+    return this.msePipeline.audioSourceBuffer;
+  }
+  private set audioSourceBuffer(v: SourceBuffer | null) {
+    this.msePipeline.audioSourceBuffer = v;
+  }
+  private get videoMediaSegmentBuffer(): MediaSegmentBuffer | null {
+    return this.msePipeline.videoMediaSegmentBuffer;
+  }
+  private set videoMediaSegmentBuffer(v: MediaSegmentBuffer | null) {
+    this.msePipeline.videoMediaSegmentBuffer = v;
+  }
+  private get audioMediaSegmentBuffer(): MediaSegmentBuffer | null {
+    return this.msePipeline.audioMediaSegmentBuffer;
+  }
+  private set audioMediaSegmentBuffer(v: MediaSegmentBuffer | null) {
+    this.msePipeline.audioMediaSegmentBuffer = v;
+  }
+  private get videoMediaBuffer(): MediaBuffer | null {
+    return this.msePipeline.videoMediaBuffer;
+  }
+  private set videoMediaBuffer(v: MediaBuffer | null) {
+    this.msePipeline.videoMediaBuffer = v;
+  }
+  private get audioMediaBuffer(): MediaBuffer | null {
+    return this.msePipeline.audioMediaBuffer;
+  }
+  private set audioMediaBuffer(v: MediaBuffer | null) {
+    this.msePipeline.audioMediaBuffer = v;
+  }
+
   private videoTrack: WarpTrack | null = null;
   private audioTrack: WarpTrack | null = null;
 
@@ -119,6 +166,10 @@ export class Player {
     this.statusEl = statusEl;
     // Get logger for Player component
     this.logger = LoggerFactory.getInstance().getLogger("Player");
+
+    // MSE state owner. Created up front so getter delegates always have a
+    // target; dispose() returns it to a clean state on disconnect.
+    this.msePipeline = new MsePipeline(this.logger);
 
     // Log initialization
     this.logger.info("Player initialized");
@@ -1073,14 +1124,7 @@ export class Player {
     this.audioObjectsReceived = 0;
 
     // Reset buffer variables
-    this.videoSourceBuffer = null;
-    this.audioSourceBuffer = null;
-    this.videoMediaSegmentBuffer = null;
-    this.audioMediaSegmentBuffer = null;
-    this.videoMediaBuffer = null;
-    this.audioMediaBuffer = null;
-    this.sharedMediaSource = null;
-    this.usingManagedMediaSource = false;
+    this.msePipeline.dispose();
 
     // Reset error handling state
     this.recoveryInProgress = false;
@@ -1469,9 +1513,7 @@ export class Player {
     this.logger.error("Falling back to video-only playback");
 
     // Clear audio state
-    this.audioSourceBuffer = null;
-    this.audioMediaSegmentBuffer = null;
-    this.audioMediaBuffer = null;
+    this.msePipeline.clearAudio();
     this.audioTrack = null;
     this.audioBufferReady = false;
     this.audioObjectsReceived = 0;
@@ -1502,9 +1544,7 @@ export class Player {
     this.logger.error("Falling back to audio-only playback");
 
     // Clear video state
-    this.videoSourceBuffer = null;
-    this.videoMediaSegmentBuffer = null;
-    this.videoMediaBuffer = null;
+    this.msePipeline.clearVideo();
     this.videoTrack = null;
     this.videoBufferReady = false;
     this.videoObjectsReceived = 0;
@@ -2152,17 +2192,6 @@ export class Player {
   }
 
   /**
-   * @param codec Codec found in track
-   * @return A full video mime type.
-   */
-  private generateVideoMimeType(codec?: string): string {
-    if (!codec) {
-      throw new Error("Video codec is required but was not provided");
-    }
-    return `video/mp4; codecs="${codec}"`;
-  }
-
-  /**
    * @param tracks A list containing at most a video and audio warp track. The tracks are required to be protected.
    * @returns
    */
@@ -2177,9 +2206,9 @@ export class Player {
           continue;
         }
         if (track.role === "video") {
-          videoMimeType = this.generateVideoMimeType(track.codec);
+          videoMimeType = this.msePipeline.generateVideoMimeType(track.codec);
         } else if (track.role === "audio") {
-          audioMimeType = this.generateAudioMimeType(track.codec);
+          audioMimeType = this.msePipeline.generateAudioMimeType(track.codec);
         }
 
         candidates = this.selectContentProtections(refIDs); //If several protected tracks exist, the last's DRM systems are chosen
@@ -2639,47 +2668,6 @@ export class Player {
   }
 
   /**
-   * @param codec Codec found in track
-   * @return A full audio mime type.
-   */
-  private generateAudioMimeType(codec?: string): string {
-    if (!codec) {
-      throw new Error("Audio codec is required but was not provided");
-    }
-    return `audio/mp4; codecs="${codec}"`;
-  }
-
-  /**
-   * Process a media init segment (video, audio, etc.)
-   * @param initData The raw init segment data
-   * @param mediaBuffer The media buffer to use for parsing
-   * @param mediaSegmentBuffer The media segment buffer to use for buffering
-   * @param sourceBuffer The source buffer to use for playback
-   * @param type The type of media (e.g., 'Video', 'Audio')
-   */
-  private processInitSegment(
-    initData: ArrayBuffer,
-    mediaBuffer: MediaBuffer,
-    mediaSegmentBuffer: MediaSegmentBuffer,
-    sourceBuffer: SourceBuffer | ManagedSourceBuffer,
-    type: string,
-  ): void {
-    this.logger.info(`[${type}MediaBuffer] Processing init segment`);
-
-    const trackInfo = mediaBuffer.parseInitSegment(initData);
-    this.logger.info(
-      `[${type}MediaBuffer] Parsed init segment, timescale: ${trackInfo.timescale}`,
-    );
-    mediaSegmentBuffer.setSourceBuffer(sourceBuffer);
-    const initSegmentObj = mediaSegmentBuffer.addInitSegment(initData);
-    mediaSegmentBuffer.appendToSourceBuffer(initSegmentObj);
-
-    this.logger.info(
-      `[${type}MediaBuffer] Added CMAF init segment to MediaSegmentBuffer and SourceBuffer`,
-    );
-  }
-
-  /**
    * Setup MediaSource and SourceBuffer for video playback
    * This will initialize shared resources for both audio and video
    */
@@ -2749,7 +2737,9 @@ export class Player {
         }
 
         // Create video source buffer
-        const videoMimeType = this.generateVideoMimeType(track.codec);
+        const videoMimeType = this.msePipeline.generateVideoMimeType(
+          track.codec,
+        );
         this.logger.debug(
           `[SharedMediaSource] Using video mimeType: ${videoMimeType}`,
         );
@@ -2831,7 +2821,7 @@ export class Player {
           return;
         }
 
-        this.processInitSegment(
+        this.msePipeline.processInitSegment(
           videoInitSegment,
           this.videoMediaBuffer,
           this.videoMediaSegmentBuffer,
@@ -3326,7 +3316,9 @@ export class Player {
 
     try {
       // Create audio source buffer
-      const audioMimeType = this.generateAudioMimeType(this.audioTrack.codec);
+      const audioMimeType = this.msePipeline.generateAudioMimeType(
+        this.audioTrack.codec,
+      );
       this.logger.info(
         `[AudioSourceBuffer] Using audio mimeType: ${audioMimeType}`,
       );
@@ -3419,7 +3411,7 @@ export class Player {
         return;
       }
 
-      this.processInitSegment(
+      this.msePipeline.processInitSegment(
         audioInitSegment,
         this.audioMediaBuffer,
         this.audioMediaSegmentBuffer,

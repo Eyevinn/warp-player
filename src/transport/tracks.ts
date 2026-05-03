@@ -40,6 +40,12 @@ export interface MOQObject {
   trackAlias: bigint;
   location: Location;
   data: Uint8Array;
+  // Raw extension-headers blob: a sequence of moqtransport KVPs concatenated
+  // (no count or length prefix between pairs). Present only when the object's
+  // stream-type flag indicates extensions. Parse with parseMoqExtensions().
+  extensions?: Uint8Array;
+  // Object status varint, set when payloadLength == 0 (e.g. END_OF_GROUP).
+  status?: bigint;
 }
 
 // Callback for receiving objects
