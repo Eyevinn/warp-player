@@ -104,6 +104,14 @@ export class Client {
 
     this.logger.info(`Connecting to ${this.config.url}...`);
     const wt = new WebTransport(this.config.url, options);
+    // Attach a handler to wt.closed up front. When the handshake fails (e.g.
+    // self-signed cert with no fingerprint to pin against), Safari rejects
+    // both wt.ready and wt.closed; without a handler on closed, Safari
+    // surfaces an "Unhandled Promise Rejection: WebTransportError". The
+    // rejection is also seen later by Connection.closed() — promises stay
+    // rejected, so multiple handlers each see the same value.
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    wt.closed.catch(() => {});
     await wt.ready;
     this.logger.info("WebTransport connection established");
 
