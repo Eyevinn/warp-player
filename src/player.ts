@@ -537,7 +537,7 @@ export class Player {
             const text = new TextDecoder().decode(obj.data);
             const catalog = JSON.parse(text); // If using CBOR, replace this with CBOR decoding
             // Use the catalog manager to handle the catalog data
-            this.catalogManager.handleCatalogData(catalog);
+            this.catalogManager.handleCatalogData(catalog, namespaceStr);
           } catch (e) {
             this.logger.error(
               `Failed to decode catalog data: ${
@@ -607,7 +607,7 @@ export class Player {
           try {
             const text = new TextDecoder().decode(obj.data);
             const catalog = JSON.parse(text);
-            this.catalogManager.handleCatalogData(catalog);
+            this.catalogManager.handleCatalogData(catalog, namespaceStr);
           } catch (e) {
             this.logger.error(
               `Failed to decode fetched catalog data: ${
