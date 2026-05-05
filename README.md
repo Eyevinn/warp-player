@@ -25,18 +25,24 @@
 This project implements a media player that:
 
 1. Establishes a WebTransport connection to a MOQ server
-2. Subscribes to and parses WARP catalogs for available media
-3. Subscribes to selected media tracks through MOQ transport protocol
-4. Receives media segments in CMAF format through the MOQ protocol
-5. (Optional) Uses EME to handle decryption of protected content
-6. Uses Media Source Extensions (MSE) to decode and play media content
-7. Provides adaptive buffer management for smooth playback experience
-8. This player is intended to work towards [moqlivemock][moqlivemock] publisher and uses the CMSF ContentProtection signaling ([moq-wg/cmsf](https://github.com/moq-wg/cmsf)) for DRM
+2. Negotiates MOQ Transport draft-14 or draft-16 with the server
+3. Subscribes to and parses MSF/CMSF catalogs for available media
+   ([draft-ietf-moq-msf-00], [draft-ietf-moq-cmsf-00])
+4. Subscribes to selected media tracks through the MOQ transport protocol
+5. Renders media through one of two interchangeable pipelines:
+   - **MSE** for CMAF (`packaging: "cmaf"`), with optional EME for protected content
+   - **WebCodecs** for LOC (`packaging: "loc"`, [draft-mzanaty-moq-loc]), clear content only
+6. Provides adaptive buffer management for a smooth playback experience
+7. This player is intended to work towards the [moqlivemock][moqlivemock]
+   publisher and uses the CMSF ContentProtection signaling
+   ([moq-wg/cmsf](https://github.com/moq-wg/cmsf)) for DRM
 
 ## Requirements
 
 - A modern browser that supports WebTransport (Chrome 87+, Edge 87+, Firefox, or Safari 26.4+)
-- A MOQ server that supports draft-14 such as moqlivemock
+- For the WebCodecs pipeline, a browser that exposes the WebCodecs API
+  (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+)
+- A MOQ server that supports draft-14 or draft-16 such as moqlivemock
 - Node.js version 20+
 
 ## Project Structure
@@ -44,18 +50,30 @@ This project implements a media player that:
 ```
 warp-player/
 ├── src/
-│   ├── transport/        # MOQ protocol implementation
+│   ├── transport/        # MOQ protocol implementation (draft-14 / draft-16)
 │   │   ├── client.ts     # WebTransport client implementation
 │   │   ├── setup.ts      # Setup message handling
 │   │   ├── tracks.ts     # Track subscription and management
-│   │   └── control.ts    # Control stream handling
-│   ├── buffer/           # Media buffering components
+│   │   ├── control.ts    # Control stream handling
+│   │   └── version.ts    # Draft version constants and ALPN negotiation
+│   ├── buffer/           # CMAF segment buffering for the MSE pipeline
 │   │   ├── mediaBuffer.ts         # CMAF segment parsing
 │   │   └── mediaSegmentBuffer.ts  # Buffer management for MSE
-│   ├── player.ts         # Core player implementation with MSE integration
+│   ├── loc/              # LOC payload helpers for the WebCodecs pipeline
+│   │   ├── avc.ts        # AVC (H.264) NALU walker / avcC builder
+│   │   ├── hevc.ts       # HEVC (H.265) NALU walker / hvcC builder
+│   │   ├── aac.ts        # AAC AudioSpecificConfig from catalog metadata
+│   │   ├── opus.ts       # Opus ID-header (OpusHead) from catalog metadata
+│   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
+│   ├── pipeline/         # Pluggable render pipelines
+│   │   ├── index.ts                # IPlaybackPipeline + capability matrix
+│   │   ├── msePipeline.ts          # MSE/CMAF pipeline (with optional EME)
+│   │   └── webcodecsLocPipeline.ts # WebCodecs/LOC pipeline (clear only)
+│   ├── warpcatalog.ts    # MSF/CMSF catalog types and parsing
+│   ├── player.ts         # Core player: catalog → tracks → pipeline
 │   ├── browser.ts        # Browser entry point and UI handling
 │   └── index.html        # HTML template and UI components
-├── references/           # MOQ and WARP specification references
+├── references/           # MOQ, MSF, CMSF, and LOC specification references
 ├── tsconfig.json         # TypeScript configuration
 ├── webpack.config.js     # Webpack configuration
 └── package.json          # Project dependencies and scripts
@@ -195,16 +213,64 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 
 ## Features
 
-- Complete MOQ client implementation based on draft-14 of the specification
-- Full WARP catalog support for discovering available media streams
-- Media Source Extensions (MSE) integration for seamless playback in browsers
-- CMAF/ISO-BMFF media segment parsing and playback
-- Advanced two-parameter buffer control system (see Buffer Control Algorithm below)
+- MOQ client implementation supporting draft-14 and draft-16
+  (auto-negotiated via WebTransport ALPN; can be forced from the UI)
+- MSF/CMSF catalog support for discovering available media streams
+  ([draft-ietf-moq-msf-00], [draft-ietf-moq-cmsf-00])
+- Two interchangeable render engines selected per session:
+  - **MSE / CMAF** — the default for CMAF tracks, also handles encrypted content via EME
+  - **WebCodecs / LOC** — clear-only pipeline for `packaging: "loc"` tracks,
+    supporting AVC and HEVC video plus AAC and Opus audio
+    ([draft-mzanaty-moq-loc])
+- Engine selector with `Auto` mode that picks MSE or WebCodecs from the
+  selected tracks' packaging and encryption status, and namespace filtering
+  that dims out namespaces incompatible with the chosen engine
+- Engine legend overlay showing the active namespace, engine, DRM system,
+  and selected video / audio tracks
+- Advanced two-parameter buffer control system (see Buffer Control Algorithm
+  below) — applied to both pipelines through a common `IPlaybackPipeline`
+  interface
 - Adaptive playback rate adjustment based on buffer health and latency
-- Synchronized audio and video playback with automatic recovery
+- Synchronized audio and video playback with automatic recovery, including
+  a wallclock-anchored render loop and gap-free audio scheduling for the
+  WebCodecs pipeline
 - Configurable logging with support for debug, info, warn, and error levels
-- Clean and intuitive UI with real-time buffer and latency monitoring
-- DRM support for Widevine, PlayReady, and FairPlay, plus ClearKey for development, using the CMSF ContentProtection signaling merged into the [moq-wg/cmsf](https://github.com/moq-wg/cmsf) main branch for the next draft (also supported by [Shaka Player](https://github.com/shaka-project/shaka-player/pull/9972))
+- Clean and intuitive UI with real-time buffer and latency monitoring and
+  a Mute / Unmute toggle that works for both engines
+- DRM support for Widevine, PlayReady, and FairPlay, plus ClearKey for
+  development, using the CMSF ContentProtection signaling merged into the
+  [moq-wg/cmsf](https://github.com/moq-wg/cmsf) main branch for the next
+  draft (also supported by [Shaka Player](https://github.com/shaka-project/shaka-player/pull/9972));
+  encrypted content is always routed through the MSE engine
+
+## Render Engines
+
+Two render engines coexist behind a small `IPlaybackPipeline` interface
+(`src/pipeline/index.ts`). Player selects one per session based on the
+catalog and the user's "Render engine" choice in the UI:
+
+| Engine    | Packaging | Encryption | Notes                                                         |
+| --------- | --------- | ---------- | ------------------------------------------------------------- |
+| MSE       | `cmaf`    | clear, EME | Default for CMAF; required path for any DRM-protected content |
+| WebCodecs | `loc`     | clear only | Decodes directly with `VideoDecoder` / `AudioDecoder`         |
+
+The `Auto` engine choice resolves at subscribe time:
+
+- All-CMAF tracks → MSE
+- All-LOC tracks (clear) → WebCodecs
+- Any encrypted track → MSE (WebCodecs cannot play encrypted content
+  because production browsers do not expose Encrypted WebCodecs)
+
+Forcing `MSE (CMAF)` or `WebCodecs (LOC)` overrides the auto choice and
+filters the namespace selector so only compatible namespaces remain
+selectable.
+
+The WebCodecs pipeline draws decoded `VideoFrame`s onto a canvas overlaid
+on the `<video>` element using a wallclock-anchored `requestAnimationFrame`
+loop. Audio decoded via `AudioDecoder` is converted to `AudioBuffer`s and
+scheduled on a single `AudioContext` so video and audio share the same
+wallclock anchor. The capture timestamp travels in MoQ Object extension
+headers (LOC property `0x06`, microseconds since the Unix epoch).
 
 ## Buffer Control Algorithm
 
@@ -262,9 +328,13 @@ Without proper NTP synchronization on both client and server, latency measuremen
 ## Notes
 
 - WebTransport is supported in Chrome, Edge, Firefox, and Safari 26.4+
+- The WebCodecs render engine additionally requires WebCodecs support
+  (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+); when WebCodecs is
+  unavailable the namespace selector dims any LOC-only namespaces
 - For development with self-signed certificates, see [FINGERPRINT.md](FINGERPRINT.md) for detailed instructions
 - Alternatively, you may need to accept the self-signed certificate warning in your browser
-- The UI includes controls for adjusting both minimal buffer and target latency
+- The UI includes controls for adjusting both minimal buffer and target latency,
+  picking the MOQ Transport draft, and picking the render engine
 
 ## Acknowledgments
 
@@ -312,3 +382,6 @@ Read our blogs and articles here:
 Want to know more about Eyevinn, contact us at info@eyevinn.se!
 
 [moqlivemock]: https://github.com/Eyevinn/moqlivemock
+[draft-ietf-moq-msf-00]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-00
+[draft-ietf-moq-cmsf-00]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-cmsf-00
+[draft-mzanaty-moq-loc]: https://datatracker.ietf.org/doc/html/draft-mzanaty-moq-loc
