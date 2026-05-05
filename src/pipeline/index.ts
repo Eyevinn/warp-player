@@ -11,8 +11,8 @@
 //
 //      capability matrix       cmaf      loc       locmaf
 //      ────────────────────    ────      ───       ──────
-//      mse (clear)              ✓        future    future
-//      mse (encrypted/EME)      ✓        n/a       future
+//      mse (clear)              ✓        future    ✓
+//      mse (encrypted/EME)      ✓        n/a       ✓
 //      webcodecs (clear)        future   ✓ Phase3  future
 //      webcodecs (encrypted)    ✗        ✗         ✗
 //
@@ -123,7 +123,7 @@ export function trackIsEncrypted(track: WarpTrack | null | undefined): boolean {
 }
 
 function isMseCmafPackaging(packaging: string | undefined): boolean {
-  return packaging === "cmaf" || packaging === "compressed-cmaf";
+  return packaging === "cmaf" || packaging === "locmaf";
 }
 
 /**
@@ -137,10 +137,10 @@ export function engineSupports(
   encrypted: boolean,
 ): boolean {
   if (engine === "mse") {
-    // MSE handles regular CMAF natively and compressed CMAF after Player
+    // MSE handles regular CMAF natively and LOCMAF after Player
     // reconstructs init/media segments before they enter the buffer pipeline.
-    // LOC/LOCMAF reconstruction is future work but the encrypted path is
-    // reserved for MSE+EME regardless.
+    // LOC reconstruction is future work but the encrypted path is reserved
+    // for MSE+EME regardless.
     if (isMseCmafPackaging(packaging)) {
       return true;
     }
@@ -179,7 +179,7 @@ export function engineCanPlayTracks(
 
 /**
  * Pick the engine that should play the given tracks when the user has not
- * forced a choice. Prefers MSE for CMAF / compressed CMAF / encrypted content;
+ * forced a choice. Prefers MSE for CMAF / LOCMAF / encrypted content;
  * prefers WebCodecs for clear LOC. Throws on mixed packagings.
  */
 export function defaultEngineForTracks(
