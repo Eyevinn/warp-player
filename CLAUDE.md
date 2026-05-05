@@ -55,11 +55,22 @@ These ensure code quality before changes are pushed to the repository.
 ## Project Overview
 
 WARP Player is a browser-based TypeScript implementation of a media player,
-using MOQ transport protocol via WebTransport.
-It uses the MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00)
-to fetch a catalog with media tracks.
-The actual media playback is done using MSE, and the media container is CMAF.
-This player allows browsers to connect to MOQ servers, subscribe to media tracks, and receive media segments over WebTransport.
+using the MOQ Transport protocol via WebTransport. It supports MOQ Transport
+draft-14 and draft-16 (negotiated through WebTransport ALPN, can be forced
+from the UI) and uses the MSF/CMSF catalog format
+(draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00) to discover media tracks.
+
+Playback runs through one of two interchangeable render pipelines selected
+per session:
+
+- **MSE / CMAF** for `packaging: "cmaf"` tracks, with optional EME for
+  encrypted content (Widevine, PlayReady, FairPlay, ClearKey).
+- **WebCodecs / LOC** for `packaging: "loc"` tracks (draft-mzanaty-moq-loc),
+  clear content only, supporting AVC and HEVC video plus AAC and Opus audio.
+
+Both pipelines implement a common `IPlaybackPipeline` interface so the
+buffer-control loop, latency reporting, mute toggle, and namespace selector
+work uniformly regardless of which engine is active.
 
 ### Project Structure
 
@@ -68,15 +79,27 @@ The project follows the Eyevinn TypeScript project template structure:
 ```
 warp-player/
 ├── src/
-│   ├── transport/        # MOQ protocol implementation
+│   ├── transport/        # MOQ protocol implementation (draft-14 / draft-16)
 │   │   ├── client.ts     # WebTransport client implementation
 │   │   ├── setup.ts      # Setup message handling
 │   │   ├── tracks.ts     # Track subscription and management
-│   │   └── control.ts    # Control stream handling
-│   ├── buffer/           # Media buffering components
+│   │   ├── control.ts    # Control stream handling
+│   │   └── version.ts    # Draft version constants and ALPN strings
+│   ├── buffer/           # CMAF segment buffering for the MSE pipeline
 │   │   ├── mediaBuffer.ts         # CMAF segment parsing
 │   │   └── mediaSegmentBuffer.ts  # Buffer management for MSE
-│   ├── player.ts         # Core player implementation with MSE integration
+│   ├── loc/              # LOC payload helpers for the WebCodecs pipeline
+│   │   ├── avc.ts        # AVC NALU walker, AVCDecoderConfigurationRecord
+│   │   ├── hevc.ts       # HEVC NALU walker, HEVCDecoderConfigurationRecord
+│   │   ├── aac.ts        # AAC AudioSpecificConfig from catalog metadata
+│   │   ├── opus.ts       # Opus ID-header (OpusHead) builder
+│   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
+│   ├── pipeline/         # Pluggable render pipelines
+│   │   ├── index.ts                # IPlaybackPipeline + capability matrix
+│   │   ├── msePipeline.ts          # MSE/CMAF pipeline (with optional EME)
+│   │   └── webcodecsLocPipeline.ts # WebCodecs/LOC pipeline (clear only)
+│   ├── warpcatalog.ts    # MSF/CMSF catalog types and parsing
+│   ├── player.ts         # Core player: catalog → tracks → pipeline
 │   ├── browser.ts        # Browser entry point and UI handling
 │   └── index.html        # HTML template and UI components
 ├── FINGERPRINT.md        # Documentation for fingerprint feature
@@ -94,10 +117,12 @@ warp-player/
 
 ### Core Architecture
 
-The transport used is MOQ Transport, currently draft-14.
+The transport used is MOQ Transport, draft-14 or draft-16 (auto-negotiated
+via WebTransport ALPN strings `moq-00` and `moqt-16`).
 
 For the catalog, the specification used is MSF (draft-ietf-moq-msf-00)
-with CMSF (draft-ietf-moq-cmsf-00) for CMAF packaging.
+with CMSF (draft-ietf-moq-cmsf-00) for CMAF packaging. LOC packaging
+follows draft-mzanaty-moq-loc.
 
 The codebase is organized into several key modules:
 
@@ -107,22 +132,56 @@ The codebase is organized into several key modules:
    - Manages bidirectional control streams and unidirectional data streams
    - Implements client-server setup messaging, track subscription, and data reception
 
-2. **Buffer Layer**:
+2. **Catalog Layer**:
+   - Located in `src/warpcatalog.ts`
+   - Parses MSF/CMSF catalogs, including delta updates, content protection,
+     and namespace inheritance for tracks that omit an explicit namespace
+
+3. **Buffer Layer (MSE)**:
    - Located in `src/buffer/`
    - Processes incoming media segments (CMAF format)
    - Parses segments and extracts timing information
-   - Manages buffering of media segments for playback
+   - Manages buffering of media segments for the MSE `SourceBuffer`
 
-3. **Player Integration**:
+4. **LOC Layer (WebCodecs)**:
+   - Located in `src/loc/`
+   - Walks length-prefixed NALUs for AVC/HEVC and synthesizes
+     `VideoDecoderConfig.description` (avcC / hvcC) on parameter-set changes
+   - Synthesizes `AudioDecoderConfig.description` for AAC (AudioSpecificConfig)
+     and Opus (OpusHead) from catalog metadata
+   - Parses MoQ Object extension headers to extract LOC capture timestamps
+
+5. **Pipeline Layer**:
+   - Located in `src/pipeline/`
+   - Defines `IPlaybackPipeline` (`engine`, `setup`, `routeObject`,
+     `getLatencySnapshot`, `setBufferConfig`, `setPlaybackRate`,
+     `setMuted`, `dispose`) — the common surface used by `player.ts`
+   - `MsePipeline` owns the `MediaSource`, `SourceBuffer`s, and (eventually)
+     `MediaKeys` / EME state for CMAF tracks
+   - `WebCodecsLocPipeline` owns the `VideoDecoder` / `AudioDecoder`,
+     a canvas overlay on the `<video>` element, and a wallclock-anchored
+     `requestAnimationFrame` render loop synchronized with a single
+     `AudioContext` schedule
+   - `engineSupports` / `defaultEngineForTracks` / `resolveEngine` encode
+     the (engine × packaging × encryption) capability matrix
+
+6. **Player Integration**:
    - Located in `src/player.ts` and `src/browser.ts`
-   - Provides the high-level API for connecting to MOQ servers
-   - Handles user interface interaction for track discovery and subscription
+   - Selects the pipeline based on the user's "Render engine" choice
+     (`auto` / `mse` / `webcodecs`) and the selected tracks' packaging
+   - Filters the namespace selector so namespaces incompatible with the
+     active engine (or with ClearKey when unsupported) dim out
+   - Drives a buffer-control loop that adjusts playback rate via
+     `IPlaybackPipeline.setPlaybackRate` for either engine
+   - Renders the engine legend overlay (namespace, engine, DRM, video/audio
+     track names)
 
 ### Key Components
 
 1. **Client** (`src/transport/client.ts`):
    - Main entry point for establishing WebTransport connections
    - Handles connection setup, track subscription, and message routing
+   - Negotiates draft-14 (`moq-00`) vs draft-16 (`moqt-16`) via ALPN
 
 2. **TrackAliasRegistry** (`src/transport/trackaliasregistry.ts`):
    - Manages mappings between track namespaces, names, and aliases
@@ -131,24 +190,63 @@ The codebase is organized into several key modules:
 3. **TracksManager** (`src/transport/tracks.ts`):
    - Manages incoming unidirectional streams for data
    - Processes and routes incoming data objects to registered callbacks
+   - Surfaces MoQ Object extension headers (used by LOC for capture
+     timestamps) on `MOQObject.extensions`
 
-4. **MediaBuffer** (`src/buffer/mediaBuffer.ts`):
+4. **WarpCatalogManager** (`src/warpcatalog.ts`):
+   - Parses MSF/CMSF catalogs (full and delta) and applies catalog-level
+     namespace inheritance
+   - Looks up tracks by namespace + name + role for subscription
+
+5. **IPlaybackPipeline** (`src/pipeline/index.ts`):
+   - Common interface for both render engines
+   - Capability matrix functions (`engineSupports`, `engineCanPlayTracks`,
+     `defaultEngineForTracks`, `resolveEngine`) determine which engine
+     plays a given (packaging, encrypted) combination
+
+6. **MsePipeline** (`src/pipeline/msePipeline.ts`):
+   - Owns the `MediaSource` / `ManagedMediaSource`, `SourceBuffer`s, and
+     the segment + box parsers that feed them
+   - Targeted to also own `MediaKeys` / EME state in upcoming phases
+
+7. **WebCodecsLocPipeline** (`src/pipeline/webcodecsLocPipeline.ts`):
+   - Owns `VideoDecoder` / `AudioDecoder`, the overlay canvas, the
+     `AudioContext`, and the wallclock-anchored render loop
+   - Re-configures decoders on parameter-set changes (SPS/PPS for AVC;
+     VPS/SPS/PPS for HEVC); audio decoders are configured once from
+     catalog metadata
+   - Mute is implemented through a `GainNode` between every
+     `AudioBufferSourceNode` and the destination
+
+8. **MediaBuffer** (`src/buffer/mediaBuffer.ts`):
    - Parses CMAF initialization and media segments
    - Extracts timing information for media synchronization
 
-5. **MediaSegmentBuffer** (`src/buffer/mediaSegmentBuffer.ts`):
+9. **MediaSegmentBuffer** (`src/buffer/mediaSegmentBuffer.ts`):
    - Manages the queue of media segments with timing information
-   - Provides interfaces for appending to SourceBuffer for playback
+   - Provides interfaces for appending to `SourceBuffer` for playback
+
+10. **LOC helpers** (`src/loc/`):
+    - `avc.ts` / `hevc.ts` — walk length-prefixed NALUs, extract parameter
+      sets, build `VideoDecoderConfig.description` (avcC / hvcC), and
+      detect IDR / IRAP keyframes
+    - `aac.ts` — build AudioSpecificConfig from catalog `samplerate`,
+      `channels`, and `mp4a.OO.A` codec strings
+    - `opus.ts` — build the `OpusHead` ID Header from catalog metadata
+    - `extensions.ts` — parse moqtransport KeyValuePair extension blobs
+      and read LOC property `0x06` (capture timestamp in microseconds
+      since the Unix epoch)
 
 ## Technical Notes
 
-1. The implementation follows the MOQ Transport protocol draft version 14, with MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00).
-2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+.
+1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00) and LOC packaging (draft-mzanaty-moq-loc).
+2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
-4. Media data is expected in CMAF format with ISO BMFF container structure.
+4. Media data is delivered either as CMAF (ISO BMFF) for the MSE pipeline or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
 5. The client includes proper handling of bidirectional control streams for subscribing to content.
-6. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source
-7. The project follows the Eyevinn code quality standards with:
+6. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source.
+7. Encrypted content always flows through the MSE engine; production browsers do not expose Encrypted WebCodecs.
+8. The project follows the Eyevinn code quality standards with:
    - Conventional commits using commitlint
    - Prettier for code formatting
    - ESLint for code linting
@@ -156,9 +254,74 @@ The codebase is organized into several key modules:
 
 ## Recent Features
 
+### MSF/CMSF Catalog Format
+
+- Catalog parsing follows draft-ietf-moq-msf-00 with CMSF
+  (draft-ietf-moq-cmsf-00) for CMAF packaging
+- Tracks identify their payload format via the `packaging` field
+  (`"cmaf"`, `"loc"`, ...)
+- Tracks that omit `namespace` inherit it from the announce namespace of
+  the catalog track they were delivered on (see
+  `WarpCatalogManager.processCatalog`)
+- Delta updates via `addTracks` / `removeTracks` / `cloneTracks` are
+  applied on top of the previously delivered catalog
+- Content protection is signaled through the `contentProtections` array
+  at the catalog root and referenced by `contentProtectionRefIDs` on
+  individual tracks (CMSF ContentProtection signaling)
+
+### WebCodecs LOC Pipeline
+
+The player has a second render engine that decodes LOC-packaged tracks
+directly with WebCodecs:
+
+- Selectable from the UI ("Auto" / "MSE (CMAF)" / "WebCodecs (LOC)")
+- Capability matrix in `src/pipeline/index.ts` decides which engine can
+  play a given (packaging, encryption) combination; Auto picks MSE for
+  CMAF / encrypted content and WebCodecs for clear LOC content
+- Video codecs supported today: AVC (H.264) and HEVC (H.265). Parameter
+  sets are extracted from each access unit; the decoder is reconfigured
+  whenever VPS / SPS / PPS bytes change
+- Audio codecs supported today: AAC-LC and Opus. AudioSpecificConfig
+  (AAC) and OpusHead (Opus) are synthesized from the catalog metadata
+  and passed as `AudioDecoderConfig.description`
+- Render strategy: a canvas overlays the `<video>` element; a wallclock-
+  anchored `requestAnimationFrame` loop draws `VideoFrame`s whose
+  presentation time is at or before the playhead
+- Audio strategy: one `AudioContext` for the session, decoded
+  `AudioData` is converted to an `AudioBuffer` and scheduled on a fresh
+  `AudioBufferSourceNode` against the same wallclock anchor used by the
+  video render loop; a shared `GainNode` implements mute
+- Capture timestamps travel in MoQ Object extension headers as LOC
+  property `0x06` (microseconds since the Unix epoch); see
+  `src/loc/extensions.ts`
+
+### Render Engine Selector and Namespace Filter
+
+- The "Render engine" dropdown lets the user force MSE or WebCodecs (or
+  leave it on Auto). Engine choice changes re-render the namespace
+  selector so namespaces incompatible with the chosen engine — or with
+  ClearKey when the browser does not support it — dim out and become
+  unselectable.
+- An "Engine legend" overlay on the player surface shows the active
+  namespace, render engine, DRM system, and selected video / audio
+  track names while playback is active.
+
+### Mute Toggle
+
+- A "Mute / Unmute" button next to Start / Stop controls audio for both
+  pipelines. The MSE pipeline uses the `<video>` element's `muted`
+  attribute; the WebCodecs pipeline drives a shared `GainNode`. Both
+  start muted to match the legacy `<video muted>` UX.
+
+### Draft-14 / Draft-16 Negotiation
+
+- The transport layer supports both MOQ Transport draft-14 (`moq-00`)
+  and draft-16 (`moqt-16`), negotiated via WebTransport ALPN. The UI
+  exposes an "MOQ Transport draft" dropdown (Auto / Draft 14 / Draft 16) for forcing a specific version.
+
 ### Fingerprint Support for Self-Signed Certificates
 
-The player now supports connecting to servers with self-signed certificates by providing a fingerprint URL:
+The player supports connecting to servers with self-signed certificates by providing a fingerprint URL:
 
 - The `Player` constructor accepts an optional `fingerprintUrl` parameter
 - The fingerprint is fetched from the URL and used for WebTransport connection
