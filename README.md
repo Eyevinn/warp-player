@@ -30,7 +30,7 @@ This project implements a media player that:
    ([draft-ietf-moq-msf-00], [draft-ietf-moq-cmsf-00])
 4. Subscribes to selected media tracks through the MOQ transport protocol
 5. Renders media through one of two interchangeable pipelines:
-   - **MSE** for CMAF (`packaging: "cmaf"`), with optional EME for protected content
+   - **MSE** for CMAF (`packaging: "cmaf" or "locmaf"`), with optional EME for protected content
    - **WebCodecs** for LOC (`packaging: "loc"`, [draft-mzanaty-moq-loc]), clear content only
 6. Provides adaptive buffer management for a smooth playback experience
 7. This player is intended to work towards the [moqlivemock][moqlivemock]
@@ -65,6 +65,8 @@ warp-player/
 │   │   ├── aac.ts        # AAC AudioSpecificConfig from catalog metadata
 │   │   ├── opus.ts       # Opus ID-header (OpusHead) from catalog metadata
 │   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
+|   ├── locmaf/           # LOCMAF helper functions
+│   │   ├── locmaf.ts     # Parsing of LOCMAF and reconstruction of CMAF
 │   ├── pipeline/         # Pluggable render pipelines
 │   │   ├── index.ts                # IPlaybackPipeline + capability matrix
 │   │   ├── msePipeline.ts          # MSE/CMAF pipeline (with optional EME)
@@ -249,10 +251,10 @@ Two render engines coexist behind a small `IPlaybackPipeline` interface
 (`src/pipeline/index.ts`). Player selects one per session based on the
 catalog and the user's "Render engine" choice in the UI:
 
-| Engine    | Packaging | Encryption | Notes                                                         |
-| --------- | --------- | ---------- | ------------------------------------------------------------- |
-| MSE       | `cmaf`    | clear, EME | Default for CMAF; required path for any DRM-protected content |
-| WebCodecs | `loc`     | clear only | Decodes directly with `VideoDecoder` / `AudioDecoder`         |
+| Engine    | Packaging        | Encryption | Notes                                                         |
+| --------- | ---------------- | ---------- | ------------------------------------------------------------- |
+| MSE       | `cmaf`, `locmaf` | clear, EME | Default for CMAF; required path for any DRM-protected content |
+| WebCodecs | `loc`            | clear only | Decodes directly with `VideoDecoder` / `AudioDecoder`         |
 
 The `Auto` engine choice resolves at subscribe time:
 
