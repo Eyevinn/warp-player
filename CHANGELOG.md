@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-05
+
+WebCodecs LOC playback engine alongside the existing MSE/CMAF engine.
+
+### Added
+
+- WebCodecs render pipeline for `packaging: "loc"` tracks
+  ([draft-mzanaty-moq-loc])
+  - AVC (H.264) and HEVC (H.265) video, decoded with `VideoDecoder` and
+    drawn onto a canvas overlaid on the `<video>` element via a
+    wallclock-anchored `requestAnimationFrame` loop
+  - AAC-LC and Opus audio, decoded with `AudioDecoder` and scheduled on
+    a single `AudioContext` sharing the video render loop's wallclock
+    anchor for gap-free playback
+  - LOC parser and decoder helpers under `src/loc/` (NALU walking,
+    `AVCDecoderConfigurationRecord` / `HEVCDecoderConfigurationRecord`
+    builders, AAC `AudioSpecificConfig` and Opus `OpusHead` synthesis,
+    LOC extension-header parsing for capture timestamps)
+- Pluggable pipeline abstraction (`IPlaybackPipeline`) with capability
+  matrix for (engine × packaging × encryption); `MsePipeline` and
+  `WebCodecsLocPipeline` implementations under `src/pipeline/`
+- "Render engine" UI selector (`Auto` / `MSE (CMAF)` / `WebCodecs (LOC)`)
+  that filters the namespace selector so namespaces incompatible with
+  the chosen engine dim out
+- Engine legend overlay on the player surface showing active namespace,
+  engine, DRM system, and selected video / audio track names
+- Mute / Unmute button that drives a `GainNode` for WebCodecs and the
+  `<video muted>` attribute for MSE
+
+### Fixed
+
+- Catalog tracks without an explicit `namespace` now inherit the
+  announce namespace of the catalog track they were delivered on
+- Safari no longer flags `WebTransport.closed` rejection during normal
+  disconnect
+
+### Changed
+
+- Bumped development dependencies (@types/node, prettier, webpack)
+- Bumped production dependencies (@commitlint/\*, @typescript-eslint/\*,
+  globals, html-webpack-plugin, typescript-eslint)
+
+[draft-mzanaty-moq-loc]: https://datatracker.ietf.org/doc/html/draft-mzanaty-moq-loc
+
+## [0.7.1] - 2026-04-12
+
+### Added
+
+- ManagedMediaSource support for iOS Safari playback — the player now
+  uses `ManagedMediaSource` when available, falling back to
+  `MediaSource` elsewhere
+
+## [0.7.0] - 2026-04-12
+
+### Added
+
+- MOQ Transport draft-16 support with dual draft-14 / draft-16
+  negotiation via WebTransport ALPN (`moq-00` / `moqt-16`); UI
+  exposes an MOQ Transport draft selector
+
+### Changed
+
+- Bumped development dependencies (webpack-cli)
+- Bumped production dependencies (5-update group)
+- Bumped `codecov/codecov-action` GitHub Action from 5 to 6
+
 ## [0.6.0] - 2026-04-11
 
 Full [MOQ Transport draft-14][moqt-d14] compliance release.
