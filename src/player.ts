@@ -2864,14 +2864,23 @@ export class Player {
       return;
     }
     let license: BufferSource | undefined;
-    if (systemID === this.widevine) {
-      license = await this.makeWidevineRequest(event, licenseURL);
-    } else if (systemID === this.clearkey) {
-      license = await this.makeClearkeyRequest(event, licenseURL);
-    } else if (systemID === this.playready) {
-      license = await this.makePlayreadyRequest(event, licenseURL);
-    } else if (systemID === this.fairplay) {
-      license = await this.makeFairplayRequest(event, licenseURL);
+    try {
+      if (systemID === this.widevine) {
+        license = await this.makeWidevineRequest(event, licenseURL);
+      } else if (systemID === this.clearkey) {
+        license = await this.makeClearkeyRequest(event, licenseURL);
+      } else if (systemID === this.playready) {
+        license = await this.makePlayreadyRequest(event, licenseURL);
+      } else if (systemID === this.fairplay) {
+        license = await this.makeFairplayRequest(event, licenseURL);
+      }
+    } catch (error) {
+      this.logger.error(
+        `License request failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
     }
     if (!license) {
       this.logger.error("No license found.");
@@ -2900,17 +2909,15 @@ export class Player {
         body: JSON.stringify(request),
       });
     } catch (error) {
-      this.logger.error(
+      throw new Error(
         `ClearKey fetch failed for ${licenseUrl}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return;
     }
 
     if (!response.ok) {
-      this.logger.error(`ClearKey request failed: ${response.statusText}`);
-      return;
+      throw new Error(`ClearKey request failed: ${response.statusText}`);
     }
 
     interface clearkeyResponse {
@@ -2922,8 +2929,7 @@ export class Player {
     const { keys } = (await response.json()) as { keys: clearkeyResponse[] };
 
     if (keys.length === 0) {
-      this.logger.error("No matching ClearKey keys found for requested kids");
-      return;
+      throw new Error("No matching ClearKey keys found for requested kids");
     }
     return new TextEncoder().encode(JSON.stringify({ keys }));
   }
@@ -3043,25 +3049,14 @@ export class Player {
       throw new Error(`${logPrefix} Received empty Uint8Array (zero bytes)`);
     }
 
+    if (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) {
+      return data.buffer as ArrayBuffer;
+    }
+
     return data.buffer.slice(
       data.byteOffset,
       data.byteOffset + data.byteLength,
     ) as ArrayBuffer;
-  }
-
-  private getLocmafState(kind: "video" | "audio"): LocmafTrackState | null {
-    return kind === "video" ? this.videoLocmafState : this.audioLocmafState;
-  }
-
-  private setLocmafState(
-    kind: "video" | "audio",
-    state: LocmafTrackState | null,
-  ): void {
-    if (kind === "video") {
-      this.videoLocmafState = state;
-      return;
-    }
-    this.audioLocmafState = state;
   }
 
   private groupIdToSequenceNumber(groupId: bigint, logPrefix: string): number {
@@ -3091,12 +3086,20 @@ export class Player {
     );
 
     if (!isLocmafTrack(track)) {
-      this.setLocmafState(kind, null);
+      if (kind === "video") {
+        this.videoLocmafState = null;
+      } else {
+        this.audioLocmafState = null;
+      }
       return encodedInit;
     }
 
     const initializedTrack = initializeLocmafTrack(track, encodedInit);
-    this.setLocmafState(kind, initializedTrack.state);
+    if (kind === "video") {
+      this.videoLocmafState = initializedTrack.state;
+    } else {
+      this.audioLocmafState = initializedTrack.state;
+    }
 
     if (!initializedTrack.initWasReconstructed) {
       this.logger.info(
@@ -3122,13 +3125,13 @@ export class Player {
   ): { data: ArrayBuffer; trackInfo?: MediaTrackInfo } {
     const type = kind === "video" ? "Video" : "Audio";
     const logPrefix = `[${type}MediaBuffer]`;
-    const objectData = this.asExactArrayBuffer(obj.data, logPrefix);
 
     if (!isLocmafTrack(track)) {
-      return { data: objectData };
+      return { data: this.asExactArrayBuffer(obj.data, logPrefix) };
     }
 
-    const locmafState = this.getLocmafState(kind);
+    const locmafState =
+      kind === "video" ? this.videoLocmafState : this.audioLocmafState;
     if (!locmafState) {
       throw new Error(`${logPrefix} Missing locmaf state`);
     }
@@ -3138,7 +3141,7 @@ export class Player {
       logPrefix,
     );
     const fragment = decompressMoofWithTrackInfo(
-      objectData,
+      obj.data,
       sequenceNumber,
       locmafState,
     );
