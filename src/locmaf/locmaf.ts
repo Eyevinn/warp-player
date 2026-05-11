@@ -14,6 +14,7 @@ import type {
   AudioSampleEntryBox,
   FileTypeBox,
   HandlerReferenceBox,
+  IsoBoxStreamable,
   MediaBox,
   MediaDataBox,
   MediaHeaderBox,
@@ -22,9 +23,13 @@ import type {
   MovieExtendsBox,
   MovieFragmentBox,
   MovieHeaderBox,
+  ParsedIsoBox,
+  ProtectionSchemeInformationBox,
+  SampleEncryptionBox,
   SampleDescriptionBox,
   SampleTableBox,
   SoundMediaHeaderBox,
+  TrackEncryptionBox,
   TrackBox,
   TrackExtendsBox,
   TrackFragmentBaseMediaDecodeTimeBox,
@@ -92,6 +97,16 @@ const visualSampleEntryTypes = [
   "vvi1",
 ] as const;
 
+const nativeVisualSampleEntryTypes = new Set<string>([
+  "avc1",
+  "avc2",
+  "avc3",
+  "avc4",
+  "encv",
+  "hev1",
+  "hvc1",
+]);
+
 type RawFieldMap = Map<number, Uint8Array>;
 
 type RawBox = {
@@ -99,13 +114,8 @@ type RawBox = {
   view: ArrayBufferView;
 };
 
-type ExtendedTrackEncryptionBox = {
+type ExtendedTrackEncryptionBox = TrackEncryptionBox & {
   type: "tenc";
-  version: number;
-  flags: number;
-  defaultIsEncrypted: number;
-  defaultIvSize: number;
-  defaultKid: number[];
   defaultCryptByteBlock?: number;
   defaultSkipByteBlock?: number;
   defaultConstantIv?: Uint8Array;
@@ -119,11 +129,8 @@ type SampleEncryptionEntry = {
   }>;
 };
 
-type ExtendedSampleEncryptionBox = {
+type ExtendedSampleEncryptionBox = SampleEncryptionBox & {
   type: "senc";
-  version: number;
-  flags: number;
-  sampleCount: number;
   samples: SampleEncryptionEntry[];
 };
 
@@ -157,19 +164,19 @@ const moovLocmafIDs = {
   defaultSampleFlags: 28,
 } as const;
 
-const moofLocmafIDs = {
+export const moofLocmafIDs = {
   sampleDescriptionIndex: 2,
   defaultSampleDuration: 4,
   defaultSampleSize: 6,
   defaultSampleFlags: 8,
   baseMediaDecodeTime: 10,
   firstSampleFlags: 12,
-  sampleCount: 16,
+  sampleCount: 14,
   sampleSizes: 1,
   sampleDurations: 3,
   sampleCompositionTimeOffsets: 5,
   sampleFlags: 7,
-  perSampleIVSize: 14,
+  perSampleIVSize: 16,
   initializationVector: 9,
   subsampleCount: 11,
   bytesOfClearData: 13,
@@ -234,18 +241,7 @@ const readerConfig = (() => {
       ),
       ...Object.fromEntries(
         visualSampleEntryTypes
-          .filter(
-            (type) =>
-              ![
-                "avc1",
-                "avc2",
-                "avc3",
-                "avc4",
-                "encv",
-                "hev1",
-                "hvc1",
-              ].includes(type),
-          )
+          .filter((type) => !nativeVisualSampleEntryTypes.has(type))
           .map((type) => [type, createVisualSampleEntryReader(type)]),
       ),
     },
@@ -271,18 +267,7 @@ const writerConfig = (() => {
       ),
       ...Object.fromEntries(
         visualSampleEntryTypes
-          .filter(
-            (type) =>
-              ![
-                "avc1",
-                "avc2",
-                "avc3",
-                "avc4",
-                "encv",
-                "hev1",
-                "hvc1",
-              ].includes(type),
-          )
+          .filter((type) => !nativeVisualSampleEntryTypes.has(type))
           .map((type) => [
             type,
             (box: VisualSampleEntryBox) =>
@@ -536,7 +521,7 @@ function separateFields(data: Uint8Array): RawFieldMap {
 }
 
 function parseRawBox(raw: Uint8Array): RawBox {
-  const boxes = readIsoBoxes(raw, readerConfig) as any[];
+  const boxes = readIsoBoxes(raw, readerConfig) as ParsedIsoBox[];
   if (boxes.length !== 1) {
     throw new Error("expected exactly one ISO box");
   }
@@ -599,15 +584,15 @@ function createSampleEntry(
     );
     const chnlBox = getRawBoxField(fieldMap, moovLocmafIDs.chnl);
     if (codecConfigurationBox) {
-      entry.boxes.push(codecConfigurationBox as any);
+      entry.boxes.push(codecConfigurationBox);
     }
     if (chnlBox) {
-      entry.boxes.push(chnlBox as any);
+      entry.boxes.push(chnlBox);
     }
 
     const sinf = createProtectionSchemeBox(format, fieldMap, track);
     if (sinf) {
-      entry.boxes.push(sinf as any);
+      entry.boxes.push(sinf);
     }
     return entry;
   }
@@ -638,18 +623,18 @@ function createSampleEntry(
   const colrBox = getRawBoxField(fieldMap, moovLocmafIDs.colr);
   const paspBox = getRawBoxField(fieldMap, moovLocmafIDs.pasp);
   if (codecConfigurationBox) {
-    entry.boxes.push(codecConfigurationBox as any);
+    entry.boxes.push(codecConfigurationBox);
   }
   if (colrBox) {
-    entry.boxes.push(colrBox as any);
+    entry.boxes.push(colrBox);
   }
   if (paspBox) {
-    entry.boxes.push(paspBox as any);
+    entry.boxes.push(paspBox);
   }
 
   const sinf = createProtectionSchemeBox(format, fieldMap, track);
   if (sinf) {
-    entry.boxes.push(sinf as any);
+    entry.boxes.push(sinf);
   }
   return entry;
 }
@@ -658,22 +643,7 @@ function createProtectionSchemeBox(
   format: string,
   fieldMap: RawFieldMap,
   track?: LocmafTrackMetadata,
-):
-  | {
-      type: "sinf";
-      boxes: Array<
-        | { type: "frma"; dataFormat: number }
-        | {
-            type: "schm";
-            version: number;
-            flags: number;
-            schemeType: number;
-            schemeVersion: number;
-          }
-        | { type: "schi"; boxes: [ExtendedTrackEncryptionBox] }
-      >;
-    }
-  | undefined {
+): ProtectionSchemeInformationBox | undefined {
   const schemeType = maybeGetVarint(fieldMap, moovLocmafIDs.schemeType);
   const defaultKid = fieldMap.get(moovLocmafIDs.defaultKID);
   const defaultPerSampleIVSize = maybeGetVarint(
@@ -758,7 +728,7 @@ function createProtectionSchemeBox(
 
 function createFtypBox(reference?: Uint8Array): FileTypeBox {
   if (reference) {
-    const parsed = readIsoBoxes(reference, readerConfig) as any[];
+    const parsed = readIsoBoxes(reference, readerConfig) as ParsedIsoBox[];
     const box = parsed.find((entry) => entry.type === "ftyp") as
       | FileTypeBox
       | undefined;
@@ -814,7 +784,7 @@ function buildInitBoxes(
     version: 0,
     flags: 0,
     entryCount: 1,
-    entries: [sampleEntry as any],
+    entries: [sampleEntry],
   };
 
   const stbl: SampleTableBox = {
@@ -1339,7 +1309,7 @@ function buildMoofFromFields(
   const trafBoxes: TrackFragmentBox["boxes"] = [tfhd, tfdt, trun];
   const senc = createSencBox(fieldMap, sampleCount, perSampleIVSize);
   if (senc) {
-    trafBoxes.push(senc as any);
+    trafBoxes.push(senc);
   }
 
   return {
@@ -1368,7 +1338,7 @@ function buildMoofFromFields(
 }
 
 function encodeMoof(box: MovieFragmentBox): Uint8Array {
-  const moofWithoutOffset = writeIsoBox(box as any, writerConfig);
+  const moofWithoutOffset = writeIsoBox(box as IsoBoxStreamable, writerConfig);
   const traf = box.boxes.find(
     (child: { type: string }) => child.type === "traf",
   ) as TrackFragmentBox;
@@ -1376,7 +1346,7 @@ function encodeMoof(box: MovieFragmentBox): Uint8Array {
     (child: { type: string }) => child.type === "trun",
   ) as TrackRunBox;
   trun.dataOffset = moofWithoutOffset.byteLength + 8;
-  return writeIsoBox(box as any, writerConfig);
+  return writeIsoBox(box as IsoBoxStreamable, writerConfig);
 }
 
 function deriveNextBaseMediaDecodeTime(
@@ -1509,7 +1479,7 @@ function fourCcToUint32(value: string): number {
 }
 
 function readSampleEntryMetadata(initSegment: Uint8Array): LocmafTrackMetadata {
-  const parsed = readIsoBoxes(initSegment, readerConfig) as any[];
+  const parsed = readIsoBoxes(initSegment, readerConfig) as ParsedIsoBox[];
   const moov = parsed.find((box) => box.type === "moov") as
     | MovieBox
     | undefined;
@@ -1523,14 +1493,16 @@ function readSampleEntryMetadata(initSegment: Uint8Array): LocmafTrackMetadata {
     throw new Error("init segment is missing required track boxes");
   }
 
-  const sampleEntry = stsd.entries[0] as any;
+  const sampleEntry = stsd.entries[0];
   return {
     codec: sampleEntry.type,
     timescale: mdhd.timescale,
-    width: sampleEntry.width,
-    height: sampleEntry.height,
-    samplerate: sampleEntry.samplerate,
-    channelCount: sampleEntry.channelcount,
+    width: "width" in sampleEntry ? sampleEntry.width : undefined,
+    height: "height" in sampleEntry ? sampleEntry.height : undefined,
+    samplerate:
+      "samplerate" in sampleEntry ? sampleEntry.samplerate : undefined,
+    channelCount:
+      "channelcount" in sampleEntry ? sampleEntry.channelcount : undefined,
     role: hdlr?.handlerType === "soun" ? "audio" : "video",
     lang: mdhd.language,
   };
@@ -1597,7 +1569,7 @@ function writeTenc(box: ExtendedTrackEncryptionBox): IsoBoxWriteView {
   return writer;
 }
 
-export function locmafTrackMetadataFromWarpTrack(
+function locmafTrackMetadataFromWarpTrack(
   track: WarpTrack,
 ): LocmafTrackMetadata {
   return {
@@ -1617,11 +1589,11 @@ export function extractTrackMetadataFromInitSegment(
   return readSampleEntryMetadata(ensureUint8Array(initSegment));
 }
 
-export function extractInitContextFromInitSegment(
+function extractInitContextFromInitSegment(
   initSegment: Uint8Array | ArrayBuffer,
 ): LocmafInitContext {
   const initBytes = ensureUint8Array(initSegment);
-  const parsed = readIsoBoxes(initBytes, readerConfig) as any[];
+  const parsed = readIsoBoxes(initBytes, readerConfig) as ParsedIsoBox[];
   const moov = parsed.find((box) => box.type === "moov") as
     | MovieBox
     | undefined;
@@ -1676,12 +1648,14 @@ export function decompressLocmafInit(
   );
   return {
     boxes,
-    bytes: concatBytes(...writeIsoBoxes(boxes as any, writerConfig)),
+    bytes: concatBytes(
+      ...writeIsoBoxes(boxes as IsoBoxStreamable[], writerConfig),
+    ),
     context,
   };
 }
 
-export class LocmafMoofDeltaDecoder {
+class LocmafMoofDeltaDecoder {
   private previous?: RawFieldMap;
 
   public decode(
@@ -1724,51 +1698,32 @@ export class LocmafMoofDeltaDecoder {
   }
 }
 
-export function createLocmafMdatBox(
-  fragmentOrMdat: Uint8Array | ArrayBuffer,
-): MediaDataBox {
-  const input = ensureUint8Array(fragmentOrMdat);
+function createLocmafMdatBytes(
+  mdatPayload: Uint8Array | ArrayBuffer,
+): Uint8Array {
+  const payload = ensureUint8Array(mdatPayload);
+  const usesLargeSize = payload.byteLength > 0xfffffff7;
+  const headerLength = usesLargeSize ? 16 : 8;
+  const bytes = new Uint8Array(headerLength + payload.byteLength);
+  const view = new DataView(bytes.buffer);
 
-  try {
-    const parsed = readIsoBoxes(input, readerConfig) as any[];
-    const mdat = parsed.find((box) => box.type === "mdat") as
-      | MediaDataBox
-      | undefined;
-    if (mdat) {
-      return {
-        type: "mdat",
-        data: new Uint8Array(mdat.data),
-      };
-    }
-  } catch {
-    // Fall back to treating the input as raw media payload bytes.
+  if (usesLargeSize) {
+    view.setUint32(0, 1);
+    view.setBigUint64(8, BigInt(bytes.byteLength));
+  } else {
+    view.setUint32(0, bytes.byteLength);
   }
 
-  return {
-    type: "mdat",
-    data: new Uint8Array(input),
-  };
+  bytes[4] = 0x6d;
+  bytes[5] = 0x64;
+  bytes[6] = 0x61;
+  bytes[7] = 0x74;
+  bytes.set(payload, headerLength);
+
+  return bytes;
 }
 
-export function assembleCmafFile(parts: {
-  initSegment: Uint8Array | ArrayBuffer;
-  moof: MovieFragmentBox | Uint8Array | ArrayBuffer;
-  mdat: MediaDataBox | Uint8Array | ArrayBuffer;
-}): Uint8Array {
-  const initSegment = ensureUint8Array(parts.initSegment);
-  const moofBytes =
-    parts.moof instanceof Uint8Array || parts.moof instanceof ArrayBuffer
-      ? ensureUint8Array(parts.moof)
-      : encodeMoof(parts.moof);
-  const mdatBytes =
-    parts.mdat instanceof Uint8Array || parts.mdat instanceof ArrayBuffer
-      ? ensureUint8Array(parts.mdat)
-      : writeIsoBox(parts.mdat as any, writerConfig);
-
-  return concatBytes(initSegment, moofBytes, mdatBytes);
-}
-
-export function getLocmafHeaderConstants(): Readonly<{
+function getLocmafHeaderConstants(): Readonly<{
   moov: typeof LOCMAF_HEADER_MOOV;
   moof: typeof LOCMAF_HEADER_MOOF;
   moofDelta: typeof LOCMAF_HEADER_MOOF_DELTA;
@@ -1832,6 +1787,26 @@ function parseLocmafInit(payload: Uint8Array | ArrayBuffer): {
   };
 }
 
+function maybeParseLocmafInit(
+  payload: Uint8Array | ArrayBuffer,
+): { headerId: number; locPayload: Uint8Array } | undefined {
+  try {
+    return parseLocmafInit(payload);
+  } catch {
+    return undefined;
+  }
+}
+
+function maybeExtractInitContext(
+  initSegment: Uint8Array | ArrayBuffer,
+): LocmafInitContext | undefined {
+  try {
+    return extractInitContextFromInitSegment(initSegment);
+  } catch {
+    return undefined;
+  }
+}
+
 export function isLocmafTrack(track: Pick<WarpTrack, "packaging">): boolean {
   return track.packaging === "locmaf";
 }
@@ -1842,15 +1817,9 @@ export function createLocmafTrackState(
 ): LocmafTrackState {
   const headers = getLocmafHeaderConstants();
   let locPayload = ensureUint8Array(locmafInitSegment);
-
-  try {
-    const parsedInit = parseLocmafInit(locmafInitSegment);
-    if (parsedInit.headerId !== headers.moov) {
-      throw new Error(`unsupported locmaf init header ${parsedInit.headerId}`);
-    }
+  const parsedInit = maybeParseLocmafInit(locmafInitSegment);
+  if (parsedInit?.headerId === headers.moov) {
     locPayload = parsedInit.locPayload;
-  } catch {
-    // Backward compatibility for pre-framed test fixtures / older catalogs.
   }
 
   const reconstructedInit = decompressLocmafInit(
@@ -1870,34 +1839,31 @@ export function initializeLocmafTrack(
   initSegment: Uint8Array | ArrayBuffer,
 ): InitializedLocmafTrack {
   const initBytes = ensureUint8Array(initSegment);
+  const parsedInit = maybeParseLocmafInit(initBytes);
 
-  try {
-    const parsedInit = parseLocmafInit(initBytes);
-    if (parsedInit.headerId === getLocmafHeaderConstants().moov) {
-      return {
-        state: createLocmafTrackState(track, initBytes),
-        initWasReconstructed: true,
-      };
-    }
-  } catch {
-    // Not a framed locmaf init.
-  }
-
-  try {
-    return {
-      state: {
-        initContext: extractInitContextFromInitSegment(initBytes),
-        initSegment: initBytes,
-        moofDecoder: new LocmafMoofDeltaDecoder(),
-      },
-      initWasReconstructed: false,
-    };
-  } catch {
+  if (parsedInit?.headerId === getLocmafHeaderConstants().moov) {
     return {
       state: createLocmafTrackState(track, initBytes),
       initWasReconstructed: true,
     };
   }
+
+  const initContext = maybeExtractInitContext(initBytes);
+  if (initContext) {
+    return {
+      state: {
+        initContext,
+        initSegment: initBytes,
+        moofDecoder: new LocmafMoofDeltaDecoder(),
+      },
+      initWasReconstructed: false,
+    };
+  }
+
+  return {
+    state: createLocmafTrackState(track, initBytes),
+    initWasReconstructed: true,
+  };
 }
 
 export function decompressMoof(
@@ -1927,22 +1893,10 @@ export function decompressMoofWithTrackInfo(
     state.initContext,
     mdatPayload.byteLength,
   );
-  const mdat = createLocmafMdatBox(mdatPayload);
+  const mdat = createLocmafMdatBytes(mdatPayload);
 
   return {
-    bytes: assembleCmafFile({
-      initSegment: new Uint8Array(),
-      moof: moof.box,
-      mdat,
-    }),
+    bytes: concatBytes(moof.bytes, mdat),
     trackInfo: moof.trackInfo,
   };
-}
-
-export function decompressLocmafFragment(
-  payload: Uint8Array | ArrayBuffer,
-  sequenceNumber: number,
-  state: LocmafTrackState,
-): Uint8Array {
-  return decompressMoof(payload, sequenceNumber, state);
 }

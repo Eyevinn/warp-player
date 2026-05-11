@@ -14,13 +14,9 @@ import {
   decompressMoof,
   decompressMoofWithTrackInfo,
   extractTrackMetadataFromInitSegment,
+  moofLocmafIDs,
 } from "./locmaf";
 
-const SAMPLE_SIZES_FIELD_ID = 1;
-const DEFAULT_SAMPLE_SIZE_FIELD_ID = 6;
-const BASE_MEDIA_DECODE_TIME_FIELD_ID = 10;
-const SAMPLE_COUNT_FIELD_ID = 16;
-const SAMPLE_COMPOSITION_TIME_OFFSETS_FIELD_ID = 5;
 const TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT = 0x000800;
 
 async function loadFixture(name: string): Promise<Uint8Array> {
@@ -37,7 +33,7 @@ async function loadReferenceInit(): Promise<Uint8Array> {
 }
 
 async function loadLocmafInitObject(): Promise<Uint8Array> {
-  return loadFixture("Locmaf-init-encoding");
+  return loadFixture("LOCMAF-init-encoding");
 }
 
 async function loadLocmafInitPayload(): Promise<Uint8Array> {
@@ -45,11 +41,11 @@ async function loadLocmafInitPayload(): Promise<Uint8Array> {
 }
 
 async function loadFullMoofObject(index: number): Promise<Uint8Array> {
-  return loadFixture(`Locmaf-full-moof-object-${index + 1}`);
+  return loadFixture(`LOCMAF-full-moof-object-${index + 1}`);
 }
 
 async function loadDeltaMoofObject(index: number): Promise<Uint8Array> {
-  return loadFixture(`Locmaf-delta-moof-object-${index + 1}`);
+  return loadFixture(`LOCMAF-delta-moof-object-${index + 1}`);
 }
 
 async function loadLocmafFragmentSequence(): Promise<Uint8Array[]> {
@@ -372,7 +368,7 @@ describe("locmaf reconstruction", () => {
 
     const deltaObject = parseLocmafObject(await loadDeltaMoofObject(0));
     const fields = separateLocmafFields(deltaObject.locPayload);
-    fields.delete(BASE_MEDIA_DECODE_TIME_FIELD_ID);
+    fields.delete(moofLocmafIDs.baseMediaDecodeTime);
 
     const derivedDelta = buildLocmafObject(
       deltaObject.headerId,
@@ -414,12 +410,12 @@ describe("locmaf reconstruction", () => {
     const parsedObject = parseLocmafObject(originalPayload);
     const fields = separateLocmafFields(parsedObject.locPayload);
     expect(originalSummary.sampleCount).toBe(1);
-    expect(fields.get(SAMPLE_COUNT_FIELD_ID)).toBeDefined();
+    expect(fields.get(moofLocmafIDs.sampleCount)).toBeDefined();
 
-    if (fields.has(SAMPLE_SIZES_FIELD_ID)) {
-      fields.delete(SAMPLE_SIZES_FIELD_ID);
+    if (fields.has(moofLocmafIDs.sampleSizes)) {
+      fields.delete(moofLocmafIDs.sampleSizes);
     }
-    fields.delete(DEFAULT_SAMPLE_SIZE_FIELD_ID);
+    fields.delete(moofLocmafIDs.defaultSampleSize);
 
     const reconstructedObject = buildLocmafObject(
       parsedObject.headerId,
@@ -440,12 +436,12 @@ describe("locmaf reconstruction", () => {
     expect(reconstructedSummary.sampleCount).toBe(1);
     expect(
       separateLocmafFields(encodeLocmafFields(fields)).has(
-        SAMPLE_SIZES_FIELD_ID,
+        moofLocmafIDs.sampleSizes,
       ),
     ).toBe(false);
     expect(
       separateLocmafFields(encodeLocmafFields(fields)).has(
-        DEFAULT_SAMPLE_SIZE_FIELD_ID,
+        moofLocmafIDs.defaultSampleSize,
       ),
     ).toBe(false);
     expect(reconstructedSummary.baseMediaDecodeTime).toBe(
@@ -460,7 +456,7 @@ describe("locmaf reconstruction", () => {
     const parsedObject = parseLocmafObject(await loadFullMoofObject(0));
     const fields = separateLocmafFields(parsedObject.locPayload);
 
-    fields.delete(SAMPLE_COUNT_FIELD_ID);
+    fields.delete(moofLocmafIDs.sampleCount);
 
     const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
 
@@ -483,7 +479,7 @@ describe("locmaf reconstruction", () => {
     const parsedObject = parseLocmafObject(await loadFullMoofObject(1));
     const fields = separateLocmafFields(parsedObject.locPayload);
 
-    fields.delete(SAMPLE_COMPOSITION_TIME_OFFSETS_FIELD_ID);
+    fields.delete(moofLocmafIDs.sampleCompositionTimeOffsets);
 
     const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
     const fragment = decompressMoof(
