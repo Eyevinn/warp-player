@@ -135,27 +135,26 @@ type LocmafBox =
   | RawBox;
 
 const moovLocmafIDs = {
-  codecConfigurationBox: 1,
-  colr: 3,
-  pasp: 5,
-  chnl: 7,
-  defaultConstantIV: 9,
-  defaultKID: 11,
-  format: 8,
   movieTimescale: 2,
+  tkhdFlags: 4,
   mediaTime: 6,
-  channelCount: 14,
-  sampleRate: 16,
-  schemeType: 18,
-  defaultCryptByteBlock: 20,
-  defaultSkipByteBlock: 22,
-  defaultPerSampleIVSize: 24,
-  defaultConstantIVSize: 26,
-  defaultSampleDuration: 28,
-  defaultSampleSize: 30,
-  defaultSampleFlags: 32,
-  tkhdFlags: 34,
-  tencVersion: 36,
+  format: 8,
+  colr: 1,
+  pasp: 3,
+  channelCount: 10,
+  chnl: 5,
+  codecConfigurationBox: 7,
+  schemeType: 12,
+  defaultKID: 9,
+  defaultConstantIV: 11,
+  tencVersion: 14,
+  defaultCryptByteBlock: 16,
+  defaultSkipByteBlock: 18,
+  defaultPerSampleIVSize: 20,
+  defaultConstantIVSize: 22,
+  defaultSampleDuration: 24,
+  defaultSampleSize: 26,
+  defaultSampleFlags: 28,
 } as const;
 
 const moofLocmafIDs = {
@@ -466,6 +465,10 @@ function readMoofFieldValueList(fieldId: number, value: Uint8Array): bigint[] {
   return isSignedFullMoofField(fieldId)
     ? readSignedVarintList(value)
     : readVarintList(value);
+}
+
+function isRawMoofField(fieldId: number): boolean {
+  return fieldId === moofLocmafIDs.initializationVector;
 }
 
 function encodeMoofFieldValueList(
@@ -943,7 +946,7 @@ function buildInitBoxes(
     type: "trak",
     boxes: [
       tkhd,
-      ...(mediaTime !== undefined ? [createEditBox(mediaTime)] : []),
+      ...(mediaTime === BigInt(0) ? [createEditBox(mediaTime)] : []),
       mdia,
     ],
   };
@@ -1058,10 +1061,7 @@ function createSencBox(
   sampleCount: number,
   perSampleIVSize: number,
 ): ExtendedSampleEncryptionBox | undefined {
-  const ivValues = maybeGetVarintList(
-    fieldMap,
-    moofLocmafIDs.initializationVector,
-  );
+  const ivValues = fieldMap.get(moofLocmafIDs.initializationVector);
   const subsampleCounts = maybeGetVarintList(
     fieldMap,
     moofLocmafIDs.subsampleCount,
@@ -1083,7 +1083,7 @@ function createSencBox(
     if (perSampleIVSize === 0) {
       throw new Error("locmaf moof includes IV data but IV size is zero");
     }
-    if (ivValues.length !== sampleCount * perSampleIVSize) {
+    if (ivValues.byteLength !== sampleCount * perSampleIVSize) {
       throw new Error("locmaf IV field length does not match sample count");
     }
   }
@@ -1106,10 +1106,9 @@ function createSencBox(
 
     if (ivValues) {
       const start = sampleIndex * perSampleIVSize;
-      sample.initializationVector = Uint8Array.from(
-        ivValues
-          .slice(start, start + perSampleIVSize)
-          .map((value) => asSafeNumber(value, "sample IV byte")),
+      sample.initializationVector = ivValues.slice(
+        start,
+        start + perSampleIVSize,
       );
     }
 
@@ -1448,6 +1447,11 @@ function applyMoofDelta(
     }
 
     const previousValue = previous.get(fieldId);
+    if (isRawMoofField(fieldId)) {
+      current.set(fieldId, new Uint8Array(deltaValue));
+      continue;
+    }
+
     if (fieldId % 2 === 0) {
       const nextValue =
         readSingleSignedVarint(deltaValue) +
