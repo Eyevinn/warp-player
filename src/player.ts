@@ -3122,7 +3122,7 @@ export class Player {
     track: WarpTrack,
     kind: "video" | "audio",
     obj: MOQObject,
-  ): { data: ArrayBuffer; trackInfo?: MediaTrackInfo } {
+  ): { data: ArrayBuffer; trackInfo?: MediaTrackInfo } | undefined {
     const type = kind === "video" ? "Video" : "Audio";
     const logPrefix = `[${type}MediaBuffer]`;
 
@@ -3145,6 +3145,9 @@ export class Player {
       sequenceNumber,
       locmafState,
     );
+    if (!fragment) {
+      return undefined;
+    }
 
     return {
       data: this.asExactArrayBuffer(fragment.bytes, logPrefix),
@@ -3340,6 +3343,9 @@ export class Player {
               "video",
               obj as MOQObject,
             );
+            if (!decoded) {
+              return;
+            }
             obj.data = decoded.data;
 
             if (!this.videoMediaBuffer || !this.videoMediaSegmentBuffer) {
@@ -3886,6 +3892,9 @@ export class Player {
           "audio",
           obj as MOQObject,
         );
+        if (!decoded) {
+          return;
+        }
         obj.data = decoded.data;
 
         // Make sure audio buffers are initialized

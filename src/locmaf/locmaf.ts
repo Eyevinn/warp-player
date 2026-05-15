@@ -49,6 +49,13 @@ const LOCMAF_HEADER_MOOV = 21;
 const LOCMAF_HEADER_MOOF = 23;
 const LOCMAF_HEADER_MOOF_DELTA = 25;
 
+// Highest LOCMAF wire-format version this decoder understands. The CMSF
+// catalog Track advertises `locmafVersion` whenever packaging == "locmaf".
+// New top-level object kinds are forward-compatible via skip-unknown, but
+// behavioural changes inside existing kinds (e.g. the absolute BMDT
+// override in delta moof) require receivers to gate on this string.
+export const LOCMAF_SUPPORTED_VERSION = "0.1";
+
 const DEFAULT_TRACK_ID = 1;
 const DEFAULT_MOVIE_BRANDS = ["iso6", "cmfc", "mp41"];
 const DEFAULT_MOVIE_RATE = 1;
@@ -916,7 +923,7 @@ function buildInitBoxes(
     type: "trak",
     boxes: [
       tkhd,
-      ...(mediaTime === BigInt(0) ? [createEditBox(mediaTime)] : []),
+      ...(mediaTime !== undefined ? [createEditBox(mediaTime)] : []),
       mdia,
     ],
   };
@@ -1399,10 +1406,18 @@ function applyMoofDelta(
   context: LocmafInitContext,
 ): RawFieldMap {
   const current = cloneFieldMap(previous);
-  current.set(
-    moofLocmafIDs.baseMediaDecodeTime,
-    encodeQuicVarint(deriveNextBaseMediaDecodeTime(previous, context)),
-  );
+  const explicitBMDT = delta.get(moofLocmafIDs.baseMediaDecodeTime);
+  if (explicitBMDT !== undefined) {
+    current.set(
+      moofLocmafIDs.baseMediaDecodeTime,
+      new Uint8Array(explicitBMDT),
+    );
+  } else {
+    current.set(
+      moofLocmafIDs.baseMediaDecodeTime,
+      encodeQuicVarint(deriveNextBaseMediaDecodeTime(previous, context)),
+    );
+  }
 
   const deletedFields = maybeGetVarintList(delta, moofDeltaDeletedLocmafID);
   if (deletedFields) {
@@ -1413,6 +1428,9 @@ function applyMoofDelta(
 
   for (const [fieldId, deltaValue] of delta.entries()) {
     if (fieldId === moofDeltaDeletedLocmafID) {
+      continue;
+    }
+    if (fieldId === moofLocmafIDs.baseMediaDecodeTime) {
       continue;
     }
 
@@ -1811,6 +1829,23 @@ export function isLocmafTrack(track: Pick<WarpTrack, "packaging">): boolean {
   return track.packaging === "locmaf";
 }
 
+function assertLocmafVersion(
+  track: Pick<WarpTrack, "name" | "locmafVersion">,
+): void {
+  const version = track.locmafVersion;
+  if (version === undefined) {
+    console.warn(
+      `[locmaf] track ${track.name ?? "<unnamed>"} has packaging=locmaf but no locmafVersion; assuming ${LOCMAF_SUPPORTED_VERSION}`,
+    );
+    return;
+  }
+  if (version !== LOCMAF_SUPPORTED_VERSION) {
+    throw new Error(
+      `unsupported locmafVersion "${version}" on track ${track.name ?? "<unnamed>"}; this decoder supports "${LOCMAF_SUPPORTED_VERSION}"`,
+    );
+  }
+}
+
 export function createLocmafTrackState(
   track: WarpTrack,
   locmafInitSegment: Uint8Array | ArrayBuffer,
@@ -1838,6 +1873,7 @@ export function initializeLocmafTrack(
   track: WarpTrack,
   initSegment: Uint8Array | ArrayBuffer,
 ): InitializedLocmafTrack {
+  assertLocmafVersion(track);
   const initBytes = ensureUint8Array(initSegment);
   const parsedInit = maybeParseLocmafInit(initBytes);
 
@@ -1870,20 +1906,26 @@ export function decompressMoof(
   payload: Uint8Array | ArrayBuffer,
   sequenceNumber: number,
   state: LocmafTrackState,
-): Uint8Array {
-  return decompressMoofWithTrackInfo(payload, sequenceNumber, state).bytes;
+): Uint8Array | undefined {
+  return decompressMoofWithTrackInfo(payload, sequenceNumber, state)?.bytes;
 }
 
 export function decompressMoofWithTrackInfo(
   payload: Uint8Array | ArrayBuffer,
   sequenceNumber: number,
   state: LocmafTrackState,
-): { bytes: Uint8Array; trackInfo: MediaTrackInfo } {
+): { bytes: Uint8Array; trackInfo: MediaTrackInfo } | undefined {
   const { headerId, locPayload, mdatPayload } = parseLocmafObject(payload);
   const headers = getLocmafHeaderConstants();
 
   if (headerId !== headers.moof && headerId !== headers.moofDelta) {
-    throw new Error(`unsupported locmaf moof header ${headerId}`);
+    // Skip unrecognised top-level object kinds so receivers can interoperate
+    // with future LOCMAF additions (e.g. prft, sidx). See draft LOCMAF
+    // "Forward extensibility" / "Top-level object IDs".
+    console.warn(
+      `[locmaf] skipping unknown object header_id=${headerId} payloadLength=${locPayload.byteLength}`,
+    );
+    return undefined;
   }
 
   const moof = state.moofDecoder.decode(
