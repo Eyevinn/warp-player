@@ -44,6 +44,8 @@ export interface WarpTrack {
   namespace?: string;
   /** Payload encapsulation type: "cmaf", "loc", "mediatimeline", "eventtimeline". Required. */
   packaging?: string;
+  /** LOCMAF wire-format version. Present only when packaging is "locmaf". */
+  locmafVersion?: string;
   /** Whether new objects will be added to the track. Required. */
   isLive?: boolean;
   /** Role of content: "video", "audio", "subtitle", "caption", "audiodescription", etc. */

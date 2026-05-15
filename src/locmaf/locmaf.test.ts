@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { jest } from "@jest/globals";
 import { defaultReaderConfig, readIsoBoxes } from "@svta/cml-iso-bmff";
 
 import type { WarpTrack } from "../warpcatalog";
 
+import type { LocmafTrackState } from "./locmaf";
 import {
   createLocmafTrackState,
   initializeLocmafTrack,
@@ -16,6 +18,30 @@ import {
   extractTrackMetadataFromInitSegment,
   moofLocmafIDs,
 } from "./locmaf";
+
+function decompressMoofOrFail(
+  payload: Uint8Array | ArrayBuffer,
+  sequenceNumber: number,
+  state: LocmafTrackState,
+): Uint8Array {
+  const bytes = decompressMoof(payload, sequenceNumber, state);
+  if (!bytes) {
+    throw new Error("expected decompressMoof to return bytes");
+  }
+  return bytes;
+}
+
+function decompressMoofWithTrackInfoOrFail(
+  payload: Uint8Array | ArrayBuffer,
+  sequenceNumber: number,
+  state: LocmafTrackState,
+): NonNullable<ReturnType<typeof decompressMoofWithTrackInfo>> {
+  const result = decompressMoofWithTrackInfo(payload, sequenceNumber, state);
+  if (!result) {
+    throw new Error("expected decompressMoofWithTrackInfo to return a result");
+  }
+  return result;
+}
 
 const TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT = 0x000800;
 
@@ -61,6 +87,7 @@ function buildTrack(referenceInit: Uint8Array): WarpTrack {
   return {
     name: "video",
     packaging: "locmaf",
+    locmafVersion: "0.1",
     codec: metadata.codec,
     timescale: metadata.timescale,
     width: metadata.width,
@@ -323,11 +350,27 @@ describe("locmaf reconstruction", () => {
       locmafInit,
     );
 
-    const normal0 = decompressMoof(await loadFullMoofObject(0), 1, normalState);
-    const normal1 = decompressMoof(await loadFullMoofObject(1), 2, normalState);
+    const normal0 = decompressMoofOrFail(
+      await loadFullMoofObject(0),
+      1,
+      normalState,
+    );
+    const normal1 = decompressMoofOrFail(
+      await loadFullMoofObject(1),
+      2,
+      normalState,
+    );
 
-    const delta0 = decompressMoof(await loadFullMoofObject(0), 1, deltaState);
-    const delta1 = decompressMoof(await loadDeltaMoofObject(0), 2, deltaState);
+    const delta0 = decompressMoofOrFail(
+      await loadFullMoofObject(0),
+      1,
+      deltaState,
+    );
+    const delta1 = decompressMoofOrFail(
+      await loadDeltaMoofObject(0),
+      2,
+      deltaState,
+    );
 
     expect(summarizeMoof(normal0)).toEqual(summarizeMoof(delta0));
     expect(summarizeMoof(normal1)).toEqual(summarizeMoof(delta1));
@@ -338,7 +381,7 @@ describe("locmaf reconstruction", () => {
     const referenceInit = await loadReferenceInit();
     const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
 
-    const result = decompressMoofWithTrackInfo(
+    const result = decompressMoofWithTrackInfoOrFail(
       await loadFullMoofObject(1),
       2,
       state,
@@ -364,7 +407,7 @@ describe("locmaf reconstruction", () => {
     const referenceInit = await loadReferenceInit();
     const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
 
-    decompressMoof(await loadFullMoofObject(0), 1, state);
+    decompressMoofOrFail(await loadFullMoofObject(0), 1, state);
 
     const deltaObject = parseLocmafObject(await loadDeltaMoofObject(0));
     const fields = separateLocmafFields(deltaObject.locPayload);
@@ -375,13 +418,13 @@ describe("locmaf reconstruction", () => {
       encodeLocmafFields(fields),
       deltaObject.mdatPayload,
     );
-    const derivedMoof = decompressMoof(derivedDelta, 2, state);
+    const derivedMoof = decompressMoofOrFail(derivedDelta, 2, state);
 
     const normalState = createLocmafTrackState(
       buildTrack(referenceInit),
       locmafInit,
     );
-    const normalMoof = decompressMoof(
+    const normalMoof = decompressMoofOrFail(
       await loadFullMoofObject(1),
       2,
       normalState,
@@ -404,7 +447,11 @@ describe("locmaf reconstruction", () => {
       buildTrack(referenceInit),
       locmafInit,
     );
-    const originalMoof = decompressMoof(originalPayload, 1, originalState);
+    const originalMoof = decompressMoofOrFail(
+      originalPayload,
+      1,
+      originalState,
+    );
     const originalSummary = summarizeMoof(originalMoof);
 
     const parsedObject = parseLocmafObject(originalPayload);
@@ -426,7 +473,7 @@ describe("locmaf reconstruction", () => {
       buildTrack(referenceInit),
       locmafInit,
     );
-    const reconstructed = decompressMoof(
+    const reconstructed = decompressMoofOrFail(
       reconstructedObject,
       1,
       reconstructedState,
@@ -482,7 +529,7 @@ describe("locmaf reconstruction", () => {
     fields.delete(moofLocmafIDs.sampleCompositionTimeOffsets);
 
     const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
-    const fragment = decompressMoof(
+    const fragment = decompressMoofOrFail(
       buildLocmafObject(
         parsedObject.headerId,
         encodeLocmafFields(fields),
@@ -520,7 +567,7 @@ describe("locmaf reconstruction", () => {
     const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
     const locmafFragments = await loadLocmafFragmentSequence();
     for (const [index, locmafFragment] of locmafFragments.entries()) {
-      const fragment = decompressMoof(locmafFragment, index + 1, state);
+      const fragment = decompressMoofOrFail(locmafFragment, index + 1, state);
       const cmafFile = concatBytes(reconstructedInit.bytes, fragment);
 
       const parsed = readIsoBoxes(cmafFile, defaultReaderConfig());
@@ -562,7 +609,7 @@ describe("locmaf reconstruction", () => {
     const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
     const locmafFragments = await loadLocmafFragmentSequence();
     for (const [index, locmafFragment] of locmafFragments.entries()) {
-      const fragment = decompressMoof(locmafFragment, index + 1, state);
+      const fragment = decompressMoofOrFail(locmafFragment, index + 1, state);
       bytesParts.push(fragment);
     }
     const bytes = Uint8Array.from(
@@ -632,15 +679,23 @@ describe("locmaf reconstruction", () => {
       locmafInit,
     );
 
-    const fragment0 = decompressMoof(await loadFullMoofObject(0), 1, state);
-    const fragment1 = decompressMoof(await loadDeltaMoofObject(0), 2, state);
+    const fragment0 = decompressMoofOrFail(
+      await loadFullMoofObject(0),
+      1,
+      state,
+    );
+    const fragment1 = decompressMoofOrFail(
+      await loadDeltaMoofObject(0),
+      2,
+      state,
+    );
 
-    const expected0 = decompressMoof(
+    const expected0 = decompressMoofOrFail(
       await loadFullMoofObject(0),
       1,
       expectedState,
     );
-    const expected1 = decompressMoof(
+    const expected1 = decompressMoofOrFail(
       await loadFullMoofObject(1),
       2,
       expectedState,
@@ -663,5 +718,88 @@ describe("locmaf reconstruction", () => {
     expect(actual1Boxes.map((box) => box.type)).toEqual(["moof", "mdat"]);
     expect(Array.from(fragment0)).toEqual(Array.from(expected0));
     expect(Array.from(fragment1)).toEqual(Array.from(expected1));
+  });
+
+  it("rejects a track that advertises an unsupported locmafVersion", async () => {
+    const locmafInit = await loadLocmafInitObject();
+    const referenceInit = await loadReferenceInit();
+    const track = { ...buildTrack(referenceInit), locmafVersion: "0.2" };
+
+    expect(() => initializeLocmafTrack(track, locmafInit)).toThrow(
+      /unsupported locmafVersion "0\.2"/,
+    );
+  });
+
+  it("warns when a locmaf track omits locmafVersion but still decodes", async () => {
+    const locmafInit = await loadLocmafInitObject();
+    const referenceInit = await loadReferenceInit();
+    const track = { ...buildTrack(referenceInit) };
+    delete track.locmafVersion;
+
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {
+      /* suppress expected warning */
+    });
+    try {
+      const initialized = initializeLocmafTrack(track, locmafInit);
+      expect(initialized.initWasReconstructed).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("no locmafVersion"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("skips unrecognised top-level object kinds with a warning", async () => {
+    const locmafInit = await loadLocmafInitObject();
+    const referenceInit = await loadReferenceInit();
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
+
+    const fullPayload = await loadFullMoofObject(0);
+    decompressMoofOrFail(fullPayload, 1, state);
+
+    const parsed = parseLocmafObject(fullPayload);
+    const unknown = buildLocmafObject(
+      27,
+      parsed.locPayload,
+      parsed.mdatPayload,
+    );
+
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {
+      /* suppress expected warning */
+    });
+    try {
+      expect(decompressMoof(unknown, 2, state)).toBeUndefined();
+      expect(decompressMoofWithTrackInfo(unknown, 2, state)).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("honours an absolute baseMediaDecodeTime override in a delta moof", async () => {
+    const locmafInit = await loadLocmafInitObject();
+    const referenceInit = await loadReferenceInit();
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
+
+    decompressMoofOrFail(await loadFullMoofObject(0), 1, state);
+
+    const deltaObject = parseLocmafObject(await loadDeltaMoofObject(0));
+    const fields = separateLocmafFields(deltaObject.locPayload);
+    const overrideBmdt = 0x1_2345_6789;
+    fields.set(
+      moofLocmafIDs.baseMediaDecodeTime,
+      encodeQuicVarint(overrideBmdt),
+    );
+
+    const overriddenDelta = buildLocmafObject(
+      deltaObject.headerId,
+      encodeLocmafFields(fields),
+      deltaObject.mdatPayload,
+    );
+    const moofBytes = decompressMoofOrFail(overriddenDelta, 2, state);
+
+    const summary = summarizeMoof(moofBytes);
+    expect(summary.baseMediaDecodeTime).toBe(overrideBmdt);
   });
 });
