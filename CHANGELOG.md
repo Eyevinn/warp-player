@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-17
+
+LOCMAF (compressed CMAF) packaging support, decoded into CMAF and played
+through the MSE pipeline.
+
+### Added
+
+- LOCMAF packaging support for tracks advertising `packaging: "locmaf"`
+  in the CMSF catalog
+  - New `src/locmaf/` module parses LOCMAF init, full `moof`, and delta
+    `moof` objects per the v0.1 wire format and reconstructs standard
+    CMAF init / media segments for the MSE pipeline
+  - Header type values `LOCMAF_HEADER_MOOV` (21), `LOCMAF_HEADER_MOOF`
+    (23), and `LOCMAF_HEADER_MOOF_DELTA` (25), with QUIC varint encoding
+    for length fields
+  - `baseMediaDecodeTime` is derived in delta `moof` headers; sample
+    sizes are inferred when only one sample is sent per CMAF chunk
+  - Receiver gated on `locmafVersion` from the catalog Track
+    (`LOCMAF_SUPPORTED_VERSION = "0.1"`)
+  - Engine capability matrix updated so `locmaf` routes through MSE
+    alongside `cmaf`
+- Test fixtures and unit tests under `test/locmaf-test-files/` and
+  `src/locmaf/locmaf.test.ts`
+
+### Changed
+
+- MSE pipeline avoids double parsing of LOCMAF/CMAF chunks
+- Test media moved to `test/media-files/`
+- Bumped development dependencies (TypeScript 5.9 → 6.0,
+  `@commitlint/cli` 20 → 21, `@commitlint/config-conventional`)
+- Bumped production dependencies (5-update group)
+- Bumped `actions/dependency-review-action` GitHub Action from 4 to 5
+
 ## [0.8.0] - 2026-05-05
 
 WebCodecs LOC playback engine alongside the existing MSE/CMAF engine.
@@ -190,12 +223,16 @@ Full [MOQ Transport draft-14][moqt-d14] compliance release.
 - Support for video and audio track selection
 - Real-time playback metrics (buffer levels, latency, playback rate)
 
-[Unreleased]: https://github.com/Eyevinn/warp-player/releases/tag/v0.6.0...HEAD
-[0.6.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.4.1...v0.5.0
-[0.4.1]: https://github.com/Eyevinn/warp-player/releases/tag/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.2.0...v0.4.0
-[0.2.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.1.0...v0.2.0
+[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Eyevinn/warp-player/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/Eyevinn/warp-player/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/Eyevinn/warp-player/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/Eyevinn/warp-player/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/Eyevinn/warp-player/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/Eyevinn/warp-player/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/Eyevinn/warp-player/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Eyevinn/warp-player/compare/v0.2.0...v0.4.0
+[0.2.0]: https://github.com/Eyevinn/warp-player/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Eyevinn/warp-player/releases/tag/v0.1.0
 [moqt-d11]: https://datatracker.ietf.org/doc/draft-ietf-moq-transport/11/
 [moqt-d14]: https://datatracker.ietf.org/doc/draft-ietf-moq-transport/14/

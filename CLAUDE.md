@@ -63,8 +63,10 @@ from the UI) and uses the MSF/CMSF catalog format
 Playback runs through one of two interchangeable render pipelines selected
 per session:
 
-- **MSE / CMAF** for `packaging: "cmaf"` tracks, with optional EME for
-  encrypted content (Widevine, PlayReady, FairPlay, ClearKey).
+- **MSE / CMAF** for `packaging: "cmaf"` and `packaging: "locmaf"` tracks,
+  with optional EME for encrypted content (Widevine, PlayReady, FairPlay,
+  ClearKey). LOCMAF objects are decompressed into standard CMAF before
+  being appended to the `SourceBuffer`.
 - **WebCodecs / LOC** for `packaging: "loc"` tracks (draft-mzanaty-moq-loc),
   clear content only, supporting AVC and HEVC video plus AAC and Opus audio.
 
@@ -94,6 +96,8 @@ warp-player/
 │   │   ├── aac.ts        # AAC AudioSpecificConfig from catalog metadata
 │   │   ├── opus.ts       # Opus ID-header (OpusHead) builder
 │   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
+│   ├── locmaf/           # LOCMAF (compressed CMAF) helpers for MSE pipeline
+│   │   └── locmaf.ts     # Parse LOCMAF init/moof/delta-moof, rebuild CMAF
 │   ├── pipeline/         # Pluggable render pipelines
 │   │   ├── index.ts                # IPlaybackPipeline + capability matrix
 │   │   ├── msePipeline.ts          # MSE/CMAF pipeline (with optional EME)
@@ -237,12 +241,23 @@ The codebase is organized into several key modules:
       and read LOC property `0x06` (capture timestamp in microseconds
       since the Unix epoch)
 
+11. **LOCMAF helpers** (`src/locmaf/locmaf.ts`):
+    - Parses LOCMAF (compressed CMAF) objects per the v0.1 wire format:
+      `LOCMAF_HEADER_MOOV` (21), `LOCMAF_HEADER_MOOF` (23), and
+      `LOCMAF_HEADER_MOOF_DELTA` (25), with QUIC varint length fields
+    - Reconstructs standard CMAF init segments and `moof+mdat` media
+      segments so the existing MSE pipeline can consume them unchanged
+    - Derives `baseMediaDecodeTime` for delta `moof` objects and infers
+      sample sizes when only one sample is sent per CMAF chunk
+    - Gated on `LOCMAF_SUPPORTED_VERSION` (`"0.1"`) advertised via the
+      CMSF Track's `locmafVersion` field
+
 ## Technical Notes
 
 1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00) and LOC packaging (draft-mzanaty-moq-loc).
 2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
-4. Media data is delivered either as CMAF (ISO BMFF) for the MSE pipeline or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
+4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF compressed variant, which is decompressed back into CMAF before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
 5. The client includes proper handling of bidirectional control streams for subscribing to content.
 6. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source.
 7. Encrypted content always flows through the MSE engine; production browsers do not expose Encrypted WebCodecs.
@@ -259,7 +274,8 @@ The codebase is organized into several key modules:
 - Catalog parsing follows draft-ietf-moq-msf-00 with CMSF
   (draft-ietf-moq-cmsf-00) for CMAF packaging
 - Tracks identify their payload format via the `packaging` field
-  (`"cmaf"`, `"loc"`, ...)
+  (`"cmaf"`, `"locmaf"`, `"loc"`, ...). LOCMAF tracks additionally
+  advertise `locmafVersion`, which the receiver gates on.
 - Tracks that omit `namespace` inherit it from the announce namespace of
   the catalog track they were delivered on (see
   `WarpCatalogManager.processCatalog`)
@@ -268,6 +284,24 @@ The codebase is organized into several key modules:
 - Content protection is signaled through the `contentProtections` array
   at the catalog root and referenced by `contentProtectionRefIDs` on
   individual tracks (CMSF ContentProtection signaling)
+
+### LOCMAF Packaging
+
+LOCMAF is a compressed CMAF wire format used by mlmpub to cut bytes on
+the wire while staying compatible with the MSE pipeline:
+
+- Parsed by `src/locmaf/locmaf.ts` and routed through the MSE engine
+  (LOCMAF is unsupported on the WebCodecs engine — see the capability
+  matrix in `src/pipeline/index.ts`)
+- Three object kinds with QUIC varint length fields:
+  - `LOCMAF_HEADER_MOOV` (21) — init segment
+  - `LOCMAF_HEADER_MOOF` (23) — full media segment
+  - `LOCMAF_HEADER_MOOF_DELTA` (25) — delta media segment, with
+    `baseMediaDecodeTime` derived from prior state
+- Receivers gate on the CMSF Track's `locmafVersion`. The current
+  supported version constant is `LOCMAF_SUPPORTED_VERSION = "0.1"`
+- The pipeline reconstructs a standard CMAF `moof+mdat` so the existing
+  MSE `MediaBuffer` / `MediaSegmentBuffer` code path is reused unchanged
 
 ### WebCodecs LOC Pipeline
 
