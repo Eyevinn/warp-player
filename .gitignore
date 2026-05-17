@@ -30,3 +30,10 @@ logs
 # Local Claude configuration
 CLAUDE.local.md
 .claude/settings.local.json
+
+# Playwright MCP scratch dir
+.playwright-mcp/
+
+# Local screenshots and release-tarball scratch artifacts
+*.png
+dist-*.tgz
