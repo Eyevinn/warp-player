@@ -1201,15 +1201,9 @@ function buildMoofFromFields(
     (fieldMap.has(moofLocmafIDs.sampleDescriptionIndex)
       ? TFHD_SAMPLE_DESCRIPTION_INDEX_PRESENT
       : 0) |
-    (fieldMap.has(moofLocmafIDs.defaultSampleDuration)
-      ? TFHD_DEFAULT_SAMPLE_DURATION_PRESENT
-      : 0) |
-    (fieldMap.has(moofLocmafIDs.defaultSampleSize)
-      ? TFHD_DEFAULT_SAMPLE_SIZE_PRESENT
-      : 0) |
-    (fieldMap.has(moofLocmafIDs.defaultSampleFlags)
-      ? TFHD_DEFAULT_SAMPLE_FLAGS_PRESENT
-      : 0);
+    TFHD_DEFAULT_SAMPLE_DURATION_PRESENT |
+    TFHD_DEFAULT_SAMPLE_SIZE_PRESENT |
+    TFHD_DEFAULT_SAMPLE_FLAGS_PRESENT;
 
   const tfhd: TrackFragmentHeaderBox = {
     type: "tfhd",
@@ -1229,26 +1223,20 @@ function buildMoofFromFields(
     );
   }
 
-  if (fieldMap.has(moofLocmafIDs.defaultSampleDuration)) {
-    tfhd.defaultSampleDuration = asSafeNumber(
-      tfhdDefaultSampleDuration,
-      "default sample duration",
-    );
-  }
+  tfhd.defaultSampleDuration = asSafeNumber(
+    tfhdDefaultSampleDuration,
+    "default sample duration",
+  );
 
-  if (fieldMap.has(moofLocmafIDs.defaultSampleSize)) {
-    tfhd.defaultSampleSize = asSafeNumber(
-      tfhdDefaultSampleSize,
-      "default sample size",
-    );
-  }
+  tfhd.defaultSampleSize = asSafeNumber(
+    tfhdDefaultSampleSize,
+    "default sample size",
+  );
 
-  if (fieldMap.has(moofLocmafIDs.defaultSampleFlags)) {
-    tfhd.defaultSampleFlags = asSafeNumber(
-      tfhdDefaultSampleFlags,
-      "default sample flags",
-    );
-  }
+  tfhd.defaultSampleFlags = asSafeNumber(
+    tfhdDefaultSampleFlags,
+    "default sample flags",
+  );
 
   const samples: TrackRunSample[] = Array.from(
     { length: sampleCount },

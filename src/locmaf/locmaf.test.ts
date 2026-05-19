@@ -18,6 +18,9 @@ import {
 } from "./locmaf";
 
 const TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT = 0x000800;
+const TFHD_DEFAULT_SAMPLE_DURATION_PRESENT = 0x000008;
+const TFHD_DEFAULT_SAMPLE_SIZE_PRESENT = 0x000010;
+const TFHD_DEFAULT_SAMPLE_FLAGS_PRESENT = 0x000020;
 
 async function loadFixture(name: string): Promise<Uint8Array> {
   const fixturePath = path.resolve(
@@ -357,6 +360,51 @@ describe("locmaf reconstruction", () => {
     );
     expect(result.trackInfo.sequenceNumber).toBe(summary.sequenceNumber);
     expect(result.trackInfo.duration).toBe(expectedDuration);
+  });
+
+  it("marks trex default sample fields present in reconstructed tfhd", async () => {
+    const locmafInit = await loadLocmafInitObject();
+    const referenceInit = await loadReferenceInit();
+    const referenceBoxes = readIsoBoxes(referenceInit, defaultReaderConfig());
+    const moov = referenceBoxes.find(
+      (box: { type: string }) => box.type === "moov",
+    );
+    const trex =
+      moov && "boxes" in moov ? findBox(moov.boxes, "trex") : undefined;
+    const state = createLocmafTrackState(buildTrack(referenceInit), locmafInit);
+    const fields = new Map<number, Uint8Array>([
+      [moofLocmafIDs.baseMediaDecodeTime, encodeQuicVarint(0)],
+      [moofLocmafIDs.sampleCount, encodeQuicVarint(2)],
+      [
+        moofLocmafIDs.sampleSizes,
+        concatBytes(encodeQuicVarint(1), encodeQuicVarint(1)),
+      ],
+    ]);
+
+    const moofBytes = decompressMoof(
+      buildLocmafObject(
+        23,
+        encodeLocmafFields(fields),
+        Uint8Array.of(0xaa, 0xbb),
+      ),
+      1,
+      state,
+    );
+    const summary = summarizeMoof(moofBytes);
+
+    expect(trex).toBeDefined();
+    expect(summary.tfhdFlags & TFHD_DEFAULT_SAMPLE_DURATION_PRESENT).toBe(
+      TFHD_DEFAULT_SAMPLE_DURATION_PRESENT,
+    );
+    expect(summary.tfhdFlags & TFHD_DEFAULT_SAMPLE_SIZE_PRESENT).toBe(
+      TFHD_DEFAULT_SAMPLE_SIZE_PRESENT,
+    );
+    expect(summary.tfhdFlags & TFHD_DEFAULT_SAMPLE_FLAGS_PRESENT).toBe(
+      TFHD_DEFAULT_SAMPLE_FLAGS_PRESENT,
+    );
+    expect(summary.defaultSampleDuration).toBe(trex?.defaultSampleDuration);
+    expect(summary.defaultSampleSize).toBe(trex?.defaultSampleSize);
+    expect(summary.defaultSampleFlags).toBe(trex?.defaultSampleFlags);
   });
 
   it("derives baseMediaDecodeTime for delta moofs", async () => {
