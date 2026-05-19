@@ -45,9 +45,9 @@ import type {
 import type { MediaTrackInfo } from "../buffer/mediaBuffer";
 import type { WarpTrack } from "../warpcatalog";
 
-const LOCMAF_HEADER_MOOV = 21;
-const LOCMAF_HEADER_MOOF = 23;
-const LOCMAF_HEADER_MOOF_DELTA = 25;
+const LOCMAF_INIT_SEGMENT = 21;
+const LOCMAF_FULL_MOOF = 23;
+const LOCMAF_DELTA_MOOF = 25;
 
 const DEFAULT_TRACK_ID = 1;
 const DEFAULT_MOVIE_BRANDS = ["iso6", "cmfc", "mp41"];
@@ -183,7 +183,7 @@ export const moofLocmafIDs = {
   bytesOfProtectedData: 15,
 } as const;
 
-const moofDeltaDeletedLocmafID = 17;
+const moofDeltaDeletedLocmafIDs = 17;
 
 export interface LocmafTrackMetadata {
   codec?: string;
@@ -1392,7 +1392,7 @@ function applyMoofDelta(
     encodeQuicVarint(deriveNextBaseMediaDecodeTime(previous, context)),
   );
 
-  const deletedFields = maybeGetVarintList(delta, moofDeltaDeletedLocmafID);
+  const deletedFields = maybeGetVarintList(delta, moofDeltaDeletedLocmafIDs);
   if (deletedFields) {
     for (const deletedField of deletedFields) {
       current.delete(asSafeNumber(deletedField, "deleted locmaf id"));
@@ -1400,7 +1400,7 @@ function applyMoofDelta(
   }
 
   for (const [fieldId, deltaValue] of delta.entries()) {
-    if (fieldId === moofDeltaDeletedLocmafID) {
+    if (fieldId === moofDeltaDeletedLocmafIDs) {
       continue;
     }
 
@@ -1647,7 +1647,7 @@ class LocmafMoofDeltaDecoder {
   private previous?: RawFieldMap;
 
   public decode(
-    headerType: typeof LOCMAF_HEADER_MOOF | typeof LOCMAF_HEADER_MOOF_DELTA,
+    headerType: typeof LOCMAF_FULL_MOOF | typeof LOCMAF_DELTA_MOOF,
     payload: Uint8Array | ArrayBuffer,
     sequenceNumber: number,
     context: LocmafInitContext,
@@ -1656,9 +1656,9 @@ class LocmafMoofDeltaDecoder {
     const fieldMap = separateFields(ensureUint8Array(payload));
     let currentFields: RawFieldMap;
 
-    if (headerType === LOCMAF_HEADER_MOOF) {
+    if (headerType === LOCMAF_FULL_MOOF) {
       currentFields = cloneFieldMap(fieldMap);
-    } else if (headerType === LOCMAF_HEADER_MOOF_DELTA) {
+    } else if (headerType === LOCMAF_DELTA_MOOF) {
       if (!this.previous) {
         throw new Error("cannot decode delta moof without a previous moof");
       }
@@ -1712,14 +1712,14 @@ function createLocmafMdatBytes(
 }
 
 function getLocmafHeaderConstants(): Readonly<{
-  moov: typeof LOCMAF_HEADER_MOOV;
-  moof: typeof LOCMAF_HEADER_MOOF;
-  moofDelta: typeof LOCMAF_HEADER_MOOF_DELTA;
+  moov: typeof LOCMAF_INIT_SEGMENT;
+  moof: typeof LOCMAF_FULL_MOOF;
+  moofDelta: typeof LOCMAF_DELTA_MOOF;
 }> {
   return {
-    moov: LOCMAF_HEADER_MOOV,
-    moof: LOCMAF_HEADER_MOOF,
-    moofDelta: LOCMAF_HEADER_MOOF_DELTA,
+    moov: LOCMAF_INIT_SEGMENT,
+    moof: LOCMAF_FULL_MOOF,
+    moofDelta: LOCMAF_DELTA_MOOF,
   } as const;
 }
 
