@@ -34,7 +34,7 @@
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.9.1",
     "@typescript-eslint/eslint-plugin": "^8.59.3",
     "@typescript-eslint/parser": "^8.59.3",
     "copy-webpack-plugin": "^14.0.0",
@@ -54,7 +54,7 @@
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.3",
-    "webpack": "^5.106.2",
+    "webpack": "^5.107.2",
     "webpack-cli": "^7.0.2",
     "webpack-dev-server": "^5.2.4"
   },
