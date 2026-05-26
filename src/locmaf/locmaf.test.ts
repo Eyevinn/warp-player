@@ -723,10 +723,10 @@ describe("locmaf reconstruction", () => {
   it("rejects a track that advertises an unsupported locmafVersion", async () => {
     const locmafInit = await loadLocmafInitObject();
     const referenceInit = await loadReferenceInit();
-    const track = { ...buildTrack(referenceInit), locmafVersion: "0.2" };
+    const track = { ...buildTrack(referenceInit), locmafVersion: "9.9" };
 
     expect(() => initializeLocmafTrack(track, locmafInit)).toThrow(
-      /unsupported locmafVersion "0\.2"/,
+      /unsupported locmafVersion "9\.9"/,
     );
   });
 

@@ -25,7 +25,6 @@ import type {
   MovieHeaderBox,
   ParsedIsoBox,
   ProtectionSchemeInformationBox,
-  SampleEncryptionBox,
   SampleDescriptionBox,
   SampleTableBox,
   SoundMediaHeaderBox,
@@ -45,16 +44,35 @@ import type {
 import type { MediaTrackInfo } from "../buffer/mediaBuffer";
 import type { WarpTrack } from "../warpcatalog";
 
+import {
+  SENC_USE_SUBSAMPLE_ENCRYPTION,
+  writeSenc,
+  type ExtendedSampleEncryptionBox,
+  type SampleEncryptionEntry,
+} from "./senc";
+import {
+  decompressMoofV02WithTrackInfo,
+  initializeLocmafV02Track,
+  type LocmafV02TrackState,
+} from "./v02/decoder";
+
 const LOCMAF_HEADER_MOOV = 21;
 const LOCMAF_HEADER_MOOF = 23;
 const LOCMAF_HEADER_MOOF_DELTA = 25;
 
-// Highest LOCMAF wire-format version this decoder understands. The CMSF
-// catalog Track advertises `locmafVersion` whenever packaging == "locmaf".
-// New top-level object kinds are forward-compatible via skip-unknown, but
-// behavioural changes inside existing kinds (e.g. the absolute BMDT
-// override in delta moof) require receivers to gate on this string.
+// LOCMAF wire-format versions this decoder understands. The CMSF catalog
+// Track advertises `locmafVersion` whenever packaging == "locmaf". The
+// version selects which sub-decoder runs: v0.1 (legacy wire format) is in
+// this file, v0.2 (current IETF draft) lives in ./v02/decoder.
+//
+// New top-level object kinds inside a given version are forward-compatible
+// via skip-unknown, but behavioural differences between major versions
+// require receivers to gate on this string.
 export const LOCMAF_SUPPORTED_VERSION = "0.1";
+export const LOCMAF_SUPPORTED_VERSIONS: ReadonlySet<string> = new Set([
+  "0.1",
+  "0.2",
+]);
 
 const DEFAULT_TRACK_ID = 1;
 const DEFAULT_MOVIE_BRANDS = ["iso6", "cmfc", "mp41"];
@@ -73,7 +91,6 @@ const TRUN_SAMPLE_DURATION_PRESENT = 0x000100;
 const TRUN_SAMPLE_SIZE_PRESENT = 0x000200;
 const TRUN_SAMPLE_FLAGS_PRESENT = 0x000400;
 const TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT = 0x000800;
-const SENC_USE_SUBSAMPLE_ENCRYPTION = 0x000002;
 
 const audioSampleEntryTypes = [
   "Opus",
@@ -126,19 +143,6 @@ type ExtendedTrackEncryptionBox = TrackEncryptionBox & {
   defaultCryptByteBlock?: number;
   defaultSkipByteBlock?: number;
   defaultConstantIv?: Uint8Array;
-};
-
-type SampleEncryptionEntry = {
-  initializationVector?: Uint8Array;
-  subsampleEncryption?: Array<{
-    bytesOfClearData: number;
-    bytesOfProtectedData: number;
-  }>;
-};
-
-type ExtendedSampleEncryptionBox = SampleEncryptionBox & {
-  type: "senc";
-  samples: SampleEncryptionEntry[];
 };
 
 type LocmafBox =
@@ -226,9 +230,14 @@ export interface LocmafMoofDecompressionResult {
 }
 
 export interface LocmafTrackState {
+  /** Wire-format version this state belongs to. */
+  version: string;
   initContext: LocmafInitContext;
   initSegment: Uint8Array;
-  moofDecoder: LocmafMoofDeltaDecoder;
+  /** v0.1 moof decoder; populated only when version === "0.1". */
+  moofDecoder?: LocmafMoofDeltaDecoder;
+  /** v0.2 state; populated only when version === "0.2". */
+  v02?: LocmafV02TrackState;
 }
 
 export interface InitializedLocmafTrack {
@@ -1526,37 +1535,6 @@ function readSampleEntryMetadata(initSegment: Uint8Array): LocmafTrackMetadata {
   };
 }
 
-function writeSenc(box: ExtendedSampleEncryptionBox): IsoBoxWriteView {
-  let size = 8 + 4 + 4;
-  for (const sample of box.samples) {
-    size += sample.initializationVector?.byteLength ?? 0;
-    if (box.flags & SENC_USE_SUBSAMPLE_ENCRYPTION) {
-      size += 2;
-      size += (sample.subsampleEncryption?.length ?? 0) * 6;
-    }
-  }
-
-  const writer = new IsoBoxWriteView("senc", size);
-  writer.writeFullBox(box.version, box.flags);
-  writer.writeUint(box.sampleCount, 4);
-
-  for (const sample of box.samples) {
-    if (sample.initializationVector) {
-      writer.writeBytes(sample.initializationVector);
-    }
-    if (box.flags & SENC_USE_SUBSAMPLE_ENCRYPTION) {
-      const subsamples = sample.subsampleEncryption ?? [];
-      writer.writeUint(subsamples.length, 2);
-      for (const subsample of subsamples) {
-        writer.writeUint(subsample.bytesOfClearData, 2);
-        writer.writeUint(subsample.bytesOfProtectedData, 4);
-      }
-    }
-  }
-
-  return writer;
-}
-
 function writeTenc(box: ExtendedTrackEncryptionBox): IsoBoxWriteView {
   let size = 8 + 4 + 1 + 1 + 1 + 1 + 16;
   if (box.defaultIsEncrypted !== 0 && box.defaultIvSize === 0) {
@@ -1831,25 +1809,51 @@ export function isLocmafTrack(track: Pick<WarpTrack, "packaging">): boolean {
 
 function assertLocmafVersion(
   track: Pick<WarpTrack, "name" | "locmafVersion">,
-): void {
+): string {
   const version = track.locmafVersion;
   if (version === undefined) {
     console.warn(
       `[locmaf] track ${track.name ?? "<unnamed>"} has packaging=locmaf but no locmafVersion; assuming ${LOCMAF_SUPPORTED_VERSION}`,
     );
-    return;
+    return LOCMAF_SUPPORTED_VERSION;
   }
-  if (version !== LOCMAF_SUPPORTED_VERSION) {
+  if (!LOCMAF_SUPPORTED_VERSIONS.has(version)) {
+    const supported = Array.from(LOCMAF_SUPPORTED_VERSIONS)
+      .map((v) => `"${v}"`)
+      .join(", ");
     throw new Error(
-      `unsupported locmafVersion "${version}" on track ${track.name ?? "<unnamed>"}; this decoder supports "${LOCMAF_SUPPORTED_VERSION}"`,
+      `unsupported locmafVersion "${version}" on track ${track.name ?? "<unnamed>"}; this decoder supports ${supported}`,
     );
   }
+  return version;
 }
 
 export function createLocmafTrackState(
   track: WarpTrack,
   locmafInitSegment: Uint8Array | ArrayBuffer,
 ): LocmafTrackState {
+  const version = track.locmafVersion ?? LOCMAF_SUPPORTED_VERSION;
+  if (version === "0.2") {
+    const initialized = initializeLocmafV02Track(locmafInitSegment);
+    return {
+      version,
+      initContext: {
+        trackId: initialized.state.initContext.trackId,
+        timescale: initialized.state.initContext.timescale,
+        defaultSampleDescriptionIndex:
+          initialized.state.initContext.defaultSampleDescriptionIndex,
+        defaultSampleDuration:
+          initialized.state.initContext.defaultSampleDuration,
+        defaultSampleSize: initialized.state.initContext.defaultSampleSize,
+        defaultSampleFlags: initialized.state.initContext.defaultSampleFlags,
+        defaultPerSampleIVSize:
+          initialized.state.initContext.defaultPerSampleIVSize,
+      },
+      initSegment: initialized.state.initSegment,
+      v02: initialized.state,
+    };
+  }
+
   const headers = getLocmafHeaderConstants();
   let locPayload = ensureUint8Array(locmafInitSegment);
   const parsedInit = maybeParseLocmafInit(locmafInitSegment);
@@ -1863,6 +1867,7 @@ export function createLocmafTrackState(
   );
 
   return {
+    version,
     initContext: reconstructedInit.context,
     initSegment: reconstructedInit.bytes,
     moofDecoder: new LocmafMoofDeltaDecoder(),
@@ -1873,8 +1878,17 @@ export function initializeLocmafTrack(
   track: WarpTrack,
   initSegment: Uint8Array | ArrayBuffer,
 ): InitializedLocmafTrack {
-  assertLocmafVersion(track);
+  const version = assertLocmafVersion(track);
   const initBytes = ensureUint8Array(initSegment);
+
+  if (version === "0.2") {
+    // v0.2 init is raw CMAF — hand it back unchanged for MSE.
+    return {
+      state: createLocmafTrackState(track, initBytes),
+      initWasReconstructed: false,
+    };
+  }
+
   const parsedInit = maybeParseLocmafInit(initBytes);
 
   if (parsedInit?.headerId === getLocmafHeaderConstants().moov) {
@@ -1888,6 +1902,7 @@ export function initializeLocmafTrack(
   if (initContext) {
     return {
       state: {
+        version,
         initContext,
         initSegment: initBytes,
         moofDecoder: new LocmafMoofDeltaDecoder(),
@@ -1915,6 +1930,15 @@ export function decompressMoofWithTrackInfo(
   sequenceNumber: number,
   state: LocmafTrackState,
 ): { bytes: Uint8Array; trackInfo: MediaTrackInfo } | undefined {
+  if (state.version === "0.2") {
+    if (!state.v02) {
+      throw new Error("locmaf v0.2 track state is missing v02 substate");
+    }
+    return decompressMoofV02WithTrackInfo(payload, sequenceNumber, state.v02);
+  }
+  if (!state.moofDecoder) {
+    throw new Error("locmaf v0.1 track state is missing moofDecoder");
+  }
   const { headerId, locPayload, mdatPayload } = parseLocmafObject(payload);
   const headers = getLocmafHeaderConstants();
 
