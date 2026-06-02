@@ -378,6 +378,13 @@ export function initializeLocmafV02Track(
   if (!trex) {
     throw new Error("locmaf v0.2: init data does not contain trex");
   }
+  // The reconstructed moof's tfhd.track_ID is taken from the track's
+  // tkhd.track_ID — the authoritative track identifier — falling back to
+  // trex.track_ID. In conformant CMAF the two are equal; preferring tkhd
+  // matches the Go reference decoder (internal/locmafv02 reconstructMoof).
+  const tkhd = findBoxRecursive(moov.boxes, "tkhd") as
+    | { trackId?: number }
+    | undefined;
   const mdhd = findBoxRecursive(moov.boxes, "mdhd") as
     | { timescale: number }
     | undefined;
@@ -391,7 +398,7 @@ export function initializeLocmafV02Track(
   return {
     state: {
       initContext: {
-        trackId: trex.trackId,
+        trackId: tkhd?.trackId ?? trex.trackId,
         timescale: mdhd.timescale,
         defaultSampleDescriptionIndex: trex.defaultSampleDescriptionIndex,
         defaultSampleDuration: trex.defaultSampleDuration,
