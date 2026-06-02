@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-02
+
+LOCMAF v0.2 wire-format support, decoded alongside v0.1 and played through
+the MSE pipeline.
+
+### Added
+
+- LOCMAF v0.2 decoder under `src/locmaf/v02/`, selected per track via the
+  catalog `locmafVersion` field
+  - Version dispatch in `src/locmaf/locmaf.ts`: `LOCMAF_SUPPORTED_VERSIONS`
+    now accepts both `"0.1"` and `"0.2"`, routing v0.2 tracks to the new
+    decoder while v0.1 continues through the existing path
+  - Shared `senc` (sample encryption) helpers in `src/locmaf/senc.ts`
+    reused across versions
+  - Unit tests and a test encoder for the v0.2 wire format
+
+### Fixed
+
+- v0.2 `moof` `track_ID` is derived from the init segment's `tkhd`,
+  falling back to `trex`
+
 ## [0.9.0] - 2026-05-17
 
 LOCMAF (compressed CMAF) packaging support, decoded into CMAF and played
@@ -223,7 +244,8 @@ Full [MOQ Transport draft-14][moqt-d14] compliance release.
 - Support for video and audio track selection
 - Real-time playback metrics (buffer levels, latency, playback rate)
 
-[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Eyevinn/warp-player/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Eyevinn/warp-player/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Eyevinn/warp-player/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/Eyevinn/warp-player/compare/v0.7.0...v0.7.1
