@@ -241,16 +241,24 @@ The codebase is organized into several key modules:
       and read LOC property `0x06` (capture timestamp in microseconds
       since the Unix epoch)
 
-11. **LOCMAF helpers** (`src/locmaf/locmaf.ts`):
-    - Parses LOCMAF (compressed CMAF) objects per the v0.1 wire format:
-      `LOCMAF_HEADER_MOOV` (21), `LOCMAF_HEADER_MOOF` (23), and
-      `LOCMAF_HEADER_MOOF_DELTA` (25), with QUIC varint length fields
-    - Reconstructs standard CMAF init segments and `moof+mdat` media
-      segments so the existing MSE pipeline can consume them unchanged
-    - Derives `baseMediaDecodeTime` for delta `moof` objects and infers
-      sample sizes when only one sample is sent per CMAF chunk
-    - Gated on `LOCMAF_SUPPORTED_VERSION` (`"0.1"`) advertised via the
-      CMSF Track's `locmafVersion` field
+11. **LOCMAF helpers** (`src/locmaf/locmaf.ts`, `src/locmaf/v02/`):
+    - Two independent decoders selected by the CMSF Track's
+      `locmafVersion`; `LOCMAF_SUPPORTED_VERSIONS` is `{"0.1", "0.2"}`
+      (an absent value assumes `LOCMAF_SUPPORTED_VERSION = "0.1"`)
+    - **v0.1** (`locmaf.ts`): parses `LOCMAF_HEADER_MOOV` (21),
+      `LOCMAF_HEADER_MOOF` (23), and `LOCMAF_HEADER_MOOF_DELTA` (25);
+      reconstructs both the CMAF init segment and `moof+mdat`
+    - **v0.2** (`v02/decoder.ts`): the normative spec is the IETF draft
+      [draft-einarsson-moq-locmaf](https://datatracker.ietf.org/doc/draft-einarsson-moq-locmaf/).
+      Init data is raw CMAF (no LOCMAF wrapping); only the `moof` is
+      coded, as Full (23) / Delta (25) property blocks of (field_id,
+      value) pairs (even IDs = scalar varints, odd IDs = length-prefixed).
+      Reconstructs `senc`/`saio`/`saiz` for ClearKey/ECCP, derives the
+      moof `track_ID` from `tkhd` (fallback `trex`), and unpacks the
+      5-bit `sample_flags` and zigzag composition-time offsets
+    - Both reconstruct standard CMAF so the existing MSE pipeline consumes
+      them unchanged; delta `moof` objects derive `baseMediaDecodeTime`
+      from prior in-group state
 
 ## Technical Notes
 
@@ -288,20 +296,29 @@ The codebase is organized into several key modules:
 ### LOCMAF Packaging
 
 LOCMAF is a compressed CMAF wire format used by mlmpub to cut bytes on
-the wire while staying compatible with the MSE pipeline:
+the wire while staying compatible with the MSE pipeline. The player
+supports two versions side-by-side, selected per track by the CMSF
+Track's `locmafVersion` (`LOCMAF_SUPPORTED_VERSIONS = {"0.1", "0.2"}`):
 
-- Parsed by `src/locmaf/locmaf.ts` and routed through the MSE engine
-  (LOCMAF is unsupported on the WebCodecs engine — see the capability
-  matrix in `src/pipeline/index.ts`)
-- Three object kinds with QUIC varint length fields:
+- Routed through the MSE engine only (LOCMAF is unsupported on the
+  WebCodecs engine — see the capability matrix in `src/pipeline/index.ts`)
+- **v0.1** (`src/locmaf/locmaf.ts`) — three object kinds with QUIC varint
+  length fields, including a LOCMAF-coded init segment:
   - `LOCMAF_HEADER_MOOV` (21) — init segment
   - `LOCMAF_HEADER_MOOF` (23) — full media segment
   - `LOCMAF_HEADER_MOOF_DELTA` (25) — delta media segment, with
     `baseMediaDecodeTime` derived from prior state
-- Receivers gate on the CMSF Track's `locmafVersion`. The current
-  supported version constant is `LOCMAF_SUPPORTED_VERSION = "0.1"`
-- The pipeline reconstructs a standard CMAF `moof+mdat` so the existing
-  MSE `MediaBuffer` / `MediaSegmentBuffer` code path is reused unchanged
+- **v0.2** (`src/locmaf/v02/decoder.ts`) — specified by the IETF draft
+  [draft-einarsson-moq-locmaf](https://datatracker.ietf.org/doc/draft-einarsson-moq-locmaf/).
+  Init data is raw CMAF (handed to MSE unchanged); only the `moof` is
+  coded, as Full (23) / Delta (25) property blocks of (field_id, value)
+  pairs under the even-scalar / odd-length-prefixed parity rule.
+  Supports `senc`/`saio`/`saiz` reconstruction (ClearKey/ECCP), the 5-bit
+  `sample_flags` packing, and zigzag-coded signed composition-time
+  offsets. The reconstructed moof `track_ID` comes from `tkhd` (fallback
+  `trex`)
+- Both reconstruct a standard CMAF `moof+mdat` so the existing MSE
+  `MediaBuffer` / `MediaSegmentBuffer` code path is reused unchanged
 
 ### WebCodecs LOC Pipeline
 
