@@ -619,10 +619,10 @@ function decodeDeltaProperties(
   // sample_count changed, truncate or extend (with previous-as-0) lists that
   // were carried over from the previous state.
   for (const fid of PER_SAMPLE_LIST_FIELDS) {
-    if (!lists.has(fid)) {
+    const list = lists.get(fid);
+    if (!list) {
       continue;
     }
-    const list = lists.get(fid)!;
     // sampleSizes (ID 1) carries n−1 entries per §15.1; every other
     // per-sample list carries n.
     const want =
