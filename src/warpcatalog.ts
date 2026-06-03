@@ -1,6 +1,6 @@
 /**
  * MSF/CMSF catalog interface definitions and helper functions.
- * Based on draft-ietf-moq-msf-00 (MOQT Streaming Format) and
+ * Based on draft-ietf-moq-msf-01 (MOQT Streaming Format) and
  * draft-ietf-moq-cmsf-00 (CMAF MOQT Streaming Format).
  */
 import { ILogger, LoggerFactory } from "./logger";
@@ -9,28 +9,49 @@ import { ILogger, LoggerFactory } from "./logger";
 type CatalogCallback = (catalog: WarpCatalog) => void;
 
 /**
+ * MSF catalog version this player understands (draft-ietf-moq-msf-01).
+ * Per the spec a subscriber MUST NOT attempt to parse a catalog version it
+ * does not understand, so catalogs advertising any other version are rejected.
+ */
+export const MSF_SUPPORTED_VERSION = "draft-01";
+
+/**
  * MSF catalog interface definition.
- * Conforms to draft-ietf-moq-msf-00.
+ * Conforms to draft-ietf-moq-msf-01.
  */
 export interface WarpCatalog {
-  /** MSF version (currently 1). Required. */
-  version: number;
+  /** MSF version. Required. A JSON string; must be "draft-01". */
+  version: string;
   /** Wallclock time at which this catalog was generated, in ms since Unix epoch. */
   generatedAt?: number;
   /** Signals that a previously live broadcast is complete. */
   isComplete?: boolean;
-  /** Indicates this catalog object is a delta (partial) update. */
-  deltaUpdate?: boolean;
-  /** Delta processing instruction: tracks to add. */
-  addTracks?: WarpTrack[];
-  /** Delta processing instruction: tracks to remove. */
-  removeTracks?: WarpTrack[];
-  /** Delta processing instruction: tracks to clone. */
-  cloneTracks?: WarpTrack[];
+  /** Ordered delta-update operations (draft-ietf-moq-msf-01 Section 5.1.6). */
+  deltaUpdate?: DeltaOperation[];
   /** Array of track objects. Required for non-delta updates. */
   tracks: WarpTrack[];
+  /** Initialization data referenced by tracks via initRef (Section 5.1.7). */
+  initDataList?: InitDataEntry[];
   /**DRM information that tracks reference */
   contentProtections?: ContentProtection[];
+}
+
+/** A single delta-update operation (draft-ietf-moq-msf-01 Section 5.1.6). */
+export interface DeltaOperation {
+  /** Operation type. */
+  op: "add" | "remove" | "clone";
+  /** Tracks the operation applies to. */
+  tracks: WarpTrack[];
+}
+
+/** An entry in the catalog-level initDataList (draft-ietf-moq-msf-01 Section 5.1.7). */
+export interface InitDataEntry {
+  /** Reference id, unique within the catalog. */
+  id: string;
+  /** Reference type. Currently only "inline" is defined. */
+  type: string;
+  /** Init payload as defined by type. For "inline": Base64-encoded init data. */
+  data: string;
 }
 
 /**
@@ -56,8 +77,8 @@ export interface WarpTrack {
   renderGroup?: number;
   /** Group of tracks that are alternate versions of one another. */
   altGroup?: number;
-  /** Base64 encoded initialization data (e.g. CMAF init segment). */
-  initData?: string;
+  /** Reference to an entry in the catalog initDataList (Section 5.2.13). */
+  initRef?: string;
   /** Track names this track depends on. */
   depends?: string[];
   /** Temporal layer/sub-layer encoding identifier. */
@@ -162,6 +183,16 @@ export class WarpCatalogManager {
         return;
       }
 
+      // Reject catalog versions we do not understand (draft-ietf-moq-msf-01
+      // §5.1.1: a subscriber MUST NOT parse an unknown catalog version).
+      if (data.version !== MSF_SUPPORTED_VERSION) {
+        this.logger.error(
+          `Unsupported MSF catalog version "${data.version}"; ` +
+            `expected "${MSF_SUPPORTED_VERSION}"`,
+        );
+        return;
+      }
+
       if (announceNamespace) {
         const inherit = (tracks?: WarpTrack[]) => {
           tracks?.forEach((t) => {
@@ -171,9 +202,7 @@ export class WarpCatalogManager {
           });
         };
         inherit(data.tracks);
-        inherit(data.addTracks);
-        inherit(data.removeTracks);
-        inherit(data.cloneTracks);
+        data.deltaUpdate?.forEach((op) => inherit(op.tracks));
       }
 
       // Store the catalog data
@@ -224,6 +253,21 @@ export class WarpCatalogManager {
    */
   public getCatalog(): WarpCatalog | null {
     return this.catalogData;
+  }
+
+  /**
+   * Resolve a track's initRef against the catalog initDataList.
+   * @param track The track whose init data to resolve
+   * @returns The Base64-encoded init data, or undefined if the track has no
+   *   initRef or the referenced entry is missing.
+   */
+  public getInitData(track: WarpTrack): string | undefined {
+    if (!track.initRef || !this.catalogData?.initDataList) {
+      return undefined;
+    }
+    return this.catalogData.initDataList.find(
+      (entry) => entry.id === track.initRef,
+    )?.data;
   }
 
   /**

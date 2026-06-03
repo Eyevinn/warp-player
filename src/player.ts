@@ -807,18 +807,14 @@ export class Player {
     const catalogSection = document.getElementById("catalog-section");
     const catalogJson = document.getElementById("catalogJson");
     if (catalogJson) {
-      // Shorten initData for readability
+      // Shorten the shared initDataList payloads for readability.
       const displayCatalog = {
         ...catalog,
-        tracks: catalog.tracks.map((t: WarpTrack & { initData?: string }) => {
-          if (t.initData && t.initData.length > 40) {
-            return {
-              ...t,
-              initData: t.initData.substring(0, 40) + "...",
-            };
-          }
-          return t;
-        }),
+        initDataList: catalog.initDataList?.map((entry) =>
+          entry.data && entry.data.length > 40
+            ? { ...entry, data: entry.data.substring(0, 40) + "..." }
+            : entry,
+        ),
       };
       catalogJson.textContent = JSON.stringify(displayCatalog, null, 2);
     }
@@ -3074,13 +3070,14 @@ export class Player {
   ): ArrayBuffer {
     const type = kind === "video" ? "Video" : "Audio";
 
-    if (!track.initData) {
+    const initData = this.catalogManager.getInitData(track);
+    if (!initData) {
       throw new Error(
-        `[${type}InitSegment] No initData found for ${kind} track`,
+        `[${type}InitSegment] No init data found for ${kind} track (initRef=${track.initRef})`,
       );
     }
 
-    const encodedInit = this.base64ToArrayBuffer(track.initData);
+    const encodedInit = this.base64ToArrayBuffer(initData);
     this.logger.info(
       `[${type}InitSegment] Decoded init segment: ${encodedInit.byteLength} bytes`,
     );

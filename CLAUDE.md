@@ -58,7 +58,7 @@ WARP Player is a browser-based TypeScript implementation of a media player,
 using the MOQ Transport protocol via WebTransport. It supports MOQ Transport
 draft-14 and draft-16 (negotiated through WebTransport ALPN, can be forced
 from the UI) and uses the MSF/CMSF catalog format
-(draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00) to discover media tracks.
+(draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-00) to discover media tracks.
 
 Playback runs through one of two interchangeable render pipelines selected
 per session:
@@ -124,7 +124,7 @@ warp-player/
 The transport used is MOQ Transport, draft-14 or draft-16 (auto-negotiated
 via WebTransport ALPN strings `moq-00` and `moqt-16`).
 
-For the catalog, the specification used is MSF (draft-ietf-moq-msf-00)
+For the catalog, the specification used is MSF (draft-ietf-moq-msf-01)
 with CMSF (draft-ietf-moq-cmsf-00) for CMAF packaging. LOC packaging
 follows draft-mzanaty-moq-loc.
 
@@ -242,12 +242,9 @@ The codebase is organized into several key modules:
       since the Unix epoch)
 
 11. **LOCMAF helpers** (`src/locmaf/locmaf.ts`, `src/locmaf/v02/`):
-    - Two independent decoders selected by the CMSF Track's
-      `locmafVersion`; `LOCMAF_SUPPORTED_VERSIONS` is `{"0.1", "0.2"}`
-      (an absent value assumes `LOCMAF_SUPPORTED_VERSION = "0.1"`)
-    - **v0.1** (`locmaf.ts`): parses `LOCMAF_HEADER_MOOV` (21),
-      `LOCMAF_HEADER_MOOF` (23), and `LOCMAF_HEADER_MOOF_DELTA` (25);
-      reconstructs both the CMAF init segment and `moof+mdat`
+    - Only LOCMAF **v0.2** is supported; `LOCMAF_SUPPORTED_VERSIONS` is
+      `{"0.2"}` and an absent `locmafVersion` is assumed to be v0.2.
+      `locmaf.ts` is a thin version-gating wrapper over `v02/decoder.ts`.
     - **v0.2** (`v02/decoder.ts`): the normative spec is the IETF draft
       [draft-einarsson-moq-locmaf](https://datatracker.ietf.org/doc/draft-einarsson-moq-locmaf/).
       Init data is raw CMAF (no LOCMAF wrapping); only the `moof` is
@@ -256,13 +253,13 @@ The codebase is organized into several key modules:
       Reconstructs `senc`/`saio`/`saiz` for ClearKey/ECCP, derives the
       moof `track_ID` from `tkhd` (fallback `trex`), and unpacks the
       5-bit `sample_flags` and zigzag composition-time offsets
-    - Both reconstruct standard CMAF so the existing MSE pipeline consumes
-      them unchanged; delta `moof` objects derive `baseMediaDecodeTime`
-      from prior in-group state
+    - Reconstructs standard CMAF so the existing MSE pipeline consumes it
+      unchanged; delta `moof` objects derive `baseMediaDecodeTime` from
+      prior in-group state
 
 ## Technical Notes
 
-1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-00 / draft-ietf-moq-cmsf-00) and LOC packaging (draft-mzanaty-moq-loc).
+1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-00) and LOC packaging (draft-mzanaty-moq-loc).
 2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF compressed variant, which is decompressed back into CMAF before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
@@ -279,16 +276,20 @@ The codebase is organized into several key modules:
 
 ### MSF/CMSF Catalog Format
 
-- Catalog parsing follows draft-ietf-moq-msf-00 with CMSF
+- Catalog parsing follows draft-ietf-moq-msf-01 with CMSF
   (draft-ietf-moq-cmsf-00) for CMAF packaging
 - Tracks identify their payload format via the `packaging` field
   (`"cmaf"`, `"locmaf"`, `"loc"`, ...). LOCMAF tracks additionally
   advertise `locmafVersion`, which the receiver gates on.
+- Initialization data lives in a catalog-level `initDataList`; each track
+  points at an entry by `initRef` (draft-ietf-moq-msf-01). A CMAF track and
+  its LOCMAF counterpart share one entry. Resolve via
+  `WarpCatalogManager.getInitData(track)`.
+- The catalog `version` is a JSON string (`"1"`) in draft-01.
 - Tracks that omit `namespace` inherit it from the announce namespace of
-  the catalog track they were delivered on (see
-  `WarpCatalogManager.processCatalog`)
-- Delta updates via `addTracks` / `removeTracks` / `cloneTracks` are
-  applied on top of the previously delivered catalog
+  the catalog track they were delivered on
+- Delta updates are an ordered `deltaUpdate` array of `{op, tracks}`
+  operations applied on top of the previously delivered catalog
 - Content protection is signaled through the `contentProtections` array
   at the catalog root and referenced by `contentProtectionRefIDs` on
   individual tracks (CMSF ContentProtection signaling)
@@ -296,18 +297,12 @@ The codebase is organized into several key modules:
 ### LOCMAF Packaging
 
 LOCMAF is a compressed CMAF wire format used by mlmpub to cut bytes on
-the wire while staying compatible with the MSE pipeline. The player
-supports two versions side-by-side, selected per track by the CMSF
-Track's `locmafVersion` (`LOCMAF_SUPPORTED_VERSIONS = {"0.1", "0.2"}`):
+the wire while staying compatible with the MSE pipeline. Only **v0.2** is
+supported (`LOCMAF_SUPPORTED_VERSIONS = {"0.2"}`); `src/locmaf/locmaf.ts`
+is a thin version-gating wrapper over `src/locmaf/v02/decoder.ts`:
 
 - Routed through the MSE engine only (LOCMAF is unsupported on the
   WebCodecs engine — see the capability matrix in `src/pipeline/index.ts`)
-- **v0.1** (`src/locmaf/locmaf.ts`) — three object kinds with QUIC varint
-  length fields, including a LOCMAF-coded init segment:
-  - `LOCMAF_HEADER_MOOV` (21) — init segment
-  - `LOCMAF_HEADER_MOOF` (23) — full media segment
-  - `LOCMAF_HEADER_MOOF_DELTA` (25) — delta media segment, with
-    `baseMediaDecodeTime` derived from prior state
 - **v0.2** (`src/locmaf/v02/decoder.ts`) — specified by the IETF draft
   [draft-einarsson-moq-locmaf](https://datatracker.ietf.org/doc/draft-einarsson-moq-locmaf/).
   Init data is raw CMAF (handed to MSE unchanged); only the `moof` is
@@ -317,7 +312,7 @@ Track's `locmafVersion` (`LOCMAF_SUPPORTED_VERSIONS = {"0.1", "0.2"}`):
   `sample_flags` packing, and zigzag-coded signed composition-time
   offsets. The reconstructed moof `track_ID` comes from `tkhd` (fallback
   `trex`)
-- Both reconstruct a standard CMAF `moof+mdat` so the existing MSE
+- Reconstructs a standard CMAF `moof+mdat` so the existing MSE
   `MediaBuffer` / `MediaSegmentBuffer` code path is reused unchanged
 
 ### WebCodecs LOC Pipeline
