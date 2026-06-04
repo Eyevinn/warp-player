@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-04
+
+MSF/CMSF catalog support updated to draft-ietf-moq-msf-01, with the new
+catalog-level init data references and string version signaling.
+
+### Changed
+
+- Catalog parsing now follows draft-ietf-moq-msf-01:
+  - `version` is a JSON string and is validated: only `"draft-01"` is
+    accepted (`MSF_SUPPORTED_VERSION`); catalogs advertising any other
+    version are rejected per §5.1.1
+  - Initialization data lives in a catalog-level `initDataList`, and each
+    track references an entry by `initRef`; a CMAF track and its LOCMAF
+    counterpart share one entry. Resolve via
+    `WarpCatalogManager.getInitData(track)`
+  - Delta updates are an ordered `deltaUpdate` array of `{op, tracks}`
+    operations
+- The catalog viewer truncates the shared `initDataList` payloads for
+  readability instead of the removed per-track `initData` field
+
+### Removed
+
+- LOCMAF v0.1 decoder and its tests; `LOCMAF_SUPPORTED_VERSIONS` is now
+  `{"0.2"}` and an absent `locmafVersion` is assumed to be v0.2.
+  `src/locmaf/locmaf.ts` is a thin v0.2-only wrapper over
+  `src/locmaf/v02/decoder.ts`
+
 ## [0.10.0] - 2026-06-02
 
 LOCMAF v0.2 wire-format support, decoded alongside v0.1 and played through
