@@ -12,6 +12,9 @@ import {
   Unsubscribe,
   PublishNamespaceError,
   UnpublishNamespace,
+  Fetch,
+  FetchTypeStandalone,
+  FetchTypeRelativeJoining,
 } from "./control";
 import { Version } from "./setup";
 import { KeyValuePair } from "./stream";
@@ -578,6 +581,113 @@ describe("BufferCtrlWriter", () => {
       // Verify the buffer was reset and now contains the Subscribe message
       expect(bytes2[0]).toBe(0x03); // Subscribe type
       expect(bytes2.length).not.toBe(bytes1.length);
+    });
+  });
+
+  describe("Fetch message", () => {
+    it("should marshal a relative joining Fetch without namespace/track/range", () => {
+      const msg: Fetch = {
+        kind: Msg.Fetch,
+        requestId: 4n,
+        subscriberPriority: 0,
+        groupOrder: 0,
+        fetchType: FetchTypeRelativeJoining,
+        joiningRequestId: 2n,
+        joiningStart: 0n,
+        params: [],
+      };
+
+      writer.marshalFetch(msg);
+      const bytes = writer.getBytes();
+
+      // Message type (0x16 for Fetch) and 16-bit length
+      expect(bytes[0]).toBe(0x16);
+      const length = (bytes[1] << 8) | bytes[2];
+      expect(length).toBe(bytes.length - 3);
+
+      // requestId, subscriberPriority, groupOrder, fetchType,
+      // joiningRequestId, joiningStart, parameter count — and nothing else
+      expect(Array.from(bytes.slice(3))).toEqual([4, 0, 0, 0x02, 2, 0, 0]);
+    });
+
+    it("should marshal a relative joining Fetch identically on draft-16", () => {
+      const d16Writer = new BufferCtrlWriter(Version.DRAFT_16);
+      const msg: Fetch = {
+        kind: Msg.Fetch,
+        requestId: 4n,
+        subscriberPriority: 0,
+        groupOrder: 0,
+        fetchType: FetchTypeRelativeJoining,
+        joiningRequestId: 2n,
+        joiningStart: 0n,
+        params: [],
+      };
+
+      d16Writer.marshalFetch(msg);
+      const bytes = d16Writer.getBytes();
+
+      expect(bytes[0]).toBe(0x16);
+      expect(Array.from(bytes.slice(3))).toEqual([4, 0, 0, 0x02, 2, 0, 0]);
+    });
+
+    it("should marshal a standalone Fetch with namespace, track and range", () => {
+      const msg: Fetch = {
+        kind: Msg.Fetch,
+        requestId: 6n,
+        subscriberPriority: 0,
+        groupOrder: 0,
+        fetchType: FetchTypeStandalone,
+        namespace: ["ns"],
+        trackName: "catalog",
+        startGroup: 0n,
+        startObject: 0n,
+        endGroup: 0n,
+        endObject: 0n,
+        params: [],
+      };
+
+      writer.marshalFetch(msg);
+      const bytes = writer.getBytes();
+
+      expect(bytes[0]).toBe(0x16);
+      expect(Array.from(bytes.slice(3))).toEqual([
+        6, // requestId
+        0, // subscriberPriority
+        0, // groupOrder
+        0x01, // fetchType standalone
+        1, // namespace tuple count
+        2, // "ns" length
+        0x6e,
+        0x73,
+        7, // "catalog" length
+        0x63,
+        0x61,
+        0x74,
+        0x61,
+        0x6c,
+        0x6f,
+        0x67,
+        0, // startGroup
+        0, // startObject
+        0, // endGroup
+        0, // endObject
+        0, // parameter count
+      ]);
+    });
+
+    it("should reject a joining Fetch without joiningRequestId", () => {
+      const msg: Fetch = {
+        kind: Msg.Fetch,
+        requestId: 8n,
+        subscriberPriority: 0,
+        groupOrder: 0,
+        fetchType: FetchTypeRelativeJoining,
+        params: [],
+      };
+
+      expect(() => writer.marshalFetch(msg)).toThrow(
+        "Missing joiningRequestId for joining fetch",
+      );
     });
   });
 });

@@ -16,6 +16,7 @@ import { EngineChoice, IPlaybackPipeline, resolveEngine } from "./pipeline";
 import { MsePipeline } from "./pipeline/msePipeline";
 import { WebCodecsLocPipeline } from "./pipeline/webcodecsLocPipeline";
 import { Client, DraftVersion } from "./transport/client";
+import { FilterType } from "./transport/control";
 import { MOQObject } from "./transport/tracks";
 import {
   WarpCatalog,
@@ -627,12 +628,13 @@ export class Player {
     // Update the visual selection state
     this.renderNamespaceSelector();
 
-    // Check if we should use FETCH instead of SUBSCRIBE
-    const useFetch = (
-      document.getElementById("useFetchCatalog") as HTMLInputElement
-    )?.checked;
+    // Catalog retrieval mode: "joining" (SUBSCRIBE + relative joining FETCH,
+    // the MSF draft-01 §5 way, default), "subscribe", or "fetch"
+    const catalogMode =
+      (document.getElementById("catalogMode") as HTMLSelectElement)?.value ??
+      "joining";
 
-    if (useFetch) {
+    if (catalogMode === "fetch") {
       this.fetchCatalog(namespace).catch((error) => {
         this.logger.error(
           `Error fetching catalog: ${
@@ -640,10 +642,18 @@ export class Player {
           }`,
         );
       });
-    } else {
+    } else if (catalogMode === "subscribe") {
       this.subscribeToCatalog(namespace).catch((error) => {
         this.logger.error(
           `Error subscribing to catalog: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    } else {
+      this.joiningFetchCatalog(namespace).catch((error) => {
+        this.logger.error(
+          `Error retrieving catalog via joining fetch: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -722,6 +732,96 @@ export class Player {
         }`,
       );
     }
+  }
+
+  /**
+   * Retrieve the catalog the MSF draft-01 §5 way: SUBSCRIBE with Filter Type
+   * Largest Object plus a relative Joining FETCH (offset 0). The FETCH
+   * delivers the latest complete catalog (object 0 of the current group)
+   * plus any deltas up to the live edge; the SUBSCRIBE then carries
+   * subsequent updates. Objects at or before the subscription's largest
+   * location are covered by the FETCH and are skipped on the subscription.
+   */
+  private async joiningFetchCatalog(namespace: string[]): Promise<void> {
+    if (!this.client) {
+      this.logger.error("Cannot retrieve catalog: Not connected");
+      return;
+    }
+    const client = this.client;
+
+    const namespaceStr = namespace.join("/");
+    this.logger.info(
+      `Retrieving catalog via joining FETCH in namespace: ${namespaceStr}`,
+    );
+
+    const applyCatalogObject = (obj: MOQObject, source: string) => {
+      try {
+        const text = new TextDecoder().decode(obj.data);
+        const catalog = JSON.parse(text);
+        this.catalogManager.handleCatalogData(catalog, namespaceStr);
+      } catch (e) {
+        this.logger.error(
+          `Failed to decode catalog data from ${source}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+    };
+
+    // Subscribe first: the joining FETCH is resolved by the publisher from
+    // this subscription, so it must be established before the FETCH is sent.
+    const sub = await client.subscribeTrackWithInfo(
+      namespaceStr,
+      "catalog",
+      (obj: MOQObject) => applyCatalogObject(obj, "catalog subscription"),
+      {
+        filterType: FilterType.LatestObject,
+        skipObjectsUpToLargest: true,
+      },
+    );
+
+    if (this.unregisterCatalogCallback) {
+      this.logger.info("Unregistering previous catalog callback");
+      this.unregisterCatalogCallback();
+    }
+    this.unregisterCatalogCallback = () => {
+      if (this.isDisconnecting) {
+        this.logger.debug("Skipping catalog unsubscribe during disconnect");
+        return;
+      }
+      this.logger.info(
+        `Unsubscribing from catalog track with alias ${sub.trackAlias}`,
+      );
+      this.client?.unsubscribeTrack(sub.trackAlias).catch((err) => {
+        this.logger.error(`Failed to unsubscribe from catalog: ${err}`);
+      });
+    };
+
+    if (!sub.largest) {
+      // Without a largest location a joining FETCH is impossible
+      // (the publisher would reject it with INVALID_RANGE). A legacy
+      // publisher replays the catalog on the subscription instead, so
+      // keep the subscription and rely on that.
+      this.logger.warn(
+        "SUBSCRIBE_OK carried no largest location; skipping joining FETCH " +
+          "and relying on the catalog subscription",
+      );
+      return;
+    }
+
+    this.logger.info(
+      `Catalog subscription established (requestId=${sub.requestId}, ` +
+        `largest group=${sub.largest.group}, object=${sub.largest.object}); ` +
+        `sending relative joining FETCH (offset 0)`,
+    );
+
+    await client.fetchJoiningRelative(sub.requestId, 0n, (obj: MOQObject) =>
+      applyCatalogObject(obj, "joining fetch"),
+    );
+
+    this.logger.info(
+      `Successfully retrieved catalog via joining FETCH in namespace: ${namespaceStr}`,
+    );
   }
 
   /**
