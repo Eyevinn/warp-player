@@ -850,8 +850,12 @@
               <span>●</span> Disconnected
             </div>
             <div class="fetch-option">
-              <input type="checkbox" id="useFetchCatalog" />
-              <label for="useFetchCatalog">Use FETCH for catalog</label>
+              <label for="catalogMode">Catalog retrieval</label>
+              <select id="catalogMode" class="track-select">
+                <option value="joining">SUBSCRIBE + joining FETCH</option>
+                <option value="subscribe">SUBSCRIBE only</option>
+                <option value="fetch">Standalone FETCH</option>
+              </select>
             </div>
           </div>
         </div>

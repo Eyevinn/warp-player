@@ -10,7 +10,12 @@ import {
 } from "./control";
 import * as Setup from "./setup";
 import * as Stream from "./stream";
-import { TracksManager, ObjectCallback } from "./tracks";
+import {
+  TracksManager,
+  ObjectCallback,
+  SubscribeOptions,
+  SubscriptionInfo,
+} from "./tracks";
 import {
   Version,
   isDraft16,
@@ -508,6 +513,55 @@ export class Client {
 
     this.logger.info(`Client subscribing to track ${namespace}:${trackName}`);
     return this.#tracksManager.subscribeTrack(namespace, trackName, callback);
+  }
+
+  /**
+   * Subscribe to a track and return the subscription's request ID and the
+   * largest location from SUBSCRIBE_OK, as needed for a joining FETCH
+   * @param options Filter type and joining-fetch dedup behavior
+   */
+  async subscribeTrackWithInfo(
+    namespace: string,
+    trackName: string,
+    callback: ObjectCallback,
+    options?: SubscribeOptions,
+  ): Promise<SubscriptionInfo> {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot subscribe: Tracks manager not initialized");
+    }
+
+    this.logger.info(`Client subscribing to track ${namespace}:${trackName}`);
+    return this.#tracksManager.subscribeTrackWithInfo(
+      namespace,
+      trackName,
+      callback,
+      options,
+    );
+  }
+
+  /**
+   * Send a Relative Joining FETCH tied to an existing subscription
+   * @param joiningRequestId The request ID of the subscription to join
+   * @param joiningStart Group offset back from the largest group (0 = current group)
+   * @param callback The callback for objects delivered on the FETCH stream
+   */
+  async fetchJoiningRelative(
+    joiningRequestId: bigint,
+    joiningStart: bigint,
+    callback: ObjectCallback,
+  ): Promise<void> {
+    if (!this.#tracksManager) {
+      throw new Error("Cannot fetch: Tracks manager not initialized");
+    }
+
+    this.logger.info(
+      `Client sending joining FETCH for subscription ${joiningRequestId}`,
+    );
+    return this.#tracksManager.fetchJoiningRelative(
+      joiningRequestId,
+      joiningStart,
+      callback,
+    );
   }
 
   /**

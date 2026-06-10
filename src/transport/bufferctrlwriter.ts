@@ -6,6 +6,7 @@ import {
   PublishDone,
   Unsubscribe,
   Fetch,
+  FetchTypeStandalone,
   PublishNamespace,
   PublishNamespaceOk,
   PublishNamespaceError,
@@ -574,7 +575,10 @@ export class BufferCtrlWriter {
   }
 
   /**
-   * Marshals a Fetch message to the buffer (standalone fetch type)
+   * Marshals a Fetch message to the buffer (standalone or joining fetch).
+   * The layout is identical in draft-14 and draft-16 (§9.16): a standalone
+   * fetch carries namespace/track/range inline; a joining fetch carries
+   * only the joining request ID and joining start.
    */
   public marshalFetch(msg: Fetch): BufferCtrlWriter {
     this.marshalWithLength(Id.Fetch, () => {
@@ -582,13 +586,23 @@ export class BufferCtrlWriter {
       this.writeUint8(msg.subscriberPriority);
       this.writeUint8(msg.groupOrder);
       this.writeVarInt62(BigInt(msg.fetchType));
-      // Standalone fetch includes namespace, trackName, start/end
-      this.writeTuple(msg.namespace);
-      this.writeString(msg.trackName);
-      this.writeVarInt62(msg.startGroup);
-      this.writeVarInt62(msg.startObject);
-      this.writeVarInt62(msg.endGroup);
-      this.writeVarInt62(msg.endObject);
+      if (msg.fetchType === FetchTypeStandalone) {
+        if (msg.namespace === undefined || msg.trackName === undefined) {
+          throw new Error("Missing namespace/trackName for standalone fetch");
+        }
+        this.writeTuple(msg.namespace);
+        this.writeString(msg.trackName);
+        this.writeVarInt62(msg.startGroup ?? 0n);
+        this.writeVarInt62(msg.startObject ?? 0n);
+        this.writeVarInt62(msg.endGroup ?? 0n);
+        this.writeVarInt62(msg.endObject ?? 0n);
+      } else {
+        if (msg.joiningRequestId === undefined) {
+          throw new Error("Missing joiningRequestId for joining fetch");
+        }
+        this.writeVarInt62(msg.joiningRequestId);
+        this.writeVarInt62(msg.joiningStart ?? 0n);
+      }
       this.writeKeyValuePairs(msg.params);
     });
     return this;

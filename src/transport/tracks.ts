@@ -10,6 +10,7 @@ import {
   Fetch,
   FetchError,
   FetchTypeStandalone,
+  FetchTypeRelativeJoining,
   FilterType,
   GroupOrder,
   Message,
@@ -50,6 +51,31 @@ export interface MOQObject {
 
 // Callback for receiving objects
 export type ObjectCallback = (obj: MOQObject) => void;
+
+// Options for subscribeTrackWithInfo
+export interface SubscribeOptions {
+  // Subscription filter type; defaults to NextGroupStart (legacy behavior).
+  filterType?: FilterType;
+  // Drop objects at or before the SUBSCRIBE_OK largest location before they
+  // reach the callback. Used with a joining FETCH, which already covers that
+  // range, so the combined delivery is contiguous and non-overlapping.
+  skipObjectsUpToLargest?: boolean;
+}
+
+// Result of subscribeTrackWithInfo
+export interface SubscriptionInfo {
+  trackAlias: bigint;
+  requestId: bigint;
+  largest?: Location;
+}
+
+/** Reports whether location a lies strictly after b in (group, object) order */
+function afterLocation(a: Location, b: Location): boolean {
+  if (a.group !== b.group) {
+    return a.group > b.group;
+  }
+  return a.object > b.object;
+}
 
 // Tracks manager to handle incoming data streams
 export class TracksManager {
@@ -715,11 +741,107 @@ export class TracksManager {
     await fetchPromise;
   }
 
+  /**
+   * Send a Relative Joining FETCH (draft-14/16 §9.16.2) tied to an existing
+   * subscription. The publisher derives namespace, track and range from the
+   * subscription identified by joiningRequestId: with joiningStart = 0 the
+   * FETCH returns the current group from object 0 up to and including the
+   * subscription's largest location.
+   * Returns a promise that resolves when the FETCH_OK is received.
+   */
+  public async fetchJoiningRelative(
+    joiningRequestId: bigint,
+    joiningStart: bigint,
+    callback: ObjectCallback,
+  ): Promise<void> {
+    this.logger.info(
+      `Joining FETCH for subscription requestId=${joiningRequestId}, joiningStart=${joiningStart}`,
+    );
+
+    if (!this.controlStream) {
+      throw new Error("Cannot fetch: Control stream not set");
+    }
+    if (!this.client) {
+      throw new Error("Cannot fetch: Client not set");
+    }
+
+    const requestId = this.getNextRequestId();
+
+    const fetchMsg: Fetch = {
+      kind: Msg.Fetch,
+      requestId,
+      subscriberPriority: 0,
+      groupOrder: 0, // Publisher order
+      fetchType: FetchTypeRelativeJoining,
+      joiningRequestId,
+      joiningStart,
+      params: [],
+    };
+
+    // Register callback for fetch data before sending the message
+    this.fetchCallbacks.set(requestId, callback);
+
+    const client = this.client;
+
+    const fetchPromise = new Promise<void>((resolve, reject) => {
+      const unregisterOk = client.registerMessageHandler(
+        Msg.FetchOk,
+        requestId,
+        () => {
+          this.logger.info(
+            `Received FetchOk for joining fetch, requestId=${requestId}`,
+          );
+          unregisterErr();
+          resolve();
+        },
+      );
+
+      const unregisterErr = client.registerMessageHandler(
+        Msg.FetchError,
+        requestId,
+        (response: Message) => {
+          const fetchError = response as FetchError;
+          this.logger.error(
+            `Joining fetch error (requestId=${requestId}): ${fetchError.reason}`,
+          );
+          unregisterOk();
+          this.fetchCallbacks.delete(requestId);
+          reject(new Error(`Fetch error: ${fetchError.reason}`));
+        },
+      );
+    });
+
+    this.logger.info(
+      `Sending joining FETCH with requestId ${requestId} joining subscription ${joiningRequestId}`,
+    );
+    await this.controlStream.send(fetchMsg);
+    await fetchPromise;
+  }
+
   public async subscribeTrack(
     namespace: string,
     trackName: string,
     callback: ObjectCallback,
   ): Promise<bigint> {
+    const info = await this.subscribeTrackWithInfo(
+      namespace,
+      trackName,
+      callback,
+    );
+    return info.trackAlias;
+  }
+
+  /**
+   * Subscribe to a track and return the subscription's request ID and the
+   * largest location reported in SUBSCRIBE_OK (needed for a joining FETCH),
+   * in addition to the track alias.
+   */
+  public async subscribeTrackWithInfo(
+    namespace: string,
+    trackName: string,
+    callback: ObjectCallback,
+    options?: SubscribeOptions,
+  ): Promise<SubscriptionInfo> {
     this.logger.info(`Subscribing to track ${namespace}:${trackName}`);
 
     if (!this.controlStream) {
@@ -742,7 +864,7 @@ export class TracksManager {
       subscriber_priority: 0,
       group_order: GroupOrder.Publisher,
       forward: true,
-      filterType: FilterType.NextGroupStart,
+      filterType: options?.filterType ?? FilterType.NextGroupStart,
       params: [] as KeyValuePair[],
     };
 
@@ -755,7 +877,7 @@ export class TracksManager {
       const client = this.client;
 
       // Set up Promise for SUBSCRIBE_OK response
-      const subscribePromise = new Promise<bigint>((resolve, reject) => {
+      const subscribePromise = new Promise<SubscribeOk>((resolve, reject) => {
         // Register handler for SUBSCRIBE_OK
         const unregisterOk = client.registerMessageHandler(
           Msg.SubscribeOk,
@@ -765,7 +887,7 @@ export class TracksManager {
             this.logger.info(
               `Received SubscribeOk for ${namespace}:${trackName} with requestId ${requestId}, trackAlias ${subscribeOk.trackAlias}`,
             );
-            resolve(subscribeOk.trackAlias);
+            resolve(subscribeOk);
           },
         );
 
@@ -798,7 +920,25 @@ export class TracksManager {
       await this.controlStream.send(subscribeMsg);
 
       // Wait for SUBSCRIBE_OK (with timeout)
-      const trackAlias = await subscribePromise;
+      const subscribeOk = await subscribePromise;
+      const trackAlias = subscribeOk.trackAlias;
+      const largest = subscribeOk.largest;
+
+      // When a joining FETCH covers everything up to the largest location,
+      // drop those objects here so the callback sees each object exactly once.
+      let deliverCallback = callback;
+      if (options?.skipObjectsUpToLargest && largest) {
+        deliverCallback = (obj: MOQObject) => {
+          if (!afterLocation(obj.location, largest)) {
+            this.logger.debug(
+              `Skipping object (group=${obj.location.group}, obj=${obj.location.object}) ` +
+                `at or before largest (group=${largest.group}, obj=${largest.object})`,
+            );
+            return;
+          }
+          callback(obj);
+        };
+      }
 
       // Register the callback
       // Stream handler will immediately find it and deliver any buffered objects
@@ -808,13 +948,13 @@ export class TracksManager {
         requestId,
         trackAlias,
       );
-      this.trackRegistry.registerCallback(trackAlias, callback);
+      this.trackRegistry.registerCallback(trackAlias, deliverCallback);
 
       this.logger.info(
         `Successfully subscribed to ${namespace}:${trackName} with trackAlias ${trackAlias}`,
       );
 
-      return trackAlias;
+      return { trackAlias, requestId, largest };
     } catch (error) {
       this.logger.error(
         `Error subscribing to track ${namespace}:${trackName}:`,

@@ -157,6 +157,8 @@ export interface Unsubscribe {
 }
 
 export const FetchTypeStandalone = 0x01;
+export const FetchTypeRelativeJoining = 0x02;
+export const FetchTypeAbsoluteJoining = 0x03;
 
 export interface Fetch {
   kind: Msg.Fetch;
@@ -164,12 +166,16 @@ export interface Fetch {
   subscriberPriority: number;
   groupOrder: number;
   fetchType: number;
-  namespace: string[];
-  trackName: string;
-  startGroup: bigint;
-  startObject: bigint;
-  endGroup: bigint;
-  endObject: bigint;
+  // Standalone fetch (0x01) fields
+  namespace?: string[];
+  trackName?: string;
+  startGroup?: bigint;
+  startObject?: bigint;
+  endGroup?: bigint;
+  endObject?: bigint;
+  // Joining fetch (0x02 relative / 0x03 absolute) fields
+  joiningRequestId?: bigint;
+  joiningStart?: bigint;
   params: KeyValuePair[];
 }
 
