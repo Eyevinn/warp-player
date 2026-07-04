@@ -219,6 +219,10 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
   (auto-negotiated via WebTransport ALPN; can be forced from the UI)
 - MSF/CMSF catalog support for discovering available media streams
   ([draft-ietf-moq-msf-00], [draft-ietf-moq-cmsf-00])
+- Catalog retrieval via SUBSCRIBE plus a relative joining FETCH by default, so
+  playback starts from the latest catalog group aligned to the live edge; a
+  "Catalog retrieval" selector (joining | subscribe | fetch) is exposed in the
+  UI, with a fallback to a plain subscription against legacy publishers
 - Two interchangeable render engines selected per session:
   - **MSE / CMAF** — the default for CMAF tracks, also handles encrypted content via EME
   - **WebCodecs / LOC** — clear-only pipeline for `packaging: "loc"` tracks,
