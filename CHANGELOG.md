@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Catalog retrieval now uses a relative joining FETCH, aligned to the live edge.
+
+### Added
+
+- "Catalog retrieval" mode selector (joining | subscribe | fetch), replacing the
+  old FETCH checkbox. The default retrieves the catalog via SUBSCRIBE plus a
+  relative joining FETCH (offset 0), so the player starts from the latest catalog
+  group aligned to the live edge.
+- `subscribeTrackWithInfo` (exposes the request ID and largest location from
+  SUBSCRIBE_OK) and `fetchJoiningRelative` on the transport layer; FETCH message
+  types `0x02`/`0x03` in the wire encoder.
+
+### Changed
+
+- `joiningFetchCatalog` is now the default catalog-retrieval path in the player.
+  It falls back to a plain subscription when SUBSCRIBE_OK carries no largest
+  location (legacy publisher).
+
 ## [0.11.0] - 2026-06-04
 
 MSF/CMSF catalog support updated to draft-ietf-moq-msf-01, with the new
