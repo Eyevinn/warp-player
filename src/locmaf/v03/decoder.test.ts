@@ -681,7 +681,7 @@ describeCorpus("parseInitContext (golden corpus)", () => {
     const ctx = parseInitContext(readVector("varying-sizes/init.mp4"));
     const state = new LocmafGroupState();
     for (const name of ["g000_o000", "g000_o001", "g000_o002"]) {
-      const obj = readVector(`varying-sizes/objects/${name}.locobj`);
+      const obj = readVector(`varying-sizes/objects/${name}.locmafobj`);
       const want = JSON.parse(
         Buffer.from(
           readVector(`varying-sizes/effective/${name}.json`),
