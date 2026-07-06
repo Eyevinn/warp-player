@@ -1,7 +1,7 @@
 /**
  * MSF/CMSF catalog interface definitions and helper functions.
  * Based on draft-ietf-moq-msf-01 (MOQT Streaming Format) and
- * draft-ietf-moq-cmsf-00 (CMAF MOQT Streaming Format).
+ * draft-ietf-moq-cmsf-01 (CMAF MOQT Streaming Format).
  */
 import { ILogger, LoggerFactory } from "./logger";
 
@@ -56,7 +56,7 @@ export interface InitDataEntry {
 
 /**
  * MSF/CMSF track interface definition.
- * Conforms to draft-ietf-moq-msf-00 and draft-ietf-moq-cmsf-00.
+ * Conforms to draft-ietf-moq-msf-01 and draft-ietf-moq-cmsf-01.
  */
 export interface WarpTrack {
   /** Track name. Required. */

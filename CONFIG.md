@@ -1,43 +1,64 @@
 # Configuration
 
-The WARP Player can be configured after build by editing the `config.json` file in the distribution directory.
+The WARP Player can be configured after build by editing the `config.json` file
+in the distribution directory (`dist/config.json`) — no rebuild required. The
+same file lives at `src/config.json` for the built-in defaults.
 
 ## Configuration File
-
-The `config.json` file supports the following options:
 
 ```json
 {
   "defaultServerUrl": "https://moqlivemock.demo.osaas.io/moq",
-  "minimalBuffer": 200,
-  "targetLatency": 300
+  "fingerprintUrl": "",
+  "bufferProfiles": {
+    "base": { "minimalBuffer": 200, "targetLatency": 300 },
+    "rules": []
+  }
 }
 ```
 
 ### Options
 
-- **defaultServerUrl**: The default MOQ server URL that appears in the connection input field
-- **minimalBuffer**: The minimal buffer threshold in milliseconds (default: 200ms). Below this threshold, playback quality may suffer
-- **targetLatency**: The target end-to-end latency in milliseconds (default: 300ms). Must be greater than minimalBuffer
+- **defaultServerUrl**: The default MOQ server URL shown in the connection input field.
+- **fingerprintUrl**: Optional URL for fetching a self-signed certificate
+  fingerprint (see [FINGERPRINT.md](FINGERPRINT.md)). Leave empty to disable.
+- **bufferProfiles**: Buffer/latency defaults, resolved per render engine and
+  browser (see below). Omit the whole object to use the built-in default.
 
-## Usage
+## Buffer profiles
 
-1. After building the application (`npm run build`), locate the `config.json` file in the `dist` directory
-2. Edit the file with your preferred settings
-3. The application will load these settings on startup
-
-If the configuration file is not found or cannot be loaded, the application will use built-in defaults.
-
-## Example
-
-To change the default server and adjust buffer parameters for lower latency:
+Buffer/latency targets depend on the render engine actually chosen for a session
+(MSE for CMAF/LOCMAF, WebCodecs for LOC) and the browser, because their latency
+floors differ. `bufferProfiles` is a `base` plus an ordered list of `rules`:
 
 ```json
-{
-  "defaultServerUrl": "https://your-server.example.com:443/moq",
-  "minimalBuffer": 150,
-  "targetLatency": 250
+"bufferProfiles": {
+  "base": { "minimalBuffer": 200, "targetLatency": 300 },
+  "rules": [
+    { "browser": "safari", "engine": "mse", "minimalBuffer": 500, "targetLatency": 600 }
+  ]
 }
 ```
 
-Note: Setting targetLatency too low may result in more frequent buffer underruns. The targetLatency must always be greater than minimalBuffer.
+- **minimalBuffer** (ms): buffered media required before playback starts; the
+  control loop keeps the buffer at or above this. **targetLatency** must be
+  greater than it.
+- **targetLatency** (ms): the end-to-end latency the control loop steers toward
+  after playback starts.
+- Resolution: start from `base`, then apply every matching rule in order (later
+  wins). A rule matches when its `engine` (`mse` | `webcodecs`) and `browser`
+  (`safari` | `other`) equal the session's — omit either field to match any.
+
+The resolved profile is applied when the engine is determined at Start and shown
+in the buffer input fields. Editing those fields in the UI overrides the profile
+for that session.
+
+The built-in default is `base` 200/300 ms with no rules — stable across all
+engines and browsers. Add a rule only to tune a specific combination (e.g. raise
+Safari + MSE if needed). If `config.json` is missing or unreadable, the built-in
+default is used.
+
+## Usage
+
+1. After `npm run build`, edit `dist/config.json`.
+2. Reload the app; settings load on startup.

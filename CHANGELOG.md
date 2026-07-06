@@ -9,73 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.0] - 2026-07-06
 
-LOCMAF packaging advanced to v0.3, and catalog retrieval now uses a relative
-joining FETCH aligned to the live edge.
+See the README for details on the catalog, packaging, and buffer control.
 
 ### Added
 
-- "Catalog retrieval" mode selector (joining | subscribe | fetch), replacing the
-  old FETCH checkbox. The default retrieves the catalog via SUBSCRIBE plus a
-  relative joining FETCH (offset 0), so the player starts from the latest catalog
-  group aligned to the live edge.
-- `subscribeTrackWithInfo` (exposes the request ID and largest location from
-  SUBSCRIBE_OK) and `fetchJoiningRelative` on the transport layer; FETCH message
-  types `0x02`/`0x03` in the wire encoder.
+- Catalog-retrieval selector (joining | subscribe | fetch); joining FETCH default.
+- Tunable per-engine/browser buffer profiles in `config.json` (`bufferProfiles`).
 
 ### Changed
 
-- LOCMAF packaging advanced to **v0.3**. `LOCMAF_SUPPORTED_VERSIONS` is now
-  `{"0.3"}` and an absent `locmafVersion` is assumed to be v0.3. The decoder
-  mirrors the Go reference module
-  [`github.com/Eyevinn/locmaf`](https://github.com/Eyevinn/locmaf) (normative
-  spec: the IETF draft `draft-einarsson-moq-locmaf`):
-  - `src/locmaf/vi64.ts` — MOQT (draft-18 §1.4.1) leading-ones varints and
-    zigzag, replacing the RFC 9000 varint the v0.2 wire used.
-  - `src/locmaf/v03/` — element-sequence decoding (genBox / full header /
-    delta header / rawBoxes) under the even-scalar / odd-length-prefixed parity
-    rule, full 32-bit sample flags, derived-only delta BMDT, and a hand-rolled
-    canonical CMAF writer (`mfhd`/`tfhd`/`tfdt`/`trun` + regenerated
-    `saiz`/`saio`/`senc` for protected tracks) that is byte-exact against the
-    reference golden vectors.
-  - `src/locmaf/locmaf.ts` keeps its four-export surface, so `player.ts` is
-    unchanged; the version gate now requires `locmafVersion` "0.3".
-  - `src/locmaf/v03/vectors.test.ts` runs a golden-vector conformance ladder
-    against the sibling `Eyevinn/locmaf` `testdata/vectors` corpus; it skips
-    when the corpus is absent.
-- `joiningFetchCatalog` is now the default catalog-retrieval path in the player.
-  It falls back to a plain subscription when SUBSCRIBE_OK carries no largest
-  location (legacy publisher).
-- The MSE latency controller now runs on a fixed 250 ms cadence instead of the
-  media element's `timeupdate` event, which fires too sparsely on Safari (~1/s)
-  to control latency responsively. It also gains a steady-state resync seek that
-  jumps the playhead toward the live edge on large latency excursions rather than
-  waiting for the gentle rate nudge to recover.
-- Safari gets more latency catch-up authority (ceiling 1.12×, higher gain)
-  because its MSE clock runs ~1.5-2 % slow; Chrome is unchanged.
-- Buffer/latency defaults can be tuned per **render engine × browser** via a
-  `bufferProfiles` table in `config.json` (a `base` plus ordered `rules` matched
-  on optional `engine`/`browser`). With the fixed-cadence controller, 200 ms /
-  300 ms is stable across all engines and browsers, so the built-in default
-  applies it everywhere and ships no per-combination rule; add a rule (in
-  `config.json` or the built-in table) to raise a specific combination — e.g.
-  Safari + MSE to 500 ms / 600 ms. The resolved profile is applied when the
-  engine is determined at Start and pushed back to the buffer input fields;
-  editing those fields manually overrides the profile for the session.
-- Playback now starts once the **minimal buffer** is filled, not the full
-  target latency. Gating start on target latency could exceed what a
-  small-object track's buffer holds — an ~21 ms-per-object AAC track capped at
-  30 segments (~640 ms) could never reach a higher target, so playback
-  deadlocked and never started. The segment-buffer cap is also raised from 30 to
-  64 objects (~2.5 s video / ~1.3 s audio) so higher targets have room.
-- A CMAF video paired with a LOCMAF audio (or vice versa) is now allowed —
-  both are the same MSE-CMAF engine family (LOCMAF is reconstructed to CMAF), so
-  they play through the MSE pipeline together. Only mixes that span engine
-  families (e.g. LOC + CMAF) are still rejected.
+- LOCMAF packaging updated to **v0.3** via the `Eyevinn/locmaf` module.
+- Reworked MSE latency control (fixed-cadence loop, live-edge resync); 200/300 ms
+  is stable across engines and browsers.
+- A CMAF video and a LOCMAF audio may now be selected together.
+- Playback starts on the minimal buffer; segment-buffer cap raised 30 → 64.
+- Catalog references updated to MSF/CMSF draft-01.
 
 ### Removed
 
-- The v0.2 LOCMAF decoder (`src/locmaf/v02/`) and its `senc` writer. LOCMAF v0.2
-  remains reachable at the `v0.11.0` tag.
+- The in-tree LOCMAF v0.2 decoder (available at the `v0.11.0` tag).
 
 ## [0.11.0] - 2026-06-04
 

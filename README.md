@@ -27,15 +27,46 @@ This project implements a media player that:
 1. Establishes a WebTransport connection to a MOQ server
 2. Negotiates MOQ Transport draft-14 or draft-16 with the server
 3. Subscribes to and parses MSF/CMSF catalogs for available media
-   ([draft-ietf-moq-msf-00], [draft-ietf-moq-cmsf-00])
+   ([draft-ietf-moq-msf-01], [draft-ietf-moq-cmsf-01])
 4. Subscribes to selected media tracks through the MOQ transport protocol
 5. Renders media through one of two interchangeable pipelines:
-   - **MSE** for CMAF (`packaging: "cmaf" or "locmaf"`), with optional EME for protected content
+   - **MSE** for CMAF (`packaging: "cmaf"`) and LOCMAF
+     (`packaging: "locmaf"`, [draft-einarsson-moq-locmaf]), with optional EME
+     for protected content
    - **WebCodecs** for LOC (`packaging: "loc"`, [draft-mzanaty-moq-loc]), clear content only
 6. Provides adaptive buffer management for a smooth playback experience
 7. This player is intended to work towards the [moqlivemock][moqlivemock]
    publisher and uses the CMSF ContentProtection signaling
    ([moq-wg/cmsf](https://github.com/moq-wg/cmsf)) for DRM
+
+## Catalog and Packaging
+
+Media is discovered through an MSF/CMSF catalog and delivered in one of three
+packagings:
+
+- **CMAF** (`packaging: "cmaf"`) — standard fragmented MP4, played through MSE.
+- **LOCMAF** (`packaging: "locmaf"`, [draft-einarsson-moq-locmaf]) — a compact
+  CMAF packaging (wire version 0.3) that trims per-object overhead on the wire.
+  Objects are reconstructed into standard CMAF chunks before MSE append, so
+  LOCMAF and CMAF share the same init data and render path. Decoding mirrors the
+  reusable [`Eyevinn/locmaf`](https://github.com/Eyevinn/locmaf) reference
+  implementation; only LOCMAF packaging version `0.3` is accepted.
+- **LOC** (`packaging: "loc"`, [draft-mzanaty-moq-loc]) — raw codec frames,
+  decoded directly by the WebCodecs pipeline (clear content only).
+
+Catalogs follow **MSF [draft-ietf-moq-msf-01]** with **CMSF
+[draft-ietf-moq-cmsf-01]** for CMAF packaging. The catalog `version` string must
+be `"draft-01"`. Initialization data lives in a catalog-level `initDataList`,
+and each track references an entry by `initRef` — so a CMAF track and its LOCMAF
+counterpart share one init-data entry. Content protection (Widevine, PlayReady,
+FairPlay, and ClearKey) is signaled through the CMSF ContentProtection catalog
+fields; draft-ietf-moq-cmsf-01 is the revision that carries the `initData` and
+DRM/ContentProtection catalog fields this player relies on.
+
+Catalog documents can be checked against the draft-01 schema with the
+[msf-catalog-validator](https://github.com/Eyevinn/msf-catalog-validator), which
+validates MSF/CMSF draft-01 catalogs including the `locmaf` packaging and
+`locmafVersion`.
 
 ## Requirements
 
@@ -220,7 +251,8 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 - MOQ client implementation supporting draft-14 and draft-16
   (auto-negotiated via WebTransport ALPN; can be forced from the UI)
 - MSF/CMSF catalog support for discovering available media streams
-  ([draft-ietf-moq-msf-00], [draft-ietf-moq-cmsf-00])
+  ([draft-ietf-moq-msf-01], [draft-ietf-moq-cmsf-01])
+- CMAF, LOCMAF (compact CMAF, [draft-einarsson-moq-locmaf]), and LOC packaging
 - Catalog retrieval via SUBSCRIBE plus a relative joining FETCH by default, so
   playback starts from the latest catalog group aligned to the live edge; a
   "Catalog retrieval" selector (joining | subscribe | fetch) is exposed in the
@@ -264,7 +296,8 @@ catalog and the user's "Render engine" choice in the UI:
 
 The `Auto` engine choice resolves at subscribe time:
 
-- All-CMAF tracks → MSE
+- CMAF and/or LOCMAF tracks → MSE (they share the MSE-CMAF family, so a CMAF
+  video and a LOCMAF audio may be selected together)
 - All-LOC tracks (clear) → WebCodecs
 - Any encrypted track → MSE (WebCodecs cannot play encrypted content
   because production browsers do not expose Encrypted WebCodecs)
@@ -287,27 +320,31 @@ The player uses a sophisticated two-parameter control system to maintain optimal
 ### Parameters
 
 1. **Minimal Buffer** (default: 200ms)
-   - The safety threshold below which playback quality may suffer
-   - Prevents buffer underruns and playback stalls
+   - The safety threshold below which playback quality may suffer, and the
+     buffer level required before playback starts
 2. **Target Latency** (default: 300ms)
-   - The desired end-to-end latency for live streaming
+   - The desired end-to-end latency the controller steers toward once playing
    - Must be greater than the minimal buffer value
+
+Both parameters are resolved per **render engine × browser** from the
+`bufferProfiles` table in `config.json` (default 200/300 ms everywhere) and can
+be overridden live from the UI inputs — see [CONFIG.md](CONFIG.md).
 
 ### Control Logic
 
-The playback rate is adjusted based on a priority system:
+A fixed-cadence (250ms) control loop adjusts the playback rate by priority; the
+250ms timer keeps the loop responsive regardless of how often the browser fires
+`timeupdate` (Safari fires it sparsely). Playback starts once the minimal buffer
+is filled, then:
 
 1. **Priority 1 - Buffer Safety**: If buffer level < minimal buffer
-   - Reduce playback rate to 0.97x to build up buffer
-   - This takes precedence over latency control
-
+   - Reduce playback rate to build up buffer; takes precedence over latency
 2. **Priority 2 - Latency Control**: If buffer level ≥ minimal buffer
-   - If latency > target: Increase playback rate (up to 1.02x) to reduce latency
-   - If latency < target: Decrease playback rate (down to 0.98x) to maintain target latency
-   - This prevents drifting too close to the live edge
-
-3. **Normal Playback**: When within acceptable ranges
-   - Playback rate returns to 1.0x
+   - If latency > target: speed up to reduce latency (ceiling 1.02x, higher on
+     Safari whose media clock runs slightly slow). A large excursion instead
+     triggers a resync seek toward the live edge.
+   - If latency < target: slow down to hold the target and avoid the live edge
+3. **Normal Playback**: return to 1.0x when within the target range
 
 ### Visual Indicators
 
@@ -390,6 +427,7 @@ Read our blogs and articles here:
 Want to know more about Eyevinn, contact us at info@eyevinn.se!
 
 [moqlivemock]: https://github.com/Eyevinn/moqlivemock
-[draft-ietf-moq-msf-00]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-00
-[draft-ietf-moq-cmsf-00]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-cmsf-00
+[draft-ietf-moq-msf-01]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01
+[draft-ietf-moq-cmsf-01]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-cmsf-01
+[draft-einarsson-moq-locmaf]: https://datatracker.ietf.org/doc/draft-einarsson-moq-locmaf/
 [draft-mzanaty-moq-loc]: https://datatracker.ietf.org/doc/html/draft-mzanaty-moq-loc
