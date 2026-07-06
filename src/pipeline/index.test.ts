@@ -119,8 +119,16 @@ describe("defaultEngineForTracks", () => {
     ).toBe("mse");
   });
 
-  it("rejects mixed packagings", () => {
+  it("allows a cmaf/locmaf mix (same MSE-CMAF family)", () => {
+    expect(defaultEngineForTracks(track("cmaf"), track("locmaf"))).toBe("mse");
+    expect(defaultEngineForTracks(track("locmaf"), track("cmaf"))).toBe("mse");
+  });
+
+  it("rejects mixed packagings across engine families", () => {
     expect(() => defaultEngineForTracks(track("cmaf"), track("loc"))).toThrow(
+      /mixed packagings/i,
+    );
+    expect(() => defaultEngineForTracks(track("locmaf"), track("loc"))).toThrow(
       /mixed packagings/i,
     );
   });
@@ -138,13 +146,10 @@ describe("resolveEngine", () => {
     expect(resolveEngine("webcodecs", track("loc"), null)).toBe("webcodecs");
   });
 
-  it("rejects mixed regular cmaf and locmaf selections", () => {
-    expect(() =>
-      defaultEngineForTracks(track("cmaf"), track("locmaf")),
-    ).toThrow(/mixed packagings/i);
-    expect(() => resolveEngine("mse", track("cmaf"), track("locmaf"))).toThrow(
-      /mixed packagings/i,
-    );
+  it("allows a cmaf/locmaf selection (same MSE-CMAF family)", () => {
+    expect(resolveEngine("auto", track("cmaf"), track("locmaf"))).toBe("mse");
+    expect(resolveEngine("mse", track("cmaf"), track("locmaf"))).toBe("mse");
+    expect(resolveEngine("mse", track("locmaf"), track("cmaf"))).toBe("mse");
   });
 
   it("rejects explicit choices that can't play the selection", () => {
