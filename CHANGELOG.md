@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Catalog retrieval now uses a relative joining FETCH, aligned to the live edge.
+## [0.12.0] - 2026-07-06
+
+LOCMAF packaging advanced to v0.3, and catalog retrieval now uses a relative
+joining FETCH aligned to the live edge.
 
 ### Added
 
@@ -21,9 +24,32 @@ Catalog retrieval now uses a relative joining FETCH, aligned to the live edge.
 
 ### Changed
 
+- LOCMAF packaging advanced to **v0.3**. `LOCMAF_SUPPORTED_VERSIONS` is now
+  `{"0.3"}` and an absent `locmafVersion` is assumed to be v0.3. The decoder
+  mirrors the Go reference module
+  [`github.com/Eyevinn/locmaf`](https://github.com/Eyevinn/locmaf) (normative
+  spec: the IETF draft `draft-einarsson-moq-locmaf`):
+  - `src/locmaf/vi64.ts` — MOQT (draft-18 §1.4.1) leading-ones varints and
+    zigzag, replacing the RFC 9000 varint the v0.2 wire used.
+  - `src/locmaf/v03/` — element-sequence decoding (genBox / full header /
+    delta header / rawBoxes) under the even-scalar / odd-length-prefixed parity
+    rule, full 32-bit sample flags, derived-only delta BMDT, and a hand-rolled
+    canonical CMAF writer (`mfhd`/`tfhd`/`tfdt`/`trun` + regenerated
+    `saiz`/`saio`/`senc` for protected tracks) that is byte-exact against the
+    reference golden vectors.
+  - `src/locmaf/locmaf.ts` keeps its four-export surface, so `player.ts` is
+    unchanged; the version gate now requires `locmafVersion` "0.3".
+  - `src/locmaf/v03/vectors.test.ts` runs a golden-vector conformance ladder
+    against the sibling `Eyevinn/locmaf` `testdata/vectors` corpus; it skips
+    when the corpus is absent.
 - `joiningFetchCatalog` is now the default catalog-retrieval path in the player.
   It falls back to a plain subscription when SUBSCRIBE_OK carries no largest
   location (legacy publisher).
+
+### Removed
+
+- The v0.2 LOCMAF decoder (`src/locmaf/v02/`) and its `senc` writer. LOCMAF v0.2
+  remains reachable at the `v0.11.0` tag.
 
 ## [0.11.0] - 2026-06-04
 

@@ -65,8 +65,10 @@ warp-player/
 │   │   ├── aac.ts        # AAC AudioSpecificConfig from catalog metadata
 │   │   ├── opus.ts       # Opus ID-header (OpusHead) from catalog metadata
 │   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
-|   ├── locmaf/           # LOCMAF helper functions
-│   │   ├── locmaf.ts     # Parsing of LOCMAF and reconstruction of CMAF
+│   ├── locmaf/           # LOCMAF (compact CMAF packaging) for the MSE pipeline
+│   │   ├── locmaf.ts     # Version-gating wrapper (LOCMAF v0.3 only)
+│   │   ├── vi64.ts       # MOQT (draft-18 §1.4.1) varints + zigzag
+│   │   └── v03/          # v0.3 codec: decoder + canonical CMAF reconstruction
 │   ├── pipeline/         # Pluggable render pipelines
 │   │   ├── index.ts                # IPlaybackPipeline + capability matrix
 │   │   ├── msePipeline.ts          # MSE/CMAF pipeline (with optional EME)

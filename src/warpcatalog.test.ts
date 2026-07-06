@@ -19,7 +19,7 @@ describe("WarpCatalogManager draft-01 init data", () => {
         name: "video_locmaf",
         namespace: "cmsf/clear",
         packaging: "locmaf",
-        locmafVersion: "0.2",
+        locmafVersion: "0.3",
         role: "video",
         initRef: "init-video",
       },
