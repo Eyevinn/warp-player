@@ -4,6 +4,7 @@
  * Handles the browser UI interactions and connects to the Player component
  * for MOQ/WARP streaming and MSE playback.
  */
+import { BufferProfiles, DEFAULT_BUFFER_PROFILES } from "./bufferProfile";
 import { LoggerFactory, LogLevel } from "./logger";
 import { Player } from "./player";
 import { DraftVersion } from "./transport/client";
@@ -36,15 +37,28 @@ const logger = LoggerFactory.getInstance().getLogger("Browser");
 interface Config {
   defaultServerUrl?: string;
   fingerprintUrl?: string;
-  minimalBuffer?: number;
-  targetLatency?: number;
+  // Per-(engine × browser) buffer/latency profile table. Omit to use the
+  // built-in default (Safari+MSE 500/800ms, everything else 200/300ms).
+  bufferProfiles?: BufferProfiles;
 }
 
 let config: Config = {
   defaultServerUrl: "https://moqlivemock.demo.osaas.io/moq",
-  minimalBuffer: 200,
-  targetLatency: 300,
 };
+
+// Hand the player its buffer profile table, keep the input fields in sync with
+// whatever profile it applies at Start, and seed the current (base) values
+// without marking them as a manual override.
+function wireBufferProfile(p: Player): void {
+  p.setBufferProfiles(config.bufferProfiles ?? null);
+  p.setBufferParamsCallback((minimalBufferMs, targetLatencyMs) => {
+    minimalBufferInput.value = minimalBufferMs.toString();
+    targetLatencyInput.value = targetLatencyMs.toString();
+  });
+  const min = parseInt(minimalBufferInput.value, 10) || 200;
+  const target = parseInt(targetLatencyInput.value, 10) || 300;
+  p.setBufferParameters(min, target, /* userInitiated */ false);
+}
 
 // Load configuration from external file
 async function loadConfig(): Promise<void> {
@@ -195,12 +209,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     logger.info("Server URL loaded from config.json");
   }
 
-  if (config.minimalBuffer) {
-    minimalBufferInput.value = config.minimalBuffer.toString();
-  }
-  if (config.targetLatency) {
-    targetLatencyInput.value = config.targetLatency.toString();
-  }
+  // Seed the inputs with the profile base; the effective per-engine values are
+  // applied (and pushed back to these fields) when playback starts.
+  const baseProfile = (config.bufferProfiles ?? DEFAULT_BUFFER_PROFILES).base;
+  minimalBufferInput.value = baseProfile.minimalBuffer.toString();
+  targetLatencyInput.value = baseProfile.targetLatency.toString();
 
   // Add event listeners
   connectBtn.addEventListener("click", connect);
@@ -261,12 +274,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Set initial buffer parameters from config or defaults
-  const initialMinimalBuffer =
-    parseInt(minimalBufferInput.value) || config.minimalBuffer || 200;
-  const initialTargetLatency =
-    parseInt(targetLatencyInput.value) || config.targetLatency || 300;
-  player.setBufferParameters(initialMinimalBuffer, initialTargetLatency);
+  // Wire the per-engine buffer profile and seed the current (base) values.
+  wireBufferProfile(player);
 
   // Add event listener for minimal buffer changes
   minimalBufferInput.addEventListener("change", () => {
@@ -670,10 +679,8 @@ async function connect() {
     }
   });
 
-  // Set buffer parameters from input fields
-  const minimalBuffer = parseInt(minimalBufferInput.value) || 200;
-  const targetLatency = parseInt(targetLatencyInput.value) || 300;
-  player.setBufferParameters(minimalBuffer, targetLatency);
+  // Re-wire the buffer profile for the fresh player instance.
+  wireBufferProfile(player);
 
   // Disable connect button and enable disconnect button
   connectBtn.disabled = true;

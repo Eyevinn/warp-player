@@ -45,6 +45,32 @@ joining FETCH aligned to the live edge.
 - `joiningFetchCatalog` is now the default catalog-retrieval path in the player.
   It falls back to a plain subscription when SUBSCRIBE_OK carries no largest
   location (legacy publisher).
+- The MSE latency controller now runs on a fixed 250 ms cadence instead of the
+  media element's `timeupdate` event, which fires too sparsely on Safari (~1/s)
+  to control latency responsively. It also gains a steady-state resync seek that
+  jumps the playhead toward the live edge on large latency excursions rather than
+  waiting for the gentle rate nudge to recover.
+- Safari gets more latency catch-up authority (ceiling 1.12×, higher gain)
+  because its MSE clock runs ~1.5-2 % slow; Chrome is unchanged.
+- Buffer/latency defaults can be tuned per **render engine × browser** via a
+  `bufferProfiles` table in `config.json` (a `base` plus ordered `rules` matched
+  on optional `engine`/`browser`). With the fixed-cadence controller, 200 ms /
+  300 ms is stable across all engines and browsers, so the built-in default
+  applies it everywhere and ships no per-combination rule; add a rule (in
+  `config.json` or the built-in table) to raise a specific combination — e.g.
+  Safari + MSE to 500 ms / 600 ms. The resolved profile is applied when the
+  engine is determined at Start and pushed back to the buffer input fields;
+  editing those fields manually overrides the profile for the session.
+- Playback now starts once the **minimal buffer** is filled, not the full
+  target latency. Gating start on target latency could exceed what a
+  small-object track's buffer holds — an ~21 ms-per-object AAC track capped at
+  30 segments (~640 ms) could never reach a higher target, so playback
+  deadlocked and never started. The segment-buffer cap is also raised from 30 to
+  64 objects (~2.5 s video / ~1.3 s audio) so higher targets have room.
+- A CMAF video paired with a LOCMAF audio (or vice versa) is now allowed —
+  both are the same MSE-CMAF engine family (LOCMAF is reconstructed to CMAF), so
+  they play through the MSE pipeline together. Only mixes that span engine
+  families (e.g. LOC + CMAF) are still rejected.
 
 ### Removed
 

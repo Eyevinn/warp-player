@@ -53,7 +53,11 @@ export class MediaSegmentBuffer {
 
     // Set default options and merge with provided options
     this.options = {
-      maxBufferSize: 30, // Default to 30 segments max
+      // 64 segments max: with per-frame objects (~40ms video / ~21ms audio)
+      // this holds ~2.5s of video / ~1.3s of audio, comfortably above target
+      // latencies up to ~1s. 30 was too few for a small-object audio track to
+      // reach an 800ms target, which deadlocked the playback-start gate.
+      maxBufferSize: 64,
       onSegmentReady: () => {
         // No-op by default - will be overridden if provided in options
       },

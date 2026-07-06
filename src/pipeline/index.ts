@@ -202,22 +202,26 @@ export function defaultEngineForTracks(
   if (packagings.size === 0) {
     return "mse";
   }
-  if (packagings.size > 1) {
-    throw new Error(
-      `Mixed packagings not supported: ${Array.from(packagings).join(", ")}`,
-    );
+  // cmaf and locmaf are the same engine family — both play through MSE, with
+  // LOCMAF reconstructed to CMAF before it reaches the buffer — so a CMAF video
+  // paired with a LOCMAF audio (or vice versa) is fine. Only a mix that spans
+  // engine families (e.g. loc + cmaf) is unsupported.
+  const list = Array.from(packagings);
+  const allMseCmaf = list.every(isMseCmafPackaging);
+  const allLoc = list.every((p) => p === "loc");
+  if (!allMseCmaf && !allLoc) {
+    throw new Error(`Mixed packagings not supported: ${list.join(", ")}`);
   }
   if (anyEncrypted) {
     return "mse";
   }
-  const [packaging] = packagings;
-  if (packaging === "loc") {
+  if (allLoc) {
     return "webcodecs";
   }
-  if (isMseCmafPackaging(packaging)) {
+  if (allMseCmaf) {
     return "mse";
   }
-  throw new Error(`Unsupported track packaging: ${packaging}`);
+  throw new Error(`Unsupported track packaging: ${list.join(", ")}`);
 }
 
 /**

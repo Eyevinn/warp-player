@@ -6,6 +6,11 @@ import {
 
 import { MediaBuffer, MediaSegmentBuffer, MediaTrackInfo } from "./buffer";
 import {
+  BufferProfiles,
+  DEFAULT_BUFFER_PROFILES,
+  resolveBufferProfile,
+} from "./bufferProfile";
+import {
   LocmafTrackState,
   decompressMoofWithTrackInfo,
   initializeLocmafTrack,
@@ -145,8 +150,27 @@ export class Player {
   private audioObjectsReceived = 0;
   private minimalBufferMs = 200; // Minimal buffer threshold in milliseconds
   private targetLatencyMs = 300; // Target latency in milliseconds
+  // Per-(engine × browser) buffer defaults, resolved at playback start once the
+  // render engine is known. Supplied from config.json; falls back to built-in.
+  private bufferProfiles: BufferProfiles = DEFAULT_BUFFER_PROFILES;
+  // Set once the user edits the buffer inputs — suppresses the auto profile so a
+  // manual value is never clobbered at the next Start.
+  private bufferParamsUserOverride = false;
+  // Notifies the UI when an engine profile changes the effective buffer values,
+  // so the input fields can reflect what is actually in use.
+  private bufferParamsCallback:
+    | ((minimalBufferMs: number, targetLatencyMs: number) => void)
+    | null = null;
   private minBufferLevel: number = Infinity; // Track minimum buffer level between segments
   private lastSegmentAppendTime: number = 0; // Track when we last appended a segment
+  // Latency catch-up authority. Chrome's media clock tracks wall-clock tightly,
+  // so a gentle 1.02x is enough. Safari's MSE clock runs ~1.5-2% slow, so it
+  // needs more authority to hold target latency (set in the constructor).
+  private maxCatchupRate = 1.02; // ceiling for the latency catch-up playback rate
+  private catchupBaseGain = 0.03; // proportional gain for latency catch-up
+  // Drives checkBufferHealth on a fixed cadence (MSE only). timeupdate fires
+  // too sparsely on Safari (~1/s) to control latency responsively.
+  private mseControlTimer: ReturnType<typeof setInterval> | null = null;
 
   // Error handling and recovery
   private recoveryInProgress = false;
@@ -208,6 +232,14 @@ export class Player {
     // MSE state owner. Created up front so getter delegates always have a
     // target; dispose() returns it to a clean state on disconnect.
     this.msePipeline = new MsePipeline(this.logger);
+
+    // Safari's MSE playback clock runs slow and holds a deeper decode pipeline,
+    // so the default 1.02x catch-up cannot pull latency back to target. Give the
+    // controller more authority on Safari (see CHANGELOG). Chrome is unchanged.
+    if (this.isSafari()) {
+      this.maxCatchupRate = 1.12;
+      this.catchupBaseGain = 0.1;
+    }
 
     // Log initialization
     this.logger.info("Player initialized");
@@ -281,16 +313,23 @@ export class Player {
    * Set the buffer control parameters
    * @param minimalBufferMs Minimal buffer level in milliseconds
    * @param targetLatencyMs Target latency in milliseconds
+   * @param userInitiated When true (default), marks the values as a manual
+   *   override so the per-engine auto profile no longer clobbers them at Start.
    */
   public setBufferParameters(
     minimalBufferMs: number,
     targetLatencyMs: number,
+    userInitiated = true,
   ): void {
     if (targetLatencyMs <= minimalBufferMs) {
       this.logger.warn(
         `Target latency (${targetLatencyMs}ms) must be greater than minimal buffer (${minimalBufferMs}ms). Ignoring.`,
       );
       return;
+    }
+
+    if (userInitiated) {
+      this.bufferParamsUserOverride = true;
     }
 
     const oldMinBuffer = this.minimalBufferMs;
@@ -302,6 +341,48 @@ export class Player {
     this.logger.info(
       `Buffer parameters changed - Minimal buffer: ${oldMinBuffer}ms → ${minimalBufferMs}ms, Target latency: ${oldTargetLatency}ms → ${targetLatencyMs}ms`,
     );
+  }
+
+  /**
+   * Supply the per-(engine × browser) buffer profile table (from config.json).
+   * Passing null/undefined keeps the built-in default.
+   */
+  public setBufferProfiles(profiles: BufferProfiles | null | undefined): void {
+    if (profiles && profiles.base) {
+      this.bufferProfiles = profiles;
+    }
+  }
+
+  /**
+   * Set a callback invoked when an engine profile changes the effective buffer
+   * values, so the UI can reflect what is actually in use.
+   */
+  public setBufferParamsCallback(
+    callback: (minimalBufferMs: number, targetLatencyMs: number) => void,
+  ): void {
+    this.bufferParamsCallback = callback;
+  }
+
+  /**
+   * Apply the buffer profile for the resolved render engine, unless the user has
+   * manually overridden the values. Called at Start once the engine is known.
+   */
+  private applyEngineBufferProfile(engine: "mse" | "webcodecs"): void {
+    if (this.bufferParamsUserOverride) {
+      return;
+    }
+    const browser = this.isSafari() ? "safari" : "other";
+    const { minimalBuffer, targetLatency } = resolveBufferProfile(
+      engine,
+      browser,
+      this.bufferProfiles,
+    );
+    this.minimalBufferMs = minimalBuffer;
+    this.targetLatencyMs = targetLatency;
+    this.logger.info(
+      `[BufferProfile] engine=${engine} browser=${browser} -> minimal ${minimalBuffer}ms / target ${targetLatency}ms`,
+    );
+    this.bufferParamsCallback?.(minimalBuffer, targetLatency);
   }
 
   /**
@@ -1392,6 +1473,7 @@ export class Player {
    * Stop synchronized playback and clean up event listeners
    */
   private stopSynchronizedPlayback(): void {
+    this.stopMseControlLoop();
     const videoEl = document.getElementById("videoPlayer") as HTMLVideoElement;
     if (videoEl) {
       // Stop playback
@@ -1996,8 +2078,63 @@ export class Player {
   }
 
   /**
+   * Start the fixed-cadence MSE latency-control loop. Driven by a timer rather
+   * than the media element's timeupdate event, which fires too sparsely and
+   * irregularly on Safari (~1/s) to control latency responsively.
+   */
+  private startMseControlLoop(): void {
+    if (this.mseControlTimer) {
+      clearInterval(this.mseControlTimer);
+    }
+    this.mseControlTimer = setInterval(() => {
+      if (!this.playbackStarted) {
+        return;
+      }
+      const videoEl = document.getElementById(
+        "videoPlayer",
+      ) as HTMLVideoElement | null;
+      if (!videoEl) {
+        return;
+      }
+      const { video, audio } = this.computeBufferAhead(videoEl);
+      this.checkBufferHealth(video, audio);
+    }, 250);
+  }
+
+  /** Stop the MSE latency-control loop. */
+  private stopMseControlLoop(): void {
+    if (this.mseControlTimer) {
+      clearInterval(this.mseControlTimer);
+      this.mseControlTimer = null;
+    }
+  }
+
+  /** Buffered seconds ahead of the playhead for each active SourceBuffer. */
+  private computeBufferAhead(videoEl: HTMLVideoElement): {
+    video: number;
+    audio: number;
+  } {
+    const t = videoEl.currentTime;
+    const ahead = (sb: SourceBuffer | null): number => {
+      if (!sb) {
+        return 0;
+      }
+      for (let i = 0; i < sb.buffered.length; i++) {
+        if (t >= sb.buffered.start(i) && t < sb.buffered.end(i)) {
+          return sb.buffered.end(i) - t;
+        }
+      }
+      return 0;
+    };
+    return {
+      video: ahead(this.videoSourceBuffer),
+      audio: ahead(this.audioSourceBuffer),
+    };
+  }
+
+  /**
    * Check buffer health and control playback rate based on minimal buffer and target latency
-   * This is called during the monitorSync process
+   * This is called on a fixed cadence by the MSE control loop
    */
   private checkBufferHealth(
     videoBufferAhead: number,
@@ -2031,6 +2168,33 @@ export class Player {
     // For buffer control, use the current buffer levels, not the historical minimum
     // The minBufferLevel tracking is for monitoring purposes only
     const effectiveMinBuffer = Math.min(videoBufferAhead, audioBufferAhead);
+
+    // Steady-state resync: if we have fallen far behind the target (e.g. Safari's
+    // slow media clock accumulating a large offset), a <=1.12x nudge would take
+    // many seconds to recover. Seek toward the live edge instead. Guarded so it
+    // only fires on egregious excursions and only when there is enough buffer
+    // ahead to land safely, so healthy Chrome playback never triggers it.
+    const resyncMarginSec = 1.0;
+    if (
+      !this.playbackStalled &&
+      !this.recoveryInProgress &&
+      currentLatencySec > targetLatencySec + resyncMarginSec &&
+      effectiveMinBuffer > targetLatencySec + 0.2
+    ) {
+      const seekTarget =
+        videoEl.currentTime + effectiveMinBuffer - targetLatencySec;
+      this.logger.info(
+        `[BufferHealth] Latency ${currentLatencyMs.toFixed(0)}ms >> target ${
+          this.targetLatencyMs
+        }ms; resyncing playhead ${videoEl.currentTime.toFixed(
+          2,
+        )} -> ${seekTarget.toFixed(2)} (live edge - target)`,
+      );
+      videoEl.currentTime = seekTarget;
+      videoEl.playbackRate = 1.0;
+      this.updatePlaybackRateDisplay();
+      return;
+    }
 
     // Check if either buffer is critically low
     const videoCritical =
@@ -2132,12 +2296,15 @@ export class Player {
       const latencyError =
         (currentLatencyMs - this.targetLatencyMs) / this.targetLatencyMs;
 
-      // Non-linear gain: starts at 3% for large errors, reduces as we approach target
-      const baseGain = 0.03;
+      // Non-linear gain: full gain for large errors, reduces as we approach target
+      const baseGain = this.catchupBaseGain;
       const gainReduction = Math.exp(-Math.abs(latencyError) * 10); // Exponential reduction
       const effectiveGain = baseGain * (1 - gainReduction * 0.8); // Reduce gain by up to 80% as we approach target
 
-      const newRate = Math.min(1.02, 1.0 + latencyError * effectiveGain);
+      const newRate = Math.min(
+        this.maxCatchupRate,
+        1.0 + latencyError * effectiveGain,
+      );
 
       if (Math.abs(videoEl.playbackRate - newRate) >= 0.001) {
         // Lower threshold for small adjustments
@@ -2502,6 +2669,11 @@ export class Player {
       );
       return;
     }
+
+    // Now the render engine is known, apply its buffer/latency profile (e.g.
+    // Safari + MSE wants 500/800ms, WebCodecs wants 200/300ms). Skipped if the
+    // user has manually set the buffer inputs.
+    this.applyEngineBufferProfile(engine);
 
     if (engine === "webcodecs") {
       if (!videoTrack) {
@@ -3514,14 +3686,18 @@ export class Player {
                 this.videoMediaSegmentBuffer.getBufferDuration();
               const bufferDurationMs = bufferDurationSec * 1000;
 
-              if (bufferDurationMs >= this.targetLatencyMs) {
+              // Start once we have the minimal buffer, not the full target
+              // latency: the control loop steers latency to the target after
+              // playback begins. Gating on target could exceed what a
+              // small-object track's buffer can hold and deadlock the start.
+              if (bufferDurationMs >= this.minimalBufferMs) {
                 this.videoBufferReady = true;
                 this.logger.info(
                   `[Video] Buffer ready with ${bufferDurationMs.toFixed(
                     0,
                   )}ms duration (${
                     this.videoObjectsReceived
-                  } objects), target latency: ${this.targetLatencyMs}ms`,
+                  } objects), minimal buffer: ${this.minimalBufferMs}ms`,
                 );
 
                 // Check if we can start playback (depends on audio buffer state too)
@@ -4057,14 +4233,17 @@ export class Player {
             this.audioMediaSegmentBuffer.getBufferDuration();
           const bufferDurationMs = bufferDurationSec * 1000;
 
-          if (bufferDurationMs >= this.targetLatencyMs) {
+          // Start on the minimal buffer, not the full target latency (see the
+          // video path above) — otherwise a small-object audio track can never
+          // reach a high target and playback never starts.
+          if (bufferDurationMs >= this.minimalBufferMs) {
             this.audioBufferReady = true;
             this.logger.debug(
               `[Audio] Buffer ready with ${bufferDurationMs.toFixed(
                 0,
               )}ms duration (${
                 this.audioObjectsReceived
-              } objects), target latency: ${this.targetLatencyMs}ms`,
+              } objects), minimal buffer: ${this.minimalBufferMs}ms`,
             );
 
             // Check if we can start playback (depends on video buffer state too)
@@ -4314,6 +4493,7 @@ export class Player {
         .play()
         .then(() => {
           this.playbackStarted = true;
+          this.startMseControlLoop();
           this.logger.info(
             `[Sync] Synchronized playback started at ${playbackStartTime.toFixed(
               2,
@@ -4397,8 +4577,9 @@ export class Player {
         );
       }
 
-      // Check buffer health and attempt recovery if needed
-      this.checkBufferHealth(videoBufferAhead, audioBufferAhead);
+      // Buffer-health / latency control now runs on a fixed-cadence timer
+      // (startMseControlLoop) rather than the sparse, browser-dependent
+      // timeupdate cadence. monitorSync keeps the UI + A/V-sync duties.
 
       // Only perform sync adjustment if both audio and video are active
       // AND if the buffer health check didn't already adjust the playback rate

@@ -1,7 +1,9 @@
 {
   "defaultServerUrl": "https://localhost:4443/moq",
   "fingerprintUrl": "",
-  "minimalBuffer": 200,
-  "targetLatency": 300,
-  "comment": "This configuration file can be modified after build to change default settings"
+  "bufferProfiles": {
+    "base": { "minimalBuffer": 200, "targetLatency": 300 },
+    "rules": []
+  },
+  "comment": "bufferProfiles resolves minimalBuffer/targetLatency (ms) from the render engine (mse|webcodecs) and browser (safari|other). Start from base, then apply each matching rule in order (later wins); omit engine/browser in a rule to match any. Example rule to raise Safari MSE latency: { \"browser\": \"safari\", \"engine\": \"mse\", \"minimalBuffer\": 500, \"targetLatency\": 600 }. Remove bufferProfiles entirely to use the built-in default."
 }
