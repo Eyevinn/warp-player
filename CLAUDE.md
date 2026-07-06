@@ -58,7 +58,7 @@ WARP Player is a browser-based TypeScript implementation of a media player,
 using the MOQ Transport protocol via WebTransport. It supports MOQ Transport
 draft-14 and draft-16 (negotiated through WebTransport ALPN, can be forced
 from the UI) and uses the MSF/CMSF catalog format
-(draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-00) to discover media tracks.
+(draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) to discover media tracks.
 
 Playback runs through one of two interchangeable render pipelines selected
 per session:
@@ -128,7 +128,7 @@ The transport used is MOQ Transport, draft-14 or draft-16 (auto-negotiated
 via WebTransport ALPN strings `moq-00` and `moqt-16`).
 
 For the catalog, the specification used is MSF (draft-ietf-moq-msf-01)
-with CMSF (draft-ietf-moq-cmsf-00) for CMAF packaging. LOC packaging
+with CMSF (draft-ietf-moq-cmsf-01) for CMAF packaging. LOC packaging
 follows draft-mzanaty-moq-loc.
 
 The codebase is organized into several key modules:
@@ -269,7 +269,7 @@ The codebase is organized into several key modules:
 
 ## Technical Notes
 
-1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-00) and LOC packaging (draft-mzanaty-moq-loc).
+1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-mzanaty-moq-loc).
 2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF packaging, which is expanded back into CMAF chunks before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
@@ -287,7 +287,7 @@ The codebase is organized into several key modules:
 ### MSF/CMSF Catalog Format
 
 - Catalog parsing follows draft-ietf-moq-msf-01 with CMSF
-  (draft-ietf-moq-cmsf-00) for CMAF packaging
+  (draft-ietf-moq-cmsf-01) for CMAF packaging
 - Tracks identify their payload format via the `packaging` field
   (`"cmaf"`, `"locmaf"`, `"loc"`, ...). LOCMAF tracks additionally
   advertise `locmafVersion`, which the receiver gates on.
