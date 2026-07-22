@@ -69,7 +69,8 @@ per session:
   draft's canonical reconstruction) before being appended to the
   `SourceBuffer`.
 - **WebCodecs / LOC** for `packaging: "loc"` tracks (draft-mzanaty-moq-loc),
-  clear content only, supporting AVC and HEVC video plus AAC and Opus audio.
+  clear content only, supporting AVC, HEVC, and AV1 video plus AAC and Opus
+  audio.
 
 Both pipelines implement a common `IPlaybackPipeline` interface so the
 buffer-control loop, latency reporting, mute toggle, and namespace selector
@@ -94,6 +95,7 @@ warp-player/
 │   ├── loc/              # LOC payload helpers for the WebCodecs pipeline
 │   │   ├── avc.ts        # AVC NALU walker, AVCDecoderConfigurationRecord
 │   │   ├── hevc.ts       # HEVC NALU walker, HEVCDecoderConfigurationRecord
+│   │   ├── av1.ts        # AV1 OBU walker, sequence-header / keyframe detection
 │   │   ├── aac.ts        # AAC AudioSpecificConfig from catalog metadata
 │   │   ├── opus.ts       # Opus ID-header (OpusHead) builder
 │   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
@@ -153,7 +155,9 @@ The codebase is organized into several key modules:
 4. **LOC Layer (WebCodecs)**:
    - Located in `src/loc/`
    - Walks length-prefixed NALUs for AVC/HEVC and synthesizes
-     `VideoDecoderConfig.description` (avcC / hvcC) on parameter-set changes
+     `VideoDecoderConfig.description` (avcC / hvcC) on parameter-set changes;
+     walks raw AV1 OBUs (self-delimiting, LEB128 sizes) and detects keyframes
+     via the in-band sequence-header OBU (AV1 needs no `description`)
    - Synthesizes `AudioDecoderConfig.description` for AAC (AudioSpecificConfig)
      and Opus (OpusHead) from catalog metadata
    - Parses MoQ Object extension headers to extract LOC capture timestamps
@@ -237,6 +241,10 @@ The codebase is organized into several key modules:
     - `avc.ts` / `hevc.ts` — walk length-prefixed NALUs, extract parameter
       sets, build `VideoDecoderConfig.description` (avcC / hvcC), and
       detect IDR / IRAP keyframes
+    - `av1.ts` — walk raw self-delimiting OBUs, detect keyframes via the
+      in-band sequence-header OBU, and extract the sequence header for
+      decoder (re)configuration; AV1 feeds the whole temporal unit to the
+      decoder with no `description`
     - `aac.ts` — build AudioSpecificConfig from catalog `samplerate`,
       `channels`, and `mp4a.OO.A` codec strings
     - `opus.ts` — build the `OpusHead` ID Header from catalog metadata
@@ -272,7 +280,7 @@ The codebase is organized into several key modules:
 1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-mzanaty-moq-loc).
 2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
-4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF packaging, which is expanded back into CMAF chunks before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
+4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF packaging, which is expanded back into CMAF chunks before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AV1 OBU temporal units, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
 5. The client includes proper handling of bidirectional control streams for subscribing to content.
 6. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source.
 7. Encrypted content always flows through the MSE engine; production browsers do not expose Encrypted WebCodecs.
@@ -338,9 +346,12 @@ directly with WebCodecs:
 - Capability matrix in `src/pipeline/index.ts` decides which engine can
   play a given (packaging, encryption) combination; Auto picks MSE for
   CMAF / encrypted content and WebCodecs for clear LOC content
-- Video codecs supported today: AVC (H.264) and HEVC (H.265). Parameter
-  sets are extracted from each access unit; the decoder is reconfigured
-  whenever VPS / SPS / PPS bytes change
+- Video codecs supported today: AVC (H.264), HEVC (H.265), and AV1.
+  For AVC/HEVC parameter sets are extracted from each access unit and the
+  decoder is reconfigured whenever VPS / SPS / PPS bytes change. AV1 objects
+  are raw OBU temporal units fed to the decoder unchanged (no `description`);
+  keyframes are detected by the in-band sequence-header OBU, which also
+  drives reconfiguration when it changes
 - Audio codecs supported today: AAC-LC and Opus. AudioSpecificConfig
   (AAC) and OpusHead (Opus) are synthesized from the catalog metadata
   and passed as `AudioDecoderConfig.description`

@@ -1,7 +1,10 @@
 // WebCodecs LOC playback pipeline.
 //
-// Phase 1: clear-AVC video.
-// Phase 2: clear-AAC and Opus audio, sharing the wallclock anchor with video.
+// Video: clear AVC, HEVC, and AV1. AVC/HEVC arrive as length-prefixed NALUs
+// with parameter sets carried in-band on keyframes; AV1 arrives as raw
+// self-delimiting OBU temporal units with the sequence header in-band on
+// keyframes. Audio: clear AAC and Opus, sharing the wallclock anchor with
+// video.
 //
 // Render strategy: a canvas is overlaid on the existing <video> element
 // (the video element is hidden while this pipeline is active, then restored
@@ -16,6 +19,10 @@
 // wallclock anchor used by the video render loop.
 
 import { buildAacConfigFromCatalog } from "../loc/aac";
+import {
+  extractSequenceHeaderObu as extractAv1SequenceHeaderObu,
+  payloadIsKey as av1PayloadIsKey,
+} from "../loc/av1";
 import {
   buildAvcDecoderConfigDescription,
   extractParameterSetsAndChunk as extractAvcParameterSetsAndChunk,
@@ -60,6 +67,8 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
   private lastVps: Uint8Array | null = null;
   private lastSps: Uint8Array | null = null;
   private lastPps: Uint8Array | null = null;
+  /** Last AV1 sequence-header OBU bytes used to configure the decoder. */
+  private lastAv1SeqHeader: Uint8Array | null = null;
 
   private audioDecoder: AudioDecoder | null = null;
   private audioContext: AudioContext | null = null;
@@ -273,7 +282,9 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     const captureUs = captureUsBig === null ? null : Number(captureUsBig);
     const timestampUs = captureUs ?? this.deriveTimestampUs(obj);
 
-    if (this.isHevcCodec()) {
+    if (this.isAv1Codec()) {
+      this.routeAv1Video(decoder, payload, timestampUs);
+    } else if (this.isHevcCodec()) {
       this.routeHevcVideo(decoder, payload, timestampUs);
     } else {
       this.routeAvcVideo(decoder, payload, timestampUs);
@@ -441,6 +452,77 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     }
   }
 
+  private routeAv1Video(
+    decoder: VideoDecoder,
+    payload: Uint8Array,
+    timestampUs: number,
+  ): void {
+    // AV1 LOC objects are raw OBU temporal units (self-delimiting, LEB128
+    // sizes) — no length prefix, no start codes, and no out-of-band config.
+    // Keyframe temporal units lead with a sequence-header OBU.
+    let isKey: boolean;
+    let seqHeader: Uint8Array;
+    try {
+      isKey = av1PayloadIsKey(payload);
+      seqHeader = isKey
+        ? extractAv1SequenceHeaderObu(payload)
+        : new Uint8Array(0);
+    } catch (e) {
+      this.logger.warn(
+        `[WebCodecsLoc] AV1 OBU parse failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    }
+
+    if (isKey) {
+      const needsConfigure =
+        decoder.state === "unconfigured" ||
+        !this.bytesEqual(this.lastAv1SeqHeader, seqHeader);
+      if (needsConfigure) {
+        // AV1 needs no `description`: the sequence-header OBU travels in-band
+        // in every keyframe temporal unit, so the payload is self-describing.
+        // The catalog keeps the `av01…` codec string as-is (no avc3/hev1-style
+        // normalisation) — mlmpub does not rewrite it for LOC.
+        const codec = this.videoTrack?.codec ?? "av01.0.04M.08";
+        const config: VideoDecoderConfig = {
+          codec,
+          codedWidth: this.videoTrack?.width,
+          codedHeight: this.videoTrack?.height,
+          optimizeForLatency: true,
+        };
+        decoder.configure(config);
+        this.lastAv1SeqHeader = new Uint8Array(seqHeader);
+        this.logger.info(
+          `[WebCodecsLoc] VideoDecoder configured (codec=${codec})`,
+        );
+      }
+    }
+
+    if (decoder.state !== "configured") {
+      return;
+    }
+
+    // Feed the whole temporal unit unchanged: the sequence header on keyframes
+    // must stay in the chunk since no separate description carries it.
+    try {
+      decoder.decode(
+        new EncodedVideoChunk({
+          type: isKey ? "key" : "delta",
+          timestamp: timestampUs,
+          data: payload,
+        }),
+      );
+    } catch (e) {
+      this.logger.error(
+        `[WebCodecsLoc] decode failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  private isAv1Codec(): boolean {
+    return this.videoTrack?.codec?.toLowerCase().startsWith("av01") ?? false;
+  }
+
   private isHevcCodec(): boolean {
     const codec = this.videoTrack?.codec?.toLowerCase() ?? "";
     return codec.startsWith("hvc1") || codec.startsWith("hev1");
@@ -572,6 +654,7 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     this.lastVps = null;
     this.lastSps = null;
     this.lastPps = null;
+    this.lastAv1SeqHeader = null;
     this.anchorWallMs = null;
     this.lastPresentedMs = null;
   }
