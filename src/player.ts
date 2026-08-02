@@ -5,11 +5,14 @@ import {
 } from "@eyevinn/is-drm-supported";
 
 import { MediaBuffer, MediaSegmentBuffer, MediaTrackInfo } from "./buffer";
+import { extractCta608FromFragment } from "./buffer/cta608Fragment";
 import {
   BufferProfiles,
   DEFAULT_BUFFER_PROFILES,
   resolveBufferProfile,
 } from "./bufferProfile";
+import { Cc608Source } from "./cc608/source";
+import type { Cc608Sink } from "./cc608/types";
 import {
   LocmafTrackState,
   decompressMoofWithTrackInfo,
@@ -114,6 +117,19 @@ export class Player {
   private audioTrack: WarpTrack | null = null;
   private videoLocmafState: LocmafTrackState | null = null;
   private audioLocmafState: LocmafTrackState | null = null;
+
+  /**
+   * CTA-608 extraction on the MSE path.
+   *
+   * The gate is deliberately two-part: `cc608Sink` is installed by whoever
+   * renders the captions (the overlay layer), and `cc608Enabled` is the
+   * user-facing on/off switch. Extraction is a strict no-op unless both are
+   * in place and the video codec is one the SEI walker understands, so the
+   * feature costs nothing until it is wired up and turned on.
+   */
+  private cc608Sink: Cc608Sink | null = null;
+  private cc608Enabled = true;
+  private cc608Source: Cc608Source | null = null;
 
   /** Active WebCodecs pipeline when LOC playback is engaged. */
   private webcodecsPipeline: WebCodecsLocPipeline | null = null;
@@ -1501,6 +1517,9 @@ export class Player {
     this.videoLocmafState = null;
     this.audioLocmafState = null;
 
+    // Drops the 608 decoder; videoTrack is already null so nothing is rebuilt.
+    this.resetCc608Source();
+
     // Reset buffer flags
     this.videoBufferReady = false;
     this.audioBufferReady = false;
@@ -1942,6 +1961,7 @@ export class Player {
     this.videoLocmafState = null;
     this.videoBufferReady = false;
     this.videoObjectsReceived = 0;
+    this.resetCc608Source();
 
     // If we're already playing, continue with audio only
     // Otherwise, start playback with audio only
@@ -3425,6 +3445,92 @@ export class Player {
   }
 
   /**
+   * Install (or remove) the destination for CTA-608 caption snapshots.
+   * Called by whatever renders captions; extraction stays off until a sink
+   * is present.
+   */
+  public setCc608Sink(sink: Cc608Sink | null): void {
+    this.cc608Sink = sink;
+    this.resetCc608Source();
+  }
+
+  /** User-facing captions on/off switch. */
+  public setCc608Enabled(enabled: boolean): void {
+    if (this.cc608Enabled === enabled) {
+      return;
+    }
+    this.cc608Enabled = enabled;
+    this.resetCc608Source();
+  }
+
+  public isCc608Enabled(): boolean {
+    return this.cc608Enabled;
+  }
+
+  /**
+   * Throw away all CTA-608 decoder state and rebuild the source if the
+   * current track still qualifies.
+   *
+   * A 608 decoder that keeps state across a discontinuity can flip up a
+   * caption whose pop-on build belongs to the *previous* stream — a wrong
+   * caption rather than a missing one. So this runs on every init-segment
+   * change, track switch, namespace switch and teardown.
+   */
+  private resetCc608Source(): void {
+    this.cc608Source = null;
+
+    if (!this.cc608Enabled || !this.cc608Sink || !this.videoTrack) {
+      return;
+    }
+
+    // The SEI walker handles AVC (1-byte NAL header) and HEVC (2-byte);
+    // AV1 carries captions in metadata OBUs instead and is out of scope.
+    const codec = (this.videoTrack.codec ?? "").toLowerCase();
+    if (codec.startsWith("av01")) {
+      this.logger.info(
+        `[CC608] Skipping CTA-608 extraction for unsupported codec "${codec}"`,
+      );
+      return;
+    }
+
+    this.cc608Source = new Cc608Source(this.cc608Sink, this.logger);
+  }
+
+  /**
+   * Feed a decoded video fragment's samples to the CTA-608 extractor.
+   *
+   * Called after the segment has been queued for append, so caption work can
+   * never delay playback, and wrapped so a caption failure can never break
+   * it either. `fragment` is plain CMAF for both `packaging: "cmaf"` and
+   * `packaging: "locmaf"` — LOCMAF objects are reconstructed to canonical
+   * `moof`+`mdat` by `decodeTrackMediaObject` before they get here — so this
+   * single call site covers both packagings.
+   */
+  private extractCc608FromVideoFragment(
+    fragment: ArrayBuffer,
+    trackInfo: MediaTrackInfo,
+  ): void {
+    const source = this.cc608Source;
+    if (!source) {
+      return;
+    }
+    try {
+      extractCta608FromFragment(
+        fragment,
+        trackInfo.timescale,
+        source,
+        this.logger,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `[CC608] CTA-608 extraction failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+  }
+
+  /**
    * Setup MediaSource and SourceBuffer for video playback
    * This will initialize shared resources for both audio and video
    */
@@ -3583,6 +3689,10 @@ export class Player {
           this.videoSourceBuffer,
           "Video",
         );
+
+        // New init segment / new video track: 608 state from the previous
+        // one must not survive into this one.
+        this.resetCc608Source();
       } catch (e) {
         this.logger.error(
           `[VideoInitSegment] Failed to process video CMAF init segment: ${
@@ -3646,6 +3756,11 @@ export class Player {
 
             // Append the segment to the source buffer via mediaSegmentBuffer only
             this.videoMediaSegmentBuffer.appendToSourceBuffer(mediaSegment);
+
+            // In-band CTA-608. Runs after the append is queued so it can
+            // never delay playback; `decoded.data` is CMAF for both the
+            // "cmaf" and "locmaf" packagings.
+            this.extractCc608FromVideoFragment(decoded.data, trackInfo);
 
             // Track received video objects
             videoObjectsReceived++;

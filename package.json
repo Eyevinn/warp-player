@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "@eyevinn/is-drm-supported": "^2.0.0",
+    "@svta/cml-608": "^1.0.3",
     "@svta/cml-iso-bmff": "^1.0.2",
     "codem-isoboxer": "^0.3.10"
   }

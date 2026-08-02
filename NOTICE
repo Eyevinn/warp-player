@@ -22,6 +22,20 @@ Portions of the MOQ transport code in this project are derived from:
 We gratefully acknowledge the contributions of these developers to the
 MOQ ecosystem.
 
+CTA-608 Closed Captions
+-----------------------
+Closed-caption decoding uses:
+
+3. Common Media Library, @svta/cml-608
+   (https://github.com/streaming-video-technology-alliance/common-media-library)
+   Copyright (c) Streaming Video Technology Alliance and contributors
+   Licensed under the Apache License, Version 2.0
+
+The CTA-608 test fragments in test/media-files/cta608/ (608_h264.m4s,
+608_h265.m4s) are copied verbatim from the same project
+(libs/608/test/fixtures/) and are likewise licensed under the Apache
+License, Version 2.0. See test/media-files/cta608/README.md.
+
 ================================================================================
 
 For the full text of the Apache License, Version 2.0, see:

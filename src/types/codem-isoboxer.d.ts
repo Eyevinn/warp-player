@@ -14,6 +14,13 @@ declare module "codem-isoboxer" {
     fetchAll(type: string): ISOBox[];
     boxes?: ISOBox[];
 
+    // Common box properties
+    /** Absolute byte offset of the box within the parsed buffer. */
+    _offset?: number;
+    size?: number;
+    version?: number;
+    flags?: number;
+
     // mdhd box properties
     timescale?: number;
 
@@ -22,10 +29,16 @@ declare module "codem-isoboxer" {
 
     // tfhd box properties
     sequence_number?: number;
+    track_ID?: number;
+    base_data_offset?: number;
     default_sample_duration?: number;
+    default_sample_size?: number;
+    default_sample_flags?: number;
 
     // trun box properties
     sample_count?: number;
+    data_offset?: number;
+    first_sample_flags?: number;
     samples?: {
       sample_duration?: number;
       sample_size?: number;
