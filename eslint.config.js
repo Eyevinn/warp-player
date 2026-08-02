@@ -10,6 +10,9 @@ export default typescriptEslint.config(
       "dist/**",
       "node_modules/**",
       "references/**",
+      // Nested checkouts (agent worktrees) carry their own dist/ and
+      // node_modules/, which the patterns above only match at the root.
+      ".claude/**",
       "*.js",
       "!eslint.config.js",
     ],

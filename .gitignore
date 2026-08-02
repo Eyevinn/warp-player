@@ -30,6 +30,7 @@ logs
 # Local Claude configuration
 CLAUDE.local.md
 .claude/settings.local.json
+.claude/worktrees/
 
 # Playwright MCP scratch dir
 .playwright-mcp/
