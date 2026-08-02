@@ -18,6 +18,7 @@
 // AudioBufferSourceNode at the AudioContext-time computed from the same
 // wallclock anchor used by the video render loop.
 
+import { Cc608Sink } from "../cc608/types";
 import { buildAacConfigFromCatalog } from "../loc/aac";
 import {
   extractSequenceHeaderObu as extractAv1SequenceHeaderObu,
@@ -27,6 +28,7 @@ import {
   buildAvcDecoderConfigDescription,
   extractParameterSetsAndChunk as extractAvcParameterSetsAndChunk,
 } from "../loc/avc";
+import { LocCta608Extractor } from "../loc/cta608";
 import { getLocCaptureTimestampUs } from "../loc/extensions";
 import {
   buildHevcDecoderConfigDescription,
@@ -110,6 +112,15 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
 
   /** Counters surfaced via getLatencySnapshot. */
   private lastPresentedMs: number | null = null;
+
+  /**
+   * CTA-608 caption extraction. Null until a sink is attached — until then
+   * no video sample is scanned at all. `player.ts` attaches the overlay
+   * seam's channel here; the CC toggle drives `cc608Enabled`.
+   */
+  private cta608: LocCta608Extractor | null = null;
+  private cc608Sink: Cc608Sink | null = null;
+  private cc608Enabled = true;
 
   private bufferConfig: PipelineBufferConfig = {
     minimalBufferMs: 200,
@@ -289,6 +300,40 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     } else {
       this.routeAvcVideo(decoder, payload, timestampUs);
     }
+
+    // After the codec dispatch, so a parameter-set change has already reset
+    // the 608 parser before this sample's cc_data reaches it.
+    this.extractCta608(payload, timestampUs);
+  }
+
+  /**
+   * Attach (or detach) the CTA-608 caption sink. Until a sink is attached no
+   * video sample is scanned for captions at all.
+   */
+  setCc608Sink(sink: Cc608Sink | null): void {
+    this.cc608Sink = sink;
+    this.cta608 = null;
+  }
+
+  /** CC on/off, driven by the UI toggle. */
+  setCc608Enabled(enabled: boolean): void {
+    this.cc608Enabled = enabled;
+  }
+
+  private extractCta608(payload: Uint8Array, timestampUs: number): void {
+    const sink = this.cc608Sink;
+    if (!sink) {
+      return;
+    }
+    if (!this.cta608) {
+      this.cta608 = new LocCta608Extractor({
+        sink,
+        logger: this.logger,
+        codec: this.videoTrack?.codec,
+        enabled: () => this.cc608Enabled,
+      });
+    }
+    this.cta608.addVideoSample(timestampUs, payload);
   }
 
   private routeAvcVideo(
@@ -333,6 +378,10 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
         decoder.configure(config);
         this.lastSps = newSps;
         this.lastPps = newPps;
+        // A parameter-set change is the closest thing this pipeline has to a
+        // discontinuity signal; carrying 608 state across one risks showing a
+        // stale caption rather than none.
+        this.cta608?.reset();
         this.logger.info(
           `[WebCodecsLoc] VideoDecoder configured (codec=${codec}` +
             (catalogCodec !== codec
@@ -418,6 +467,9 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
         this.lastVps = newVps;
         this.lastSps = newSps;
         this.lastPps = newPps;
+        // See the AVC path: treat a parameter-set change as a discontinuity
+        // for caption state too.
+        this.cta608?.reset();
         this.logger.info(
           `[WebCodecsLoc] VideoDecoder configured (codec=${codec}` +
             (catalogCodec !== codec
@@ -657,6 +709,10 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     this.lastAv1SeqHeader = null;
     this.anchorWallMs = null;
     this.lastPresentedMs = null;
+
+    this.cta608?.reset();
+    this.cta608 = null;
+    this.cc608Sink = null;
   }
 
   /* -------------------------------------------------------------------- */
