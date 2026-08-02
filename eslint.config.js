@@ -10,6 +10,9 @@ export default typescriptEslint.config(
       "dist/**",
       "node_modules/**",
       "references/**",
+      // Throwaway prototype code (see prototype/*/README.md) is deliberately
+      // written without lint/test constraints and is never merged to main.
+      "prototype/**",
       "*.js",
       "!eslint.config.js",
     ],
