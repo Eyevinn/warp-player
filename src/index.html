@@ -122,6 +122,17 @@
         margin-bottom: 2rem;
       }
 
+      /* Timed-text / graphics overlay. Spans the whole player section; the
+         renderers lay out inside the computed picture rect, never the
+         element box. Below the engine legend, above the media. */
+      .caption-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        overflow: hidden;
+        z-index: 4;
+      }
+
       .engine-legend {
         position: absolute;
         top: 0.5rem;
@@ -719,6 +730,11 @@
           muted
           playsinline
         ></video>
+        <div
+          id="captionOverlay"
+          class="caption-overlay"
+          aria-hidden="true"
+        ></div>
         <div id="engineLegend" class="engine-legend" aria-live="polite"></div>
         <div class="controls-section">
           <button id="startBtn" class="btn btn-primary" disabled>

@@ -610,6 +610,23 @@ export class WebCodecsLocPipeline implements IPlaybackPipeline {
     };
   }
 
+  /**
+   * Picture clock: the presentation time of the last VideoFrame actually
+   * drawn to the canvas. Freezes when the frame queue starves, unlike the
+   * wallclock-driven playheadMs().
+   */
+  getPresentationTimeMs(): number | null {
+    return this.lastPresentedMs;
+  }
+
+  /**
+   * The canvas this pipeline draws into, so the overlay can bind to the
+   * surface that actually shows the picture. null before setup().
+   */
+  getCanvas(): HTMLCanvasElement | null {
+    return this.canvas;
+  }
+
   setBufferConfig(config: PipelineBufferConfig): void {
     this.bufferConfig = config;
   }

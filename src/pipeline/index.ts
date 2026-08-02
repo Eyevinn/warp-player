@@ -93,6 +93,17 @@ export interface IPlaybackPipeline {
   /** Snapshot for the rate-control loop. */
   getLatencySnapshot(): PipelineLatencySnapshot;
 
+  /**
+   * Presentation time of the picture currently on screen, in ms on the media
+   * timeline (UTC-epoch under mlmpub). null before the first frame is shown.
+   *
+   * This is the *picture* clock, not a wallclock-driven playhead: it freezes
+   * when playback stalls, so captions stay pinned to the frozen frame and
+   * both engines behave identically when things go wrong. The overlay seam
+   * (src/overlay) resolves its timelines against it.
+   */
+  getPresentationTimeMs(): number | null;
+
   /** Update the buffer/latency targets at runtime. */
   setBufferConfig(config: PipelineBufferConfig): void;
 

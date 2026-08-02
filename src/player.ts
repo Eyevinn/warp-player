@@ -12,7 +12,7 @@ import {
   resolveBufferProfile,
 } from "./bufferProfile";
 import { Cc608Source } from "./cc608/source";
-import type { Cc608Sink } from "./cc608/types";
+import type { Cc608Sink, Cc608Snapshot } from "./cc608/types";
 import {
   LocmafTrackState,
   decompressMoofWithTrackInfo,
@@ -20,6 +20,9 @@ import {
   isLocmafTrack,
 } from "./locmaf/locmaf";
 import { ILogger, LoggerFactory } from "./logger";
+import { StateChannel } from "./overlay";
+import { DomOverlayLayer } from "./overlay/overlayLayer";
+import { Cta608Renderer } from "./overlay/renderers/cta608";
 import { EngineChoice, IPlaybackPipeline, resolveEngine } from "./pipeline";
 import { MsePipeline } from "./pipeline/msePipeline";
 import { WebCodecsLocPipeline } from "./pipeline/webcodecsLocPipeline";
@@ -150,6 +153,15 @@ export class Player {
   private currentPipeline: IPlaybackPipeline | null = null;
 
   /**
+   * Timed-text / graphics overlay for the session (see src/overlay). One
+   * layer, reset on every engine / namespace / track switch. Null when the
+   * page has no overlay container.
+   */
+  private overlay: DomOverlayLayer | null = null;
+  /** CTA-608 channel on the overlay. Caption sources push snapshots here. */
+  private cc608Channel: StateChannel<Cc608Snapshot> | null = null;
+
+  /**
    * Re-render the Mute/Unmute button label from currentPipeline.getMuted().
    * Assigned by wireMuteButton(); call after every currentPipeline change so
    * the label reflects the active engine, not the previous one. Null until
@@ -268,6 +280,10 @@ export class Player {
       this.processWarpCatalog(catalog),
     );
 
+    // Timed-text overlay. Created up front and kept for the session; the
+    // surface and clock are (re)bound whenever a pipeline starts.
+    this.setupOverlay();
+
     // Create published namespaces section
     this.createPublishedNamespacesSection();
 
@@ -282,6 +298,86 @@ export class Player {
         this.ensureSelectableNamespace();
       });
     }
+  }
+
+  /* --- Overlay (src/overlay) -------------------------------------------- */
+
+  /**
+   * Build the session's overlay layer and attach the CTA-608 renderer.
+   * The renderer is attached once and lives for the session; reset() clears
+   * its timeline on every discontinuity.
+   */
+  private setupOverlay(): void {
+    const container = document.getElementById("captionOverlay");
+    if (!container) {
+      this.logger.warn("No #captionOverlay element; overlay disabled");
+      return;
+    }
+    this.overlay = new DomOverlayLayer(container);
+    this.cc608Channel = this.overlay.attach<Cc608Snapshot>(
+      "cc608",
+      new Cta608Renderer(),
+      "state",
+    );
+  }
+
+  /**
+   * Bind the overlay to the surface the given pipeline draws into and to its
+   * picture clock, then clear any state left over from the previous session.
+   *
+   * The clock is read through this.currentPipeline rather than being closed
+   * over, so an engine switch that replaces the pipeline cannot leave the
+   * overlay reading a disposed one.
+   */
+  private bindOverlay(surface: HTMLVideoElement | HTMLCanvasElement): void {
+    const overlay = this.overlay;
+    if (!overlay) {
+      return;
+    }
+    overlay.reset();
+    overlay.setSurface(surface);
+    overlay.setClock(
+      () => this.currentPipeline?.getPresentationTimeMs() ?? null,
+    );
+  }
+
+  /** Detach the overlay from the media and drop all caption state. */
+  private releaseOverlay(): void {
+    if (!this.overlay) {
+      return;
+    }
+    this.overlay.reset();
+    this.overlay.setSurface(null);
+    this.overlay.setClock(null);
+  }
+
+  /**
+   * Where a CTA-608 source pushes decoded screens. Snapshots are plain data
+   * — the overlay never holds a live cml object. Null when the page has no
+   * overlay container.
+   */
+  public getCc608Sink(): Cc608Sink | null {
+    const channel = this.cc608Channel;
+    if (!channel) {
+      return null;
+    }
+    return {
+      push: (timeMs: number, screen: Cc608Snapshot | null) =>
+        channel.push(timeMs, screen),
+    };
+  }
+
+  /**
+   * Show or hide the caption overlay. The entry point the CC toggle (#165)
+   * drives; caption state is retained while hidden.
+   */
+  public setCaptionsEnabled(enabled: boolean): void {
+    this.overlay?.setEnabled(enabled);
+  }
+
+  /** True when the caption overlay is showing. */
+  public getCaptionsEnabled(): boolean {
+    return this.overlay?.isEnabled() ?? false;
   }
 
   /**
@@ -561,6 +657,10 @@ export class Player {
     this.publishedNamespaces = [];
     this.selectedNamespace = null;
 
+    // Unbind the overlay from the media and drop caption state. The layer
+    // itself survives so a reconnect can rebind it.
+    this.releaseOverlay();
+
     // Notify connection state change
     if (this.onConnectionStateChange) {
       this.onConnectionStateChange(false);
@@ -568,6 +668,18 @@ export class Player {
 
     // Reset the flag
     this.isDisconnecting = false;
+  }
+
+  /**
+   * Session teardown: disconnect and drop everything owned for the page,
+   * including the overlay DOM and its resolution loop. The Player is not
+   * reusable afterwards.
+   */
+  dispose(): void {
+    this.disconnect();
+    this.overlay?.dispose();
+    this.overlay = null;
+    this.cc608Channel = null;
   }
 
   /**
@@ -713,6 +825,10 @@ export class Player {
     // Clear previous catalog and tracks display
     this.catalogManager.clearCatalog();
     this.tracksContainerEl.innerHTML = "";
+
+    // Captions from the previous namespace must not survive the switch — a
+    // stale screen showing an old timestamp is worse than no caption at all.
+    this.overlay?.reset();
 
     // Hide start/stop buttons until new tracks are loaded
     const startBtn = document.getElementById("startBtn") as HTMLButtonElement;
@@ -1536,6 +1652,9 @@ export class Player {
     this.refreshMuteLabel?.();
     this.activeDrmLabel = null;
     this.updateEngineLegend();
+
+    // The surface is gone with the pipeline; drop caption state with it.
+    this.releaseOverlay();
 
     // Reset error handling state
     this.recoveryInProgress = false;
@@ -2771,6 +2890,9 @@ export class Player {
     this.playbackStarted = true;
     this.updateEngineLegend();
 
+    // WebCodecs paints into its own canvas, overlaid on the <video>.
+    this.bindOverlay(pipeline.getCanvas() ?? videoEl);
+
     // The hidden <video> element doesn't fire timeupdate while WebCodecs is
     // active, so drive the metric-panel refresh ourselves.
     this.webcodecsMetricsTimer = setInterval(() => {
@@ -3552,6 +3674,9 @@ export class Player {
     this.currentPipeline = this.msePipeline;
     this.refreshMuteLabel?.();
     this.updateEngineLegend();
+
+    // MSE paints into the <video> element itself.
+    this.bindOverlay(videoEl);
 
     // Reset previous source if any
     videoEl.pause();

@@ -160,6 +160,22 @@ export class MsePipeline implements IPlaybackPipeline {
     };
   }
 
+  /**
+   * Picture clock: `<video>.currentTime` in ms. null until the element has
+   * a frame to show, so the overlay renders nothing before playback starts
+   * and freezes with the picture during a rebuffer.
+   */
+  getPresentationTimeMs(): number | null {
+    const el = this.videoElement;
+    // 2 === HTMLMediaElement.HAVE_CURRENT_DATA; spelled out so this file
+    // stays importable outside a DOM.
+    if (!el || el.readyState < 2) {
+      return null;
+    }
+    const t = el.currentTime * 1000;
+    return Number.isFinite(t) ? t : null;
+  }
+
   getPlaybackRate(): number {
     return this.videoElement?.playbackRate ?? 1.0;
   }

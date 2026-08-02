@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Timed-text overlay seam (`src/overlay`): a snapshot timeline with `push`
+  (open-ended state) and `addCue` (intervals) channels, resolved by search
+  against the picture clock, plus a CTA-608 renderer that paints screens on
+  the true 32x15 grid.
+- `IPlaybackPipeline.getPresentationTimeMs()` — the presentation time of the
+  picture on screen, implemented by both render engines.
+
 ## [0.12.0] - 2026-07-06
 
 See the README for details on the catalog, packaging, and buffer control.
