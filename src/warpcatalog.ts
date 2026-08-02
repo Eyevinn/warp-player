@@ -119,7 +119,48 @@ export interface WarpTrack {
   contentProtectionRefIDs?: string[];
   /** Parent track name for cloned tracks (only in cloneTracks). */
   parentName?: string;
+  /**
+   * Accessibility features carried by the track, as {scheme, value}
+   * descriptors (draft-ietf-moq-msf-01 Section 5.2.44). mlmpub uses this to
+   * advertise in-band CTA-608 captions on a video track; see
+   * {@link trackHasCta608}.
+   */
+  accessibility?: Accessibility[];
   [key: string]: any; // For future/custom fields
+}
+
+/**
+ * A single accessibility descriptor on a track
+ * (draft-ietf-moq-msf-01 Section 5.2.44).
+ */
+export interface Accessibility {
+  scheme: string;
+  value?: string;
+}
+
+/**
+ * Scheme identifier for CTA-608 closed captions carried in-band in the video
+ * elementary stream. mlmpub emits `{scheme, value: "CC1=eng"}` on captioned
+ * video tracks in both the MSF and CMSF catalogs.
+ */
+export const CTA608_ACCESSIBILITY_SCHEME = "urn:scte:dash:cc:cea-608:2015";
+
+/**
+ * True when the track advertises in-band CTA-608 captions.
+ *
+ * This is the *only* signal the player has: the captions live inside the
+ * coded video, so there is no separate track to discover and nothing in the
+ * bitstream to check without decoding it. A track that carries captions but
+ * omits the descriptor is indistinguishable from one that has none, which is
+ * why the CC toggle is gated on this rather than on first-sight detection.
+ */
+export function trackHasCta608(track: WarpTrack | null | undefined): boolean {
+  if (!track?.accessibility) {
+    return false;
+  }
+  return track.accessibility.some(
+    (a) => a?.scheme === CTA608_ACCESSIBILITY_SCHEME,
+  );
 }
 
 /** DRM information for a track. */

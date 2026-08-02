@@ -11,6 +11,7 @@ import {
   DEFAULT_BUFFER_PROFILES,
   resolveBufferProfile,
 } from "./bufferProfile";
+import { resolveCaptionGate } from "./cc608/gate";
 import { Cc608Source } from "./cc608/source";
 import type { Cc608Sink, Cc608Snapshot } from "./cc608/types";
 import {
@@ -35,6 +36,7 @@ import {
   WarpCatalogManager,
   ContentProtection,
   DRMSystem,
+  trackHasCta608,
 } from "./warpcatalog";
 
 /**
@@ -129,9 +131,11 @@ export class Player {
    * user-facing on/off switch. Extraction is a strict no-op unless both are
    * in place and the video codec is one the SEI walker understands, so the
    * feature costs nothing until it is wired up and turned on.
+   *
+   * Both are driven by `applyCaptionState()`; nothing else should set them.
    */
   private cc608Sink: Cc608Sink | null = null;
-  private cc608Enabled = true;
+  private cc608Enabled = false;
   private cc608Source: Cc608Source | null = null;
 
   /** Active WebCodecs pipeline when LOC playback is engaged. */
@@ -160,6 +164,15 @@ export class Player {
   private overlay: DomOverlayLayer | null = null;
   /** CTA-608 channel on the overlay. Caption sources push snapshots here. */
   private cc608Channel: StateChannel<Cc608Snapshot> | null = null;
+  /**
+   * The user's captions on/off intent. Off by default (#165) and deliberately
+   * independent of availability, so it survives a switch through an
+   * uncaptioned track and is restored on the way back.
+   */
+  private captionsEnabled = false;
+  /** Notified whenever caption availability changes, so the CC button can follow. */
+  private captionAvailabilityListener: ((available: boolean) => void) | null =
+    null;
 
   /**
    * Re-render the Mute/Unmute button label from currentPipeline.getMuted().
@@ -339,10 +352,21 @@ export class Player {
     overlay.setClock(
       () => this.currentPipeline?.getPresentationTimeMs() ?? null,
     );
+
+    // Connect the active engine's extractor to the overlay. Both callers set
+    // currentPipeline and videoTrack before getting here, so this is the one
+    // place that knows which engine is live and what it is playing.
+    this.applyCaptionState();
   }
 
   /** Detach the overlay from the media and drop all caption state. */
   private releaseOverlay(): void {
+    // Tear the extractors down first: they must never outlive the sink they
+    // push into. This runs even without an overlay, so a page with no
+    // #captionOverlay still stops extraction on teardown.
+    this.setCc608Sink(null);
+    this.webcodecsPipeline?.setCc608Sink(null);
+
     if (!this.overlay) {
       return;
     }
@@ -368,16 +392,81 @@ export class Player {
   }
 
   /**
-   * Show or hide the caption overlay. The entry point the CC toggle (#165)
-   * drives; caption state is retained while hidden.
+   * True when the selected video track advertises in-band CTA-608 captions.
+   *
+   * The catalog descriptor is the only signal available: the captions live
+   * inside the coded video, so a track that carries them but omits the
+   * descriptor is indistinguishable from one that has none.
    */
-  public setCaptionsEnabled(enabled: boolean): void {
-    this.overlay?.setEnabled(enabled);
+  public areCaptionsAvailable(): boolean {
+    return trackHasCta608(this.videoTrack);
   }
 
-  /** True when the caption overlay is showing. */
+  /**
+   * Register a listener for caption availability. Fires whenever the selected
+   * video track changes in a way that changes the answer, so the CC button can
+   * enable and disable itself. Called immediately with the current value.
+   */
+  public onCaptionAvailabilityChange(
+    listener: (available: boolean) => void,
+  ): void {
+    this.captionAvailabilityListener = listener;
+    listener(this.areCaptionsAvailable());
+  }
+
+  /**
+   * The user's captions on/off intent. Remembered across track and namespace
+   * switches, so returning to a captioned track restores the user's choice
+   * rather than silently dropping it.
+   */
+  public setCaptionsEnabled(enabled: boolean): void {
+    this.captionsEnabled = enabled;
+    this.applyCaptionState();
+  }
+
+  /** The user's captions on/off intent (not whether captions are available). */
   public getCaptionsEnabled(): boolean {
-    return this.overlay?.isEnabled() ?? false;
+    return this.captionsEnabled;
+  }
+
+  /**
+   * Point the active engine's CTA-608 extractor at the overlay channel and
+   * bring the overlay in line with the user's intent.
+   *
+   * **The toggle gates extraction as well as rendering.** Rendering-only
+   * gating would keep paying the per-sample SEI scan and the 608 parse for
+   * captions nobody is looking at; both extractors were built with an
+   * `enabled` flag precisely so the work can be switched off. The visible
+   * consequence is that switching captions on mid-stream starts from a blank
+   * overlay until the next caption flip (up to ~1 s against mlmpub), because
+   * the decoder is rebuilt with no screen state. That is the intended
+   * trade-off: a brief gap on enable, versus continuous cost while off.
+   *
+   * Idempotent, and safe to call before a pipeline exists.
+   */
+  private applyCaptionState(): void {
+    const available = this.areCaptionsAvailable();
+    const gate = resolveCaptionGate({
+      enabled: this.captionsEnabled,
+      available,
+      engine: this.currentPipeline?.engine ?? null,
+    });
+    const sink = gate.active ? this.getCc608Sink() : null;
+
+    // The overlay keeps its timeline while hidden; setEnabled only stops
+    // resolution and painting.
+    this.overlay?.setEnabled(gate.active);
+
+    // Each extractor is fed only by its own engine's path, so the sink goes to
+    // the one that is playing and is cleared everywhere else. A null sink is
+    // what actually stops the extraction work.
+    this.setCc608Sink(gate.mseSink ? sink : null);
+    this.setCc608Enabled(gate.active);
+
+    this.webcodecsPipeline?.setCc608Sink(gate.webcodecsSink ? sink : null);
+    this.webcodecsPipeline?.setCc608Enabled(gate.active);
+
+    this.captionAvailabilityListener?.(available);
   }
 
   /**
@@ -1454,6 +1543,7 @@ export class Player {
     }
 
     this.wireMuteButton();
+    this.wireCaptionButton();
   }
 
   /**
@@ -1465,6 +1555,52 @@ export class Player {
    * expose a mute toggle the same way Chrome's do, and (b) the WebCodecs
    * path hides the <video> entirely.
    */
+  /**
+   * Wire the CC toggle. The button is disabled unless the selected video
+   * track advertises the CTA-608 accessibility descriptor, and follows
+   * availability automatically as tracks and namespaces change.
+   *
+   * Note the button reflects *effective* state (intent AND availability)
+   * while `captionsEnabled` stores intent alone — so a detour through an
+   * uncaptioned track shows "CC Off" and disabled, then comes back on when a
+   * captioned track is selected again.
+   */
+  private wireCaptionButton(): void {
+    const ccBtn = document.getElementById("ccBtn") as HTMLButtonElement | null;
+    if (!ccBtn) {
+      return;
+    }
+
+    const refresh = (available: boolean) => {
+      const on = available && this.getCaptionsEnabled();
+      ccBtn.disabled = !available;
+      ccBtn.setAttribute("aria-pressed", String(on));
+      ccBtn.title = available
+        ? on
+          ? "Turn closed captions off"
+          : "Turn closed captions on"
+        : "This track does not advertise CTA-608 captions";
+      const icon = document.createElement("span");
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = "💬";
+      ccBtn.replaceChildren(
+        icon,
+        document.createTextNode(on ? " CC On" : " CC Off"),
+      );
+    };
+
+    // Registering also fires once with the current value.
+    this.onCaptionAvailabilityChange(refresh);
+
+    ccBtn.onclick = () => {
+      if (ccBtn.disabled) {
+        return;
+      }
+      // setCaptionsEnabled -> applyCaptionState -> the listener above.
+      this.setCaptionsEnabled(!this.getCaptionsEnabled());
+    };
+  }
+
   private wireMuteButton(): void {
     const muteBtn = document.getElementById(
       "muteBtn",
