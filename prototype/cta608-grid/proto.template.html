@@ -1,0 +1,728 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CTA-608 grid rendering prototype — warp-player #160</title>
+
+<!--
+  THROWAWAY PROTOTYPE — warp-player issue #160.
+  Three radically different techniques for turning a cml-608 CaptionScreen into
+  DOM on the true 32x15 grid, switchable via ?variant=A|B|C.
+  No MoQ, no decoding: fixtures are authentic CaptionScreens generated with the
+  real @svta/cml-608 API and inlined below.
+-->
+
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --line: #30363d;
+    --fg: #e6edf3;
+    --dim: #8b949e;
+    --accent: #58a6ff;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font:
+      14px/1.5 ui-sans-serif,
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      sans-serif;
+    padding: 20px 20px 90px;
+  }
+  h1 {
+    font-size: 17px;
+    margin: 0 0 2px;
+  }
+  .sub {
+    color: var(--dim);
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .sub code {
+    color: var(--accent);
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 20px;
+    align-items: flex-end;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+  }
+  .ctl {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .ctl > label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--dim);
+  }
+  select,
+  input[type="range"] {
+    background: #0d1117;
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font: inherit;
+    font-size: 13px;
+  }
+  input[type="range"] {
+    padding: 0;
+    width: 150px;
+  }
+  .chk {
+    flex-direction: row;
+    align-items: center;
+    gap: 7px;
+  }
+  .chk > label {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 13px;
+    color: var(--fg);
+  }
+
+  /* The "surface" — stands in for the <video>/<canvas> element box. */
+  #stage {
+    position: relative;
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    background: #000;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  /* The letterboxed picture inside the surface (object-fit: contain). */
+  #media {
+    position: absolute;
+    background:
+      repeating-linear-gradient(135deg, #1b2432 0 22px, #16202c 22px 44px),
+      linear-gradient(160deg, #24486b, #101a26 70%);
+  }
+  #media::after {
+    content: "PICTURE";
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font:
+      700 clamp(20px, 6vw, 64px)/1 ui-sans-serif,
+      sans-serif;
+    color: #ffffff0d;
+    letter-spacing: 0.3em;
+  }
+  /* The overlay layer — the thing being prototyped. */
+  #overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  #refgrid {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .legend {
+    max-width: 1100px;
+    margin: 14px auto 0;
+    color: var(--dim);
+    font-size: 13px;
+  }
+  .legend b {
+    color: var(--fg);
+  }
+  .metrics {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: var(--dim);
+    margin-top: 6px;
+  }
+  .warn {
+    color: #f0883e;
+  }
+
+  /* Floating variant switcher — deliberately not part of the design under test. */
+  .switcher {
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: #f0f6fc;
+    color: #0d1117;
+    border-radius: 999px;
+    padding: 6px 8px;
+    box-shadow: 0 8px 28px #000a;
+    z-index: 50;
+  }
+  .switcher button {
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 17px;
+    cursor: pointer;
+    padding: 2px 12px;
+    border-radius: 999px;
+    color: #0d1117;
+  }
+  .switcher button:hover {
+    background: #0d117118;
+  }
+  .switcher .name {
+    font-weight: 600;
+    font-size: 13px;
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+  .switcher .hint {
+    font-size: 11px;
+    color: #57606a;
+    padding-right: 6px;
+  }
+</style>
+
+<h1>CTA-608 → DOM grid rendering</h1>
+<div class="sub">
+  warp-player <code>#160</code> · throwaway prototype · fixtures are real
+  <code>CaptionScreen</code>s from <code>@svta/cml-608@1.0.3</code> · switch
+  technique with ← / →
+</div>
+
+<div class="controls">
+  <div class="ctl">
+    <label for="case">Case</label
+    ><select id="case"></select>
+  </div>
+  <div class="ctl">
+    <label for="aspect">Media aspect</label>
+    <select id="aspect">
+      <option value="1.7778">16:9 (matches box)</option>
+      <option value="1.3333">4:3 (pillarboxed)</option>
+      <option value="2.3333">21:9 (letterboxed)</option>
+    </select>
+  </div>
+  <div class="ctl">
+    <label for="font">Font</label>
+    <select id="font">
+      <option value="ui-monospace, SFMono-Regular, Menlo, monospace">
+        monospace
+      </option>
+      <option value="Arial, Helvetica, sans-serif">Arial / Helvetica</option>
+      <option value='"Arial Narrow", Arial, sans-serif'>Arial Narrow</option>
+      <option value='Georgia, "Times New Roman", serif'>serif</option>
+    </select>
+  </div>
+  <div class="ctl">
+    <label for="width">Box width</label
+    ><input type="range" id="width" min="360" max="1100" value="1100" />
+  </div>
+  <div class="ctl chk">
+    <input type="checkbox" id="grid" checked /><label for="grid"
+      >Reference 32×15 grid</label
+    >
+  </div>
+  <div class="ctl chk">
+    <input type="checkbox" id="safe" checked /><label for="safe"
+      >Safe area</label
+    >
+  </div>
+  <div class="ctl chk">
+    <input type="checkbox" id="gapbug" /><label for="gapbug"
+      >Paint per <code>isEmpty()</code> (gap bug)</label
+    >
+  </div>
+  <div class="ctl chk">
+    <input type="checkbox" id="raf" /><label for="raf">Repaint every rAF</label>
+  </div>
+  <div class="ctl chk">
+    <input type="checkbox" id="play" checked /><label for="play"
+      >Animate roll-up</label
+    >
+  </div>
+</div>
+
+<div id="stage">
+  <div id="media"></div>
+  <svg id="refgrid"></svg>
+  <div id="overlay"></div>
+</div>
+
+<div class="legend">
+  <div>
+    <b>Reference grid</b>: blue = 32×15 cell boundaries inside the safe area ·
+    orange = safe-area edge (80% of picture) · the picture is the gradient box,
+    which is <i>not</i> the surface box at non-16:9 aspects.
+  </div>
+  <div class="metrics" id="metrics"></div>
+</div>
+
+<div class="switcher">
+  <button id="prev" title="Previous variant">←</button>
+  <span class="name" id="vname"></span>
+  <button id="next" title="Next variant">→</button>
+  <span class="hint">?variant=</span>
+</div>
+
+<script id="fixtures" type="application/json">
+  __FIXTURES__
+</script>
+
+<script>
+  /* ---------------------------------------------------------------- model */
+
+  const CASES = JSON.parse(document.getElementById("fixtures").textContent);
+
+  const COLS = 32,
+    ROWS = 15,
+    SAFE_FRAC = 0.8;
+
+  const FG = {
+    white: "#ffffff",
+    green: "#00ff00",
+    blue: "#0000ff",
+    cyan: "#00ffff",
+    red: "#ff0000",
+    yellow: "#ffff00",
+    magenta: "#ff00ff",
+    black: "#000000",
+  };
+  const BG = { ...FG, transparent: "transparent" };
+
+  /** cml: a cell is "empty" only if it is a space AND fully default-styled. */
+  const isEmptyCell = (c) =>
+    c.u === " " && c.f === "white" && c.b === "black" && !c.i && !c.n;
+
+  /** Painted segments of a row.
+   *
+   *  spanFill=true  (correct): first..last non-empty as ONE segment, so the
+   *    default-styled spaces that isEmptyCell() cannot distinguish from padding
+   *    still get their background box and the bar stays contiguous.
+   *  spanFill=false (the "gap bug"): only cells that are individually non-empty,
+   *    which tears the background under every default-styled space.
+   *
+   *  MAX_GAP guards the pathological case: an isolated styled cell far from the
+   *  caption would otherwise inflate the span across the whole row. */
+  const MAX_GAP = 2;
+  function segments(chars, spanFill) {
+    const painted = [];
+    for (let c = 0; c < COLS; c++) if (!isEmptyCell(chars[c])) painted.push(c);
+    if (!painted.length) return [];
+    if (!spanFill) return painted.map((c) => ({ first: c, last: c }));
+
+    const segs = [];
+    let first = painted[0],
+      prev = painted[0];
+    for (const c of painted.slice(1)) {
+      if (c - prev - 1 > MAX_GAP) {
+        segs.push({ first, last: prev });
+        first = c;
+      }
+      prev = c;
+    }
+    segs.push({ first, last: prev });
+    return segs;
+  }
+
+  const sameStyle = (a, b) =>
+    a.f === b.f && a.b === b.b && a.i === b.i && a.n === b.n;
+
+  /** Split [first..last] into runs of identical pen state. */
+  function runs(chars, first, last) {
+    const out = [];
+    let cur = null;
+    for (let c = first; c <= last; c++) {
+      const ch = chars[c];
+      if (cur && sameStyle(cur.style, ch)) {
+        cur.text += ch.u;
+        cur.len++;
+      } else {
+        cur = { col: c, len: 1, text: ch.u, style: ch };
+        out.push(cur);
+      }
+    }
+    return out;
+  }
+
+  function styleSpan(el, s) {
+    el.style.color = FG[s.f] ?? "#fff";
+    el.style.background = BG[s.b] ?? "transparent";
+    if (s.i) el.style.fontStyle = "italic";
+    if (s.n) el.style.textDecoration = "underline";
+  }
+
+  /* ------------------------------------------------------------- geometry */
+
+  /** object-fit: contain — the picture rect inside the surface box. */
+  function getMediaRect(boxW, boxH, mediaAspect) {
+    const boxAspect = boxW / boxH;
+    let w, h;
+    if (mediaAspect > boxAspect) {
+      w = boxW;
+      h = boxW / mediaAspect;
+    } else {
+      h = boxH;
+      w = boxH * mediaAspect;
+    }
+    return { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h };
+  }
+
+  /** CTA-608 safe area: centred 80% of the picture, divided 32 x 15. */
+  function getGrid(rect) {
+    const w = rect.w * SAFE_FRAC,
+      h = rect.h * SAFE_FRAC;
+    const x = rect.x + (rect.w - w) / 2,
+      y = rect.y + (rect.h - h) / 2;
+    return { x, y, w, h, cellW: w / COLS, cellH: h / ROWS };
+  }
+
+  /* ------------------------------------------------------------- variants */
+
+  const VARIANTS = {
+    /* A — dash.js PR #5078: one box per row, natural text, whole row stretched
+       with scaleX anchored at its start column. */
+    A: {
+      name: "Row scaleX (dash.js #5078)",
+      render(root, rows, g, opt) {
+        const pending = [];
+        for (const { row, chars } of rows) {
+          for (const { first, last } of segments(chars, !opt.gapbug)) {
+            const box = document.createElement("div");
+            box.style.cssText =
+              `position:absolute;white-space:pre;transform-origin:left top;` +
+              `font-family:${opt.font};`;
+            box.style.left = g.x + first * g.cellW + "px";
+            box.style.top = g.y + row * g.cellH + "px";
+            box.style.height = g.cellH + "px";
+            box.style.lineHeight = g.cellH + "px";
+            box.style.fontSize = g.cellH * 0.82 + "px";
+
+            for (const r of runs(chars, first, last)) {
+              const sp = document.createElement("span");
+              sp.textContent = opt.gapbug ? r.text : r.text.replace(/ /g, " ");
+              styleSpan(sp, r.style);
+              box.appendChild(sp);
+            }
+            root.appendChild(box);
+            pending.push({ box, target: (last - first + 1) * g.cellW });
+          }
+        }
+        // Measure after every box is attached, so this costs ONE layout flush
+        // rather than one per row. offsetWidth is layout width and is unaffected
+        // by a transform already set, so nothing needs clearing first.
+        for (const p of pending) {
+          const natural = p.box.offsetWidth;
+          if (natural > 0)
+            p.box.style.transform = `scaleX(${p.target / natural})`;
+          p.box.dataset.scale =
+            natural > 0 ? (p.target / natural).toFixed(3) : "-";
+        }
+      },
+    },
+
+    /* B — one CSS grid of 32x15 over the safe area; each painted cell is a grid
+       item. No JS measurement at all; the browser owns the column maths. */
+    B: {
+      name: "CSS grid 32×15 cells",
+      render(root, rows, g, opt) {
+        const grid = document.createElement("div");
+        grid.style.cssText =
+          `position:absolute;display:grid;` +
+          `grid-template-columns:repeat(${COLS},1fr);grid-template-rows:repeat(${ROWS},1fr);` +
+          `font-family:${opt.font};`;
+        grid.style.left = g.x + "px";
+        grid.style.top = g.y + "px";
+        grid.style.width = g.w + "px";
+        grid.style.height = g.h + "px";
+        grid.style.fontSize = g.cellH * 0.82 + "px";
+
+        for (const { row, chars } of rows) {
+          for (const { first, last } of segments(chars, !opt.gapbug)) {
+            for (let c = first; c <= last; c++) {
+              const ch = chars[c];
+              const cell = document.createElement("div");
+              cell.style.cssText =
+                "display:flex;align-items:center;justify-content:center;overflow:hidden;line-height:1;";
+              cell.style.gridColumn = c + 1;
+              cell.style.gridRow = row + 1;
+              cell.textContent = ch.u === " " ? " " : ch.u;
+              styleSpan(cell, ch);
+              grid.appendChild(cell);
+            }
+          }
+        }
+        root.appendChild(grid);
+      },
+    },
+
+    /* C — one absolutely-positioned box per style RUN, sized to exactly
+       len*cellW so backgrounds are exact; the text inside is stretched to fill
+       its own run box. Backgrounds never depend on font metrics. */
+    C: {
+      name: "Per-run boxes, exact widths",
+      render(root, rows, g, opt) {
+        const pending = [];
+        for (const { row, chars } of rows) {
+          for (const { first, last } of segments(chars, !opt.gapbug)) {
+            for (const r of runs(chars, first, last)) {
+              const box = document.createElement("div");
+              box.style.cssText = "position:absolute;overflow:hidden;";
+              box.style.left = g.x + r.col * g.cellW + "px";
+              box.style.top = g.y + row * g.cellH + "px";
+              box.style.width = r.len * g.cellW + "px";
+              box.style.height = g.cellH + "px";
+              box.style.background = BG[r.style.b] ?? "transparent";
+
+              const inner = document.createElement("span");
+              inner.style.cssText =
+                `position:absolute;left:0;top:0;white-space:pre;transform-origin:left top;` +
+                `font-family:${opt.font};`;
+              inner.style.lineHeight = g.cellH + "px";
+              inner.style.fontSize = g.cellH * 0.82 + "px";
+              inner.textContent = r.text.replace(/ /g, " ");
+              inner.style.color = FG[r.style.f] ?? "#fff";
+              if (r.style.i) inner.style.fontStyle = "italic";
+              if (r.style.n) inner.style.textDecoration = "underline";
+              box.appendChild(inner);
+              root.appendChild(box);
+              pending.push({ inner, target: r.len * g.cellW });
+            }
+          }
+        }
+        // Measure after all are attached — one layout flush, not one per run.
+        for (const p of pending) {
+          const nat = p.inner.offsetWidth;
+          if (nat > 0) p.inner.style.transform = `scaleX(${p.target / nat})`;
+        }
+      },
+    },
+  };
+
+  /* D — C', the settled technique: per-run boxes at exact left/width, plus ONE
+     scaleX for the whole paint derived from a single probe measurement, so every
+     run shares the same letterform scale instead of being fitted individually. */
+  let probeEl = null;
+  const PROBE = "MMMMMMMMMM"; // 10 chars; monospace advance is uniform
+  function probeAdvance(font, fontSizePx) {
+    if (!probeEl) {
+      probeEl = document.createElement("span");
+      probeEl.style.cssText =
+        "position:absolute;visibility:hidden;white-space:pre;left:-9999px;top:0;";
+      document.body.appendChild(probeEl);
+    }
+    probeEl.style.fontFamily = font;
+    probeEl.style.fontSize = fontSizePx + "px";
+    probeEl.textContent = PROBE;
+    return probeEl.offsetWidth / PROBE.length;
+  }
+
+  VARIANTS.D = {
+    name: "C′ — per-run boxes + single probe scale",
+    render(root, rows, g, opt) {
+      const fontSize = g.cellH * 0.82;
+      const advance = probeAdvance(opt.font, fontSize);
+      const scale = advance > 0 ? g.cellW / advance : 1;
+
+      for (const { row, chars } of rows) {
+        for (const { first, last } of segments(chars, !opt.gapbug)) {
+          for (const r of runs(chars, first, last)) {
+            const box = document.createElement("div");
+            box.style.cssText = "position:absolute;overflow:hidden;";
+            box.style.left = g.x + r.col * g.cellW + "px";
+            box.style.top = g.y + row * g.cellH + "px";
+            box.style.width = r.len * g.cellW + "px";
+            box.style.height = g.cellH + "px";
+            box.style.background = BG[r.style.b] ?? "transparent";
+
+            const inner = document.createElement("span");
+            inner.style.cssText =
+              `position:absolute;left:0;top:0;white-space:pre;transform-origin:left top;` +
+              `font-family:${opt.font};`;
+            inner.style.lineHeight = g.cellH + "px";
+            inner.style.fontSize = fontSize + "px";
+            inner.style.color = FG[r.style.f] ?? "#fff";
+            if (r.style.i) inner.style.fontStyle = "italic";
+            if (r.style.n) inner.style.textDecoration = "underline";
+            inner.textContent = r.text;
+            // One scale for every run — no per-run measurement at all.
+            inner.style.transform = `scaleX(${scale})`;
+            box.appendChild(inner);
+            root.appendChild(box);
+          }
+        }
+      }
+      root.dataset.scale = scale.toFixed(3);
+    },
+  };
+
+  const KEYS = Object.keys(VARIANTS);
+
+  /* ------------------------------------------------------------------- app */
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage"),
+    media = $("media"),
+    overlay = $("overlay"),
+    refgrid = $("refgrid");
+
+  const params = new URLSearchParams(location.search);
+  let variant = KEYS.includes(params.get("variant"))
+    ? params.get("variant")
+    : "A";
+  let caseKey = Object.keys(CASES)[0];
+  let step = 0,
+    repaints = 0,
+    lastPaintMs = 0;
+
+  // populate case selector
+  for (const [k, v] of Object.entries(CASES)) {
+    const o = document.createElement("option");
+    o.value = k;
+    o.textContent = v.label;
+    $("case").appendChild(o);
+  }
+
+  function currentScreens() {
+    return CASES[caseKey].screens;
+  }
+
+  function drawRefGrid(g, rect, boxW, boxH) {
+    // An <svg> with no width/height/viewBox falls back to 300x150 — set all three.
+    refgrid.setAttribute("viewBox", `0 0 ${boxW} ${boxH}`);
+    refgrid.setAttribute("width", boxW);
+    refgrid.setAttribute("height", boxH);
+    if (!$("grid").checked && !$("safe").checked) {
+      refgrid.innerHTML = "";
+      return;
+    }
+    const p = [];
+    if ($("safe").checked) {
+      p.push(
+        `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" fill="none" stroke="#f0883e55" stroke-width="1"/>`,
+      );
+      p.push(
+        `<rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" fill="none" stroke="#f0883e" stroke-width="1"/>`,
+      );
+    }
+    if ($("grid").checked) {
+      for (let c = 0; c <= COLS; c++) {
+        const x = g.x + c * g.cellW;
+        p.push(
+          `<line x1="${x}" y1="${g.y}" x2="${x}" y2="${g.y + g.h}" stroke="#58a6ff" stroke-opacity="${c % 4 ? 0.22 : 0.5}" stroke-width="1"/>`,
+        );
+      }
+      for (let r = 0; r <= ROWS; r++) {
+        const y = g.y + r * g.cellH;
+        p.push(
+          `<line x1="${g.x}" y1="${y}" x2="${g.x + g.w}" y2="${y}" stroke="#58a6ff" stroke-opacity="0.22" stroke-width="1"/>`,
+        );
+      }
+    }
+    refgrid.innerHTML = p.join("");
+  }
+
+  function paint() {
+    const boxW = stage.clientWidth,
+      boxH = stage.clientHeight;
+    const aspect = parseFloat($("aspect").value);
+    const rect = getMediaRect(boxW, boxH, aspect);
+    const g = getGrid(rect);
+
+    media.style.left = rect.x + "px";
+    media.style.top = rect.y + "px";
+    media.style.width = rect.w + "px";
+    media.style.height = rect.h + "px";
+
+    drawRefGrid(g, rect, boxW, boxH);
+
+    const t0 = performance.now();
+    overlay.innerHTML = "";
+    const screens = currentScreens();
+    const rows = screens[step % screens.length];
+    VARIANTS[variant].render(overlay, rows, g, {
+      font: $("font").value,
+      gapbug: $("gapbug").checked,
+    });
+    lastPaintMs = performance.now() - t0;
+    repaints++;
+
+    const scales = [...overlay.querySelectorAll("[data-scale]")].map(
+      (e) => e.dataset.scale,
+    );
+    $("metrics").textContent =
+      `surface ${boxW}×${boxH}  ·  picture ${rect.w.toFixed(0)}×${rect.h.toFixed(0)} @${rect.x.toFixed(0)},${rect.y.toFixed(0)}  ·  ` +
+      `cell ${g.cellW.toFixed(2)}×${g.cellH.toFixed(2)}  ·  nodes ${overlay.querySelectorAll("*").length}  ·  ` +
+      `paint ${lastPaintMs.toFixed(2)}ms  ·  repaints ${repaints}` +
+      (scales.length ? `  ·  scaleX ${scales.join(" ")}` : "");
+  }
+
+  function setVariant(v) {
+    variant = v;
+    const u = new URL(location.href);
+    u.searchParams.set("variant", v);
+    history.replaceState(null, "", u);
+    $("vname").textContent = `${v} — ${VARIANTS[v].name}`;
+    paint();
+  }
+
+  function cycle(d) {
+    setVariant(KEYS[(KEYS.indexOf(variant) + d + KEYS.length) % KEYS.length]);
+  }
+
+  $("prev").onclick = () => cycle(-1);
+  $("next").onclick = () => cycle(1);
+  addEventListener("keydown", (e) => {
+    if (
+      /^(INPUT|TEXTAREA)$/.test(e.target.tagName) ||
+      e.target.isContentEditable
+    )
+      return;
+    if (e.key === "ArrowLeft") cycle(-1);
+    if (e.key === "ArrowRight") cycle(1);
+  });
+
+  $("case").onchange = (e) => {
+    caseKey = e.target.value;
+    step = 0;
+    paint();
+  };
+  for (const id of ["aspect", "font", "grid", "safe", "gapbug"])
+    $(id).onchange = paint;
+  $("width").oninput = (e) => {
+    stage.style.maxWidth = e.target.value + "px";
+    paint();
+  };
+
+  // Roll-up animation + optional per-rAF repaint, to compare cost.
+  let last = 0;
+  function loop(ts) {
+    if ($("play").checked && currentScreens().length > 1 && ts - last > 900) {
+      last = ts;
+      step++;
+      paint();
+    } else if ($("raf").checked) {
+      paint();
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  new ResizeObserver(paint).observe(stage);
+  stage.style.aspectRatio = "16 / 9";
+  setVariant(variant);
+</script>
