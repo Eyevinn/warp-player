@@ -14,6 +14,7 @@ import {
 import { resolveCaptionGate } from "./cc608/gate";
 import { Cc608Source } from "./cc608/source";
 import type { Cc608Sink, Cc608Snapshot } from "./cc608/types";
+import { codecCanCarryCta608 } from "./loc/cta608";
 import {
   LocmafTrackState,
   decompressMoofWithTrackInfo,
@@ -399,7 +400,35 @@ export class Player {
    * descriptor is indistinguishable from one that has none.
    */
   public areCaptionsAvailable(): boolean {
-    return trackHasCta608(this.videoTrack);
+    return this.getCaptionAvailability() === "available";
+  }
+
+  /**
+   * Why captions are (un)available on the selected video track.
+   *
+   * Two conditions must both hold, and they fail for different reasons worth
+   * telling the user apart. mlmpub advertises the accessibility descriptor on
+   * its AV1 renditions too, but AV1 carries CTA-608 in a metadata OBU rather
+   * than an SEI NAL unit and neither extractor reads it. Gating on the
+   * descriptor alone enabled a CC button that could never show anything —
+   * found in browser verification (#166): the media played, captions never
+   * appeared, and nothing said why.
+   */
+  public getCaptionAvailability():
+    | "available"
+    | "no-track"
+    | "no-descriptor"
+    | "unsupported-codec" {
+    if (!this.videoTrack) {
+      return "no-track";
+    }
+    if (!trackHasCta608(this.videoTrack)) {
+      return "no-descriptor";
+    }
+    if (!codecCanCarryCta608(this.videoTrack.codec)) {
+      return "unsupported-codec";
+    }
+    return "available";
   }
 
   /**
@@ -1575,11 +1604,22 @@ export class Player {
       const on = available && this.getCaptionsEnabled();
       ccBtn.disabled = !available;
       ccBtn.setAttribute("aria-pressed", String(on));
+      // A disabled button must say *why*, or an unsupported combination looks
+      // identical to a broken player (#166).
+      const REASONS = {
+        "no-track": "Start playback to enable closed captions",
+        "no-descriptor": "This track does not advertise CTA-608 captions",
+        "unsupported-codec":
+          "This track advertises CTA-608, but the player cannot read captions " +
+          "from this codec (AV1 carries them in a metadata OBU, not an SEI NAL unit)",
+      } as const;
+      const availability = this.getCaptionAvailability();
       ccBtn.title = available
         ? on
           ? "Turn closed captions off"
           : "Turn closed captions on"
-        : "This track does not advertise CTA-608 captions";
+        : (REASONS[availability as keyof typeof REASONS] ??
+          "Closed captions unavailable on this track");
       const icon = document.createElement("span");
       icon.setAttribute("aria-hidden", "true");
       icon.textContent = "💬";
@@ -3741,12 +3781,14 @@ export class Player {
       return;
     }
 
-    // The SEI walker handles AVC (1-byte NAL header) and HEVC (2-byte);
-    // AV1 carries captions in metadata OBUs instead and is out of scope.
-    const codec = (this.videoTrack.codec ?? "").toLowerCase();
-    if (codec.startsWith("av01")) {
+    // The SEI walker handles AVC (1-byte NAL header) and HEVC (2-byte); AV1
+    // carries captions in a metadata OBU instead and is out of scope. This is
+    // an allow-list, not an `av01` deny-list: an unrecognised codec must not
+    // silently reach the SEI walker.
+    if (!codecCanCarryCta608(this.videoTrack.codec)) {
       this.logger.info(
-        `[CC608] Skipping CTA-608 extraction for unsupported codec "${codec}"`,
+        `[CC608] Skipping CTA-608 extraction for unsupported codec ` +
+          `"${this.videoTrack.codec ?? "(none)"}"`,
       );
       return;
     }

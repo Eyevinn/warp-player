@@ -21,3 +21,22 @@ reproduces with captions off. See
 [#175](https://github.com/Eyevinn/warp-player/issues/175).
 
 Reproduce with the recipe in #175, substituting the namespace and track.
+
+## Defect found and fixed during verification
+
+**The CC button enabled itself on AV1 tracks, where captions can never appear.**
+`mlmpub` advertises the CTA-608 accessibility descriptor on all of its video
+renditions — AV1 included (6/6 AV1, 6/6 AVC, 6/6 HEVC in the catalog) — but AV1
+carries CTA-608 in a `metadata_itu_t_t35` OBU rather than an SEI NAL unit, and
+neither extractor reads it. #165 gated availability on the descriptor alone, so
+the button enabled, the user turned it on, and nothing rendered with no
+indication why.
+
+A collision between two individually-correct decisions: #165 gated on the
+descriptor, #161/#162 skipped AV1. No unit test would have caught it — every
+layer behaved as specified.
+
+Fixed by requiring **both** the descriptor and a codec that can carry it, by
+replacing the MSE side's `av01` deny-list with the shared allow-list
+`codecCanCarryCta608()` (an unknown codec previously slipped through into the
+SEI walker), and by giving the disabled button a reason string.
