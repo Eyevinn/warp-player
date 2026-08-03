@@ -45,8 +45,31 @@ function allChildren(box: any, type: string): any[] {
 /**
  * Feed every sample of every `moof` in `fragment` to `consumer`.
  *
+ * ## Encrypted fragments need no special handling
+ *
+ * This runs unchanged on the `cmsf/drm-cbcs` and `cmsf/eccp-cbcs` namespaces,
+ * where the player has no key — and in the browser it could not have one
+ * anyway, since EME decrypts inside the media stack and JavaScript only ever
+ * sees the ciphertext it appends. Three facts make that safe, and
+ * `cta608Encrypted.test.ts` asserts each against real `mlmpub -cc608` output:
+ *
+ *  1. Captions are injected **before** encryption, so the SEI is present.
+ *  2. cbcs subsample encryption leaves a clear leader covering the non-VCL NAL
+ *     units and the start of the VCL NAL unit — **only part of the VCL NAL
+ *     unit is encrypted**. The caption SEI is non-VCL, so it is wholly clear.
+ *  3. NAL length prefixes are never encrypted, and the walk below (and cml's
+ *     inside `extractCta608DataFromSample`) is **prefix-driven**, not a
+ *     start-code scan: it reads a clear length, steps over the payload, and
+ *     reads the next clear length, only descending into NAL units whose
+ *     (clear) header says SEI.
+ *
+ * Point 3 is why no `senc` / `saiz` / `saio` parsing is needed to stay safe:
+ * ciphertext is stepped over by length, never interpreted as structure. Do not
+ * "optimise" this into a start-code scan — that would read encrypted bytes as
+ * framing and could desynchronise on protected content.
+ *
  * @param fragment - the complete CMAF fragment (styp/moof/mdat, possibly
- *   several moof+mdat pairs).
+ *   several moof+mdat pairs). May be encrypted.
  * @param timescale - the video track's timescale, from the init segment.
  * @returns the number of samples handed to the consumer.
  */
