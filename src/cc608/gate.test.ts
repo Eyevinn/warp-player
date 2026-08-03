@@ -1,3 +1,5 @@
+import { codecCanCarryCta608 } from "../loc/cta608";
+
 import { resolveCaptionGate } from "./gate";
 
 describe("resolveCaptionGate", () => {
@@ -69,5 +71,30 @@ describe("resolveCaptionGate", () => {
         }
       }
     }
+  });
+});
+
+describe("caption availability requires a codec that can carry CTA-608", () => {
+  // Regression for #166: mlmpub advertises the accessibility descriptor on its
+  // AV1 renditions too, but AV1 carries CTA-608 in a metadata OBU rather than
+  // an SEI NAL unit, and neither extractor reads it. Gating on the descriptor
+  // alone enabled a CC button that could never show anything.
+  const cases: [string | undefined, boolean][] = [
+    ["avc1.4D401F", true],
+    ["avc3.4D401F", true],
+    ["hvc1.1.6.L93.90", true],
+    ["hev1.1.6.L93.90", true],
+    ["av01.0.05M.08", false],
+    ["vp09.00.10.08", false],
+    [undefined, false],
+    ["", false],
+  ];
+
+  it.each(cases)("codecCanCarryCta608(%s) === %s", (codec, expected) => {
+    expect(codecCanCarryCta608(codec)).toBe(expected);
+  });
+
+  it("is an allow-list, so an unknown codec is rejected rather than passed", () => {
+    expect(codecCanCarryCta608("future-codec.1")).toBe(false);
   });
 });
