@@ -38,3 +38,6 @@ CLAUDE.local.md
 # Local screenshots and release-tarball scratch artifacts
 *.png
 dist-*.tgz
+# ...but verification evidence is part of the record, not scratch. GitHub's API
+# cannot attach images to issue comments, so these are the only durable copy.
+!docs/verification/**/*.png
