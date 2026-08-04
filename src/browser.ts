@@ -658,6 +658,14 @@ async function connect() {
     return;
   }
 
+  // Tear the outgoing instance down before replacing it. Its overlay's
+  // renderer roots live in the shared #captionOverlay container and its
+  // resolution loop starts at attach(), neither of which the garbage
+  // collector can reclaim: without this, every Connect left another root
+  // and another rAF loop behind, so captions were painted by a stack of
+  // overlays (two after the first Connect) instead of one.
+  player.dispose();
+
   // Update the server URL from the input field
   player = new Player(
     serverUrlInput.value,
