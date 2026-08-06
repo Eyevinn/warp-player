@@ -7,14 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-06
+
+In-band CTA-608 captions on both render engines, delivered through a general
+timed-text overlay seam that WebVTT, IMSC-1 and ograf renderers can also use.
+
 ### Added
 
 - Timed-text overlay seam (`src/overlay`): a snapshot timeline with `push`
   (open-ended state) and `addCue` (intervals) channels, resolved by search
-  against the picture clock, plus a CTA-608 renderer that paints screens on
-  the true 32x15 grid.
+  against the picture clock. Renderers own a DOM subtree and are re-rendered
+  on change only.
+- CTA-608 CC1 captions decoded from in-band SEI on **both** engines — MSE
+  (CMAF and LOCMAF) and WebCodecs (LOC) — and painted on the true 32x15 grid
+  inside the CTA-608 safe area, with colours, background boxes and the
+  pop-on / roll-up / paint-on screen model. Encrypted namespaces are covered
+  too: the caption SEI sits in the clear subsample leader, so no key is
+  needed to read it.
+- CC toggle, enabled only when the selected video track advertises
+  `urn:scte:dash:cc:cea-608:2015` **and** its codec can carry CTA-608;
+  default off, and struck through when captions are impossible for the track.
+- AV1 video on the WebCodecs LOC pipeline: raw OBU temporal units fed to the
+  decoder, with keyframes and reconfiguration driven by the in-band sequence
+  header. AV1 carries CTA-608 in a metadata OBU rather than an SEI NAL unit,
+  so AV1 renditions play but are not captioned.
 - `IPlaybackPipeline.getPresentationTimeMs()` — the presentation time of the
   picture on screen, implemented by both render engines.
+- End-to-end verification record with screenshots under
+  `docs/verification/cc608/`.
+
+### Changed
+
+- TypeScript `target` and `lib` raised to ES2022.
+- ESLint 10, with `eslint-plugin-import` replaced by the maintained
+  `eslint-plugin-import-x` fork; the two unused prettier packages are gone,
+  leaving Prettier to run standalone.
+
+### Fixed
+
+- Overlays no longer stack: each Connect built a fresh `Player` without
+  disposing the outgoing one, leaking a renderer root and a
+  `requestAnimationFrame` loop every time.
+- No background box is painted around a cell holding no glyph — the mid-row
+  code that has to precede a coloured row was briefly showing as a lone box
+  while a paint-on or roll-up row was still arriving.
+- The CC button no longer enables itself on tracks whose codec cannot carry
+  CTA-608, where turning it on could never show anything.
 
 ## [0.12.0] - 2026-07-06
 
