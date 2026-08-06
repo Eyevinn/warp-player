@@ -132,19 +132,63 @@ describe("rowSegments", () => {
 
   it("splits at a gap wider than the max", () => {
     // A stray cell left by setPAC stamping the pen under the cursor: a
-    // naive first..last span would bar the whole row.
+    // naive first..last span would bar the whole row. The stray cell is a
+    // styled blank, so the split leaves it in a segment of its own, which is
+    // then dropped for having no glyph in it.
     const cells = write(blankCells(), 0, "CAPTION");
     write(cells, 28, " ", pen({ background: "red" }));
-    expect(rowSegments(cells)).toEqual([
-      { first: 0, last: 6 },
-      { first: 28, last: 28 },
-    ]);
+    expect(rowSegments(cells)).toEqual([{ first: 0, last: 6 }]);
   });
 
   it("honours a caller-supplied max gap", () => {
+    // With the gap allowed, the stray blank merges into the caption's own
+    // segment, which has glyphs and so survives whole.
     const cells = write(blankCells(), 0, "CAPTION");
     write(cells, 28, " ", pen({ background: "red" }));
     expect(rowSegments(cells, 100)).toEqual([{ first: 0, last: 28 }]);
+  });
+
+  // A mid-row code occupies a display cell and renders as a space with the new
+  // attributes, and a PAC cannot carry both a colour and an indent — so an
+  // indented coloured caption always has a styled blank just before its text.
+  // Mid-paint that blank can be the row's only non-empty cell.
+  describe("the mid-row cell ahead of a coloured caption", () => {
+    it("paints nothing while the blank is alone on the row", () => {
+      const cells = write(blankCells(), 10, " ", pen({ foreground: "yellow" }));
+      expect(rowSegments(cells)).toEqual([]);
+      expect(layoutSnapshot(screen(row(14, cells)), RECT)).toEqual([]);
+    });
+
+    it("paints the blank once the first glyphs arrive", () => {
+      // mlmpub's yellow "GRP <n>" row, two characters into the paint.
+      const cells = write(blankCells(), 10, " ", pen({ foreground: "yellow" }));
+      write(cells, 11, "GR", pen({ foreground: "yellow" }));
+      expect(rowSegments(cells)).toEqual([{ first: 10, last: 12 }]);
+      const boxes = layoutSnapshot(screen(row(14, cells)), RECT);
+      expect(boxes).toHaveLength(1);
+      expect(boxes[0].text).toBe(" GR");
+      expect(boxes[0].len).toBe(3);
+    });
+
+    it("keeps a lone blank that is underlined, which is visible on its own", () => {
+      const cells = write(blankCells(), 10, " ", pen({ underline: true }));
+      expect(rowSegments(cells)).toEqual([{ first: 10, last: 10 }]);
+    });
+
+    it("drops a blank row without disturbing a captioned one", () => {
+      const clock = write(blankCells(), 10, "12:34:56.000");
+      const groupTag = write(
+        blankCells(),
+        10,
+        " ",
+        pen({ foreground: "yellow" }),
+      );
+      const boxes = layoutSnapshot(
+        screen(row(13, clock), row(14, groupTag)),
+        RECT,
+      );
+      expect(boxes.map((b) => b.row)).toEqual([13]);
+    });
   });
 });
 
@@ -295,15 +339,17 @@ describe("layoutSnapshot", () => {
     expect(boxes[0].background).toBe("transparent");
   });
 
-  it("paints a stray PAC cell as its own box, not a bar across the row", () => {
+  it("does not let a stray PAC cell bar the row, or paint at all", () => {
+    // Two guards in sequence: the gap split keeps the stray cell out of the
+    // caption's box (no bar across the row), and having no glyph in it keeps
+    // it from becoming a box of its own.
     const cells = write(blankCells(), 0, "CAPTION TEXT");
     write(cells, 30, " ", pen({ background: "blue" }));
 
     const boxes = layoutSnapshot(screen(row(14, cells)), RECT);
-    expect(boxes).toHaveLength(2);
-    expect(boxes[0].len).toBe(12);
-    expect(boxes[1]).toMatchObject({ col: 30, len: 1 });
-    expect(boxes[1].width).toBeCloseTo(GRID.cellW, 6);
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]).toMatchObject({ col: 0, len: 12 });
+    expect(boxes[0].width).toBeCloseTo(12 * GRID.cellW, 6);
   });
 
   it("ignores rows outside the 15-row grid", () => {
