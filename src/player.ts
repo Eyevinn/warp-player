@@ -3495,6 +3495,7 @@ export class Player {
         `ClearKey fetch failed for ${licenseUrl}: ${
           error instanceof Error ? error.message : String(error)
         }`,
+        { cause: error },
       );
     }
 

@@ -3,9 +3,16 @@
 // `prettier/*` rule, and no stylistic rule below overlaps Prettier's output
 // (`max-len` is 120 against Prettier's 80, so it only catches what Prettier
 // cannot break, and those cases are already exempted).
+// eslint-plugin-import-x rather than eslint-plugin-import: the latter has no
+// ESLint 10 release and its rules call SourceCode APIs that ESLint 10 removed,
+// so `import/order` throws `sourceCode.getTokenOrCommentAfter is not a
+// function` the moment it has something to report. That failure is invisible
+// on a clean tree, which makes forcing the peer with an npm override the wrong
+// fix. import-x is the maintained fork, declares ESLint 10 support, and keeps
+// the same rules under an `import-x/` prefix.
 import eslint from "@eslint/js";
 import typescriptEslint from "typescript-eslint";
-import importPlugin from "eslint-plugin-import";
+import importPlugin from "eslint-plugin-import-x";
 import globals from "globals";
 
 export default typescriptEslint.config(
@@ -40,7 +47,7 @@ export default typescriptEslint.config(
       },
     },
     plugins: {
-      import: importPlugin,
+      "import-x": importPlugin,
     },
     rules: {
       // TypeScript specific rules
@@ -76,11 +83,11 @@ export default typescriptEslint.config(
       ],
 
       // Import rules
-      "import/no-unresolved": "off", // Turning off as TypeScript handles this
-      "import/named": "error",
-      "import/default": "error",
-      "import/namespace": "error",
-      "import/order": [
+      "import-x/no-unresolved": "off", // Turning off as TypeScript handles this
+      "import-x/named": "error",
+      "import-x/default": "error",
+      "import-x/namespace": "error",
+      "import-x/order": [
         "error",
         {
           groups: [
@@ -97,7 +104,7 @@ export default typescriptEslint.config(
       ],
     },
     settings: {
-      "import/resolver": {
+      "import-x/resolver": {
         node: {
           extensions: [".js", ".jsx", ".ts", ".tsx"],
         },
