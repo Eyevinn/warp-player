@@ -4,10 +4,20 @@ Browser verification of the map [#157](https://github.com/Eyevinn/warp-player/is
 destination, captured against a live `mlmpub -cc608` with a short-lived EC cert
 and the `-sideport` fingerprint on `127.0.0.1`.
 
-Rows 1–4 were captured on 2026-08-03; rows 5 and 6 on 2026-08-04 in real Google
-Chrome 150 (`navigator.userAgentData.brands` includes `Google Chrome`), after
-the publisher-side ClearKey fix
-([Eyevinn/moqlivemock#122](https://github.com/Eyevinn/moqlivemock/issues/122)).
+Rows 1–4 were captured on 2026-08-03 against the then-default **pop-on**
+caption mode. Rows 5 and 6 were recaptured on 2026-08-06 in real Google Chrome
+150 (`navigator.userAgentData.brands` includes `Google Chrome`) against the
+current default, **paint-on** (`mlmpub -cc608mode`), after two changes that had
+to be in the same tree to depict the final rendering: the publisher-side
+ClearKey fix
+([Eyevinn/moqlivemock#122](https://github.com/Eyevinn/moqlivemock/issues/122)),
+without which encrypted playback never started, and the glyph-box fix below,
+without which paint-on briefly paints an empty box.
+
+Paint-on rewrites the row two characters per frame rather than flipping a
+finished caption up, so rows 5 and 6 are timed to the moment the caption
+completes — that state holds for only the last ~280 ms of each group, the rest
+being ~160 ms blank then ~560 ms of typing.
 
 | #   | path          | namespace        | codec | screenshot                | result |
 | --- | ------------- | ---------------- | ----- | ------------------------- | ------ |
@@ -44,12 +54,21 @@ Measured on the encrypted AVC run (row 5) and spot-checked on the others:
 - **Advances once per second, in step.** Sampling the overlay every 200 ms gave a
   new caption at 1000 ms intervals with `GRP n` incrementing by exactly 1 — not
   frozen and not stepping at segment boundaries.
-- **Publisher offset.** `GRP n` appears ~0.79 s into the group whose time it
-  names (caption `GRP 1785840079` on screen at `currentTime` 1785840079.79),
-  consistent with the ~0.63–0.76 s scheduling offset documented in
-  [Eyevinn/moqlivemock#118](https://github.com/Eyevinn/moqlivemock/issues/118).
-  `GRP n` is on screen during group `n`, so this is the expected constant offset
-  rather than a player defect.
+- **Paint-on cadence, and it lands on the right second.** Sampled every 40 ms
+  (one frame at 25 fps), each group `n` clears at n+0.04, types two characters
+  per frame from n+0.20, completes at n+0.76 and holds to n+1.04 — matching the
+  publisher's design of clearing on frame 1, first characters on frame 4 and
+  complete on frame 17. `GRP n` is on screen during group `n` (`GRP 1785999108`
+  at `currentTime` 1785999108.759), so paint-on displays the caption over the
+  second it names. The ~0.63–0.76 s pop-on scheduling offset discussed in
+  [Eyevinn/moqlivemock#118](https://github.com/Eyevinn/moqlivemock/issues/118)
+  is what paint-on exists to avoid, and it does not apply here.
+- **Same on both engines.** The MSE and WebCodecs paths produce an identical
+  cadence; the extractor reads the live displayed screen, so it needs no
+  per-mode handling. Paint-on pushes ~14 snapshots a second where pop-on pushed
+  one, with no measurable cost: 0 dropped frames of 1379, playback rate 0.999,
+  and `SnapshotTimeline.prune()` runs in the resolution loop so the timeline
+  does not accumulate.
 - **CC button.** Disabled before playback starts, enabled on captioned tracks
   once playing, starts `CC Off` with `aria-pressed=false`, and toggles cleanly to
   `CC On`. On AV1 it stays disabled with the reason string, since AV1 carries
@@ -96,6 +115,19 @@ Worth noting for the "no duplicated rows" check: stacked overlays are exactly
 what that check exists to catch, and it took DOM inspection rather than looking
 at the screen to notice — the stacked rows are pixel-identical and land on top
 of each other.
+
+**3. A background box painted around no glyph** (fixed separately in #176). A
+stray black square flashed ahead of the first character of the yellow row for
+about a frame. A coloured run at column > 0 must be preceded by a mid-row code,
+which occupies a display cell rendered as a styled blank; while the row is
+still arriving pair by pair — which is exactly what paint-on and roll-up do —
+that blank is briefly the row's only non-empty cell and became a one-cell box
+with nothing in it. Only the yellow row showed it: the white row's blank is
+default-styled and therefore indistinguishable from untouched padding.
+
+It surfaced only once the publisher defaulted to paint-on, so pop-on rows 1–4
+never exhibited it. Rows 5 and 6 are the first captures taken with the fix in
+the same tree.
 
 ## Blocked-then-unblocked: the encrypted rows
 
