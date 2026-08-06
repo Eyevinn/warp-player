@@ -210,6 +210,25 @@
         cursor: not-allowed;
       }
 
+      /* A disabled CC button is the normal state on most tracks, so dimming
+         alone reads as "nothing here" rather than "captions are unavailable".
+         Strike it through so the state is legible at a glance; the title
+         attribute carries the reason. */
+      .btn-unavailable {
+        position: relative;
+      }
+
+      .btn-unavailable::after {
+        content: "";
+        position: absolute;
+        left: 0.35rem;
+        right: 0.35rem;
+        top: 50%;
+        border-top: 2px solid currentColor;
+        transform: rotate(-12deg);
+        pointer-events: none;
+      }
+
       .btn-primary {
         background-color: var(--bg-button-primary);
         color: var(--text-primary);
