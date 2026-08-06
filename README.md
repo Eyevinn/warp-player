@@ -93,9 +93,18 @@ warp-player/
 │   ├── loc/              # LOC payload helpers for the WebCodecs pipeline
 │   │   ├── avc.ts        # AVC (H.264) NALU walker / avcC builder
 │   │   ├── hevc.ts       # HEVC (H.265) NALU walker / hvcC builder
+│   │   ├── av1.ts        # AV1 OBU walker, sequence-header / keyframe detection
 │   │   ├── aac.ts        # AAC AudioSpecificConfig from catalog metadata
 │   │   ├── opus.ts       # Opus ID-header (OpusHead) from catalog metadata
+│   │   ├── cta608.ts     # CTA-608 cc_data extraction from LOC access units
 │   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
+│   ├── cc608/            # Codec- and container-agnostic CTA-608 decoding
+│   │   ├── source.ts     # Feeds coded samples to @svta/cml-608, emits screens
+│   │   ├── snapshot.ts   # Immutable copy of a live CaptionScreen
+│   │   └── gate.ts       # Where the caption sink goes, and whether to extract
+│   ├── overlay/          # Timed-text / graphics overlay seam
+│   │   ├── overlayLayer.ts        # Snapshot timeline, clock, geometry
+│   │   └── renderers/cta608.ts    # CTA-608 screens on the true 32x15 grid
 │   ├── locmaf/           # LOCMAF (compact CMAF packaging) for the MSE pipeline
 │   │   ├── locmaf.ts     # Version-gating wrapper (LOCMAF v0.3 only)
 │   │   ├── vi64.ts       # MOQT (draft-18 §1.4.1) varints + zigzag
@@ -260,8 +269,17 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 - Two interchangeable render engines selected per session:
   - **MSE / CMAF** — the default for CMAF tracks, also handles encrypted content via EME
   - **WebCodecs / LOC** — clear-only pipeline for `packaging: "loc"` tracks,
-    supporting AVC and HEVC video plus AAC and Opus audio
+    supporting AVC, HEVC and AV1 video plus AAC and Opus audio
     ([draft-mzanaty-moq-loc])
+- In-band **CTA-608** CC1 captions on both engines, decoded from the video SEI
+  and painted on the true 32x15 grid inside the CTA-608 safe area — colours,
+  background boxes and the pop-on / roll-up / paint-on screen model. They work
+  on encrypted namespaces too, because the caption SEI sits in the clear
+  subsample leader. The CC button enables only when the track advertises
+  `urn:scte:dash:cc:cea-608:2015` and its codec can carry the captions, so AV1
+  renditions play but are not captioned (AV1 uses a metadata OBU instead of an
+  SEI NAL unit). Captions ride a general timed-text overlay seam
+  (`src/overlay`) that WebVTT, IMSC-1 and ograf renderers can share
 - Engine selector with `Auto` mode that picks MSE or WebCodecs from the
   selected tracks' packaging and encryption status, and namespace filtering
   that dims out namespaces incompatible with the chosen engine
