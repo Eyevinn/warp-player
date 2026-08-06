@@ -11,11 +11,7 @@ export type Message = Subscriber | Publisher;
 
 // Sent by subscriber
 export type Subscriber =
-  | Subscribe
-  | Unsubscribe
-  | Fetch
-  | PublishNamespaceOk
-  | PublishNamespaceError;
+  Subscribe | Unsubscribe | Fetch | PublishNamespaceOk | PublishNamespaceError;
 
 export function isSubscriber(m: Message): m is Subscriber {
   return (
