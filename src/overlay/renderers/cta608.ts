@@ -33,6 +33,16 @@
 //     character is written, so a PAC *creates* a non-empty cell that can sit
 //     far from the caption. A naive first..last span then bars the whole row.
 //     Guard: split the span at gaps of more than MAX_EMPTY_GAP empty cells.
+//
+// And one CTA-608 fact that is not a cml trap but looks like one on screen: a
+// mid-row code occupies a display cell and renders as a space carrying the new
+// attributes (SPEC section 7). A PAC encodes *either* a colour or an indent,
+// never both, so every coloured run at column > 0 is preceded by one — an
+// indented coloured caption always has a styled blank just before its text.
+// While that text is still arriving pair by pair, in paint-on or roll-up, the
+// blank is briefly the row's only non-empty cell and paints as a lone
+// background box: a square that flashes ahead of the first glyph. Rule: a
+// segment with no glyph in it is not painted — see segmentHasInk.
 
 import {
   CC608_COLS,
@@ -138,9 +148,41 @@ export interface Cc608Segment {
 }
 
 /**
+ * True when a segment would show something: any non-blank glyph, or a blank
+ * that is underlined (an underline is visible on its own).
+ *
+ * A segment failing this is a styled blank and nothing else — a mid-row cell
+ * ahead of text that has not arrived yet, or a PAC-stamped cell close enough to
+ * the caption to survive the gap split. Painting it draws a background box with
+ * no content in it, which is the stray square; skipping it loses nothing,
+ * because a box is only ever a backdrop for glyphs.
+ *
+ * Spaces *within* a segment that also has glyphs are unaffected: they are the
+ * caption's own inter-word cells and must keep their background, which is the
+ * whole reason segments are painted first..last rather than per cell.
+ */
+function segmentHasInk(
+  cells: Cc608Cell[],
+  first: number,
+  last: number,
+): boolean {
+  for (let col = first; col <= last; col++) {
+    const cell = cells[col];
+    if (!cell) {
+      continue;
+    }
+    if (cell.uchar.trim() !== "" || cell.pen.underline) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The painted segments of a row: first..last non-empty cell as ONE segment
  * (so default-styled spaces inside the caption keep their background), split
- * wherever more than MAX_EMPTY_GAP consecutive empty cells appear.
+ * wherever more than MAX_EMPTY_GAP consecutive empty cells appear, and with
+ * segments that would paint a box around no glyph dropped (see segmentHasInk).
  */
 export function rowSegments(
   cells: Cc608Cell[],
@@ -167,7 +209,9 @@ export function rowSegments(
     prev = col;
   }
   segments.push({ first, last: prev });
-  return segments;
+  // Filter after splitting, not before: a stray blank must be judged as its own
+  // segment, and a blank merged into a segment that has glyphs is legitimate.
+  return segments.filter((s) => segmentHasInk(cells, s.first, s.last));
 }
 
 /** True when two pen states paint identically. */
