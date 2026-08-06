@@ -1616,6 +1616,17 @@ export class Player {
           : "Turn closed captions on"
         : (REASONS[availability as keyof typeof REASONS] ??
           "Closed captions unavailable on this track");
+      // Dimming alone is too quiet: a greyed CC button is the normal state on
+      // most tracks, so it reads as "nothing here" rather than "this track
+      // cannot be captioned" — the confusion AV1 renditions caused, where
+      // playback works and only captions are impossible. Strike the button
+      // through so the state is legible without hovering for the reason.
+      // "no-track" is excluded: before playback starts nothing is unavailable
+      // yet, it is simply not applicable.
+      ccBtn.classList.toggle(
+        "btn-unavailable",
+        !available && availability !== "no-track",
+      );
       const icon = document.createElement("span");
       icon.setAttribute("aria-hidden", "true");
       icon.textContent = "💬";
