@@ -1,7 +1,11 @@
+// Formatting is Prettier's job and Prettier alone runs it, via the `pretty`
+// script. ESLint carries no prettier plugin or config: nothing here enables a
+// `prettier/*` rule, and no stylistic rule below overlaps Prettier's output
+// (`max-len` is 120 against Prettier's 80, so it only catches what Prettier
+// cannot break, and those cases are already exempted).
 import eslint from "@eslint/js";
 import typescriptEslint from "typescript-eslint";
 import importPlugin from "eslint-plugin-import";
-import prettierPlugin from "eslint-plugin-prettier";
 import globals from "globals";
 
 export default typescriptEslint.config(
@@ -37,7 +41,6 @@ export default typescriptEslint.config(
     },
     plugins: {
       import: importPlugin,
-      prettier: prettierPlugin,
     },
     rules: {
       // TypeScript specific rules
