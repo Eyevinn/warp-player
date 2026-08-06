@@ -201,8 +201,7 @@ export class Player {
   // Notifies the UI when an engine profile changes the effective buffer values,
   // so the input fields can reflect what is actually in use.
   private bufferParamsCallback:
-    | ((minimalBufferMs: number, targetLatencyMs: number) => void)
-    | null = null;
+    ((minimalBufferMs: number, targetLatencyMs: number) => void) | null = null;
   private minBufferLevel: number = Infinity; // Track minimum buffer level between segments
   private lastSegmentAppendTime: number = 0; // Track when we last appended a segment
   // Latency catch-up authority. Chrome's media clock tracks wall-clock tightly,
@@ -415,10 +414,7 @@ export class Player {
    * appeared, and nothing said why.
    */
   public getCaptionAvailability():
-    | "available"
-    | "no-track"
-    | "no-descriptor"
-    | "unsupported-codec" {
+    "available" | "no-track" | "no-descriptor" | "unsupported-codec" {
     if (!this.videoTrack) {
       return "no-track";
     }
