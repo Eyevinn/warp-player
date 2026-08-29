@@ -209,6 +209,17 @@ export class Player {
   // needs more authority to hold target latency (set in the constructor).
   private maxCatchupRate = 1.02; // ceiling for the latency catch-up playback rate
   private catchupBaseGain = 0.03; // proportional gain for latency catch-up
+  // WebCodecs latency-controller state. Unlike <video>.currentTime, the
+  // WebCodecs picture clock (lastPresentedMs) only advances when a frame is
+  // actually painted, so the raw latency reading is a sawtooth one frame
+  // interval (40 ms at 25 fps) deep. Fed straight into the rate branches it
+  // makes the rate flap on every tick, and each flap re-anchors the audio
+  // schedule — an audible click twice a second. Smooth the reading and hold
+  // 1.0x inside a deadband around the target instead.
+  private webcodecsLatencyEmaMs: number | null = null;
+  private webcodecsRateEngaged = false;
+  private readonly webcodecsLatencyEmaAlpha = 0.25; // ~1.7 s at the 500 ms cadence
+  private readonly webcodecsRateDeadbandMs = 60; // engage outside +/- this
   // Drives checkBufferHealth on a fixed cadence (MSE only). timeupdate fires
   // too sparsely on Safari (~1/s) to control latency responsively.
   private mseControlTimer: ReturnType<typeof setInterval> | null = null;
@@ -1823,6 +1834,7 @@ export class Player {
     this.videoBufferReady = false;
     this.audioBufferReady = false;
     this.playbackStarted = false;
+    this.resetWebCodecsRateController();
 
     // Reset counters
     this.videoObjectsReceived = 0;
@@ -3070,6 +3082,7 @@ export class Player {
     this.webcodecsPipeline = pipeline;
     this.currentPipeline = pipeline;
     this.refreshMuteLabel?.();
+    this.resetWebCodecsRateController();
     this.playbackStarted = true;
     this.updateEngineLegend();
 
@@ -5227,7 +5240,13 @@ export class Player {
 
     const minimalBufferSec = this.minimalBufferMs / 1000;
     const targetLatencyMs = this.targetLatencyMs;
-    const currentLatencyMs = snap.currentLatencyMs;
+
+    // Smooth the picture-clock sawtooth out of the reading before it reaches
+    // the rate branches. Without this the raw value straddles the target on
+    // every tick and the rate flaps between roughly 1.003 and 0.994.
+    const smoothedLatencyMs = this.smoothWebCodecsLatency(
+      snap.currentLatencyMs,
+    );
 
     // Use the lower of the two buffers when audio is present, otherwise just
     // video — matches the legacy controller's effectiveMinBuffer semantics.
@@ -5235,34 +5254,43 @@ export class Player {
       ? Math.min(snap.videoBufferedAheadS, snap.audioBufferedAheadS)
       : snap.videoBufferedAheadS;
     const belowMinimalBuffer = effectiveMinBuffer < minimalBufferSec;
-    const aboveTargetLatency = currentLatencyMs > targetLatencyMs;
-    const belowTargetLatency = currentLatencyMs < targetLatencyMs;
 
-    let newRate: number | null = null;
+    // Hysteresis around the target: engage the controller only once the
+    // smoothed latency is more than a deadband away, and disengage (back to
+    // exactly 1.0x) once it has recovered to within half a deadband. This
+    // keeps the rate pinned at 1.000 in steady state rather than chattering
+    // across the target, which is what the audio scheduler hears.
+    const latencyErrorMs = smoothedLatencyMs - targetLatencyMs;
+    if (Math.abs(latencyErrorMs) > this.webcodecsRateDeadbandMs) {
+      this.webcodecsRateEngaged = true;
+    } else if (Math.abs(latencyErrorMs) < this.webcodecsRateDeadbandMs / 2) {
+      this.webcodecsRateEngaged = false;
+    }
+
+    let newRate: number;
     if (belowMinimalBuffer) {
-      // Buffer underrun risk — slow down to let it grow.
+      // Buffer underrun risk — slow down to let it grow. Bypasses the
+      // deadband: this is a starvation guard, not latency trimming.
       newRate = 0.97;
-    } else if (aboveTargetLatency) {
+    } else if (!this.webcodecsRateEngaged) {
+      // Within the deadband — hold nominal speed.
+      newRate = 1.0;
+    } else if (latencyErrorMs > 0) {
       // Above target latency — speed up modestly, capped at 1.02.
-      const latencyError =
-        (currentLatencyMs - targetLatencyMs) / targetLatencyMs;
+      const latencyError = latencyErrorMs / targetLatencyMs;
       const baseGain = 0.03;
       const gainReduction = Math.exp(-Math.abs(latencyError) * 10);
       const effectiveGain = baseGain * (1 - gainReduction * 0.8);
       newRate = Math.min(1.02, 1.0 + latencyError * effectiveGain);
-    } else if (belowTargetLatency) {
+    } else {
       // Below target latency — slow down modestly, floored at 0.95.
-      const latencyError =
-        (targetLatencyMs - currentLatencyMs) / targetLatencyMs;
+      const latencyError = -latencyErrorMs / targetLatencyMs;
       const baseGain = 0.05;
       const gainReduction = Math.exp(-Math.abs(latencyError) * 15);
       const effectiveGain = baseGain * (1 - gainReduction * 0.9);
       newRate = Math.max(0.95, 1.0 - latencyError * effectiveGain);
     }
 
-    if (newRate === null) {
-      return;
-    }
     if (Math.abs(currentRate - newRate) < 0.001) {
       return;
     }
@@ -5270,10 +5298,33 @@ export class Player {
     if (Math.random() < 0.1) {
       this.logger.debug(
         `[BufferHealth] WebCodecs rate ${currentRate.toFixed(3)}→${newRate.toFixed(3)}` +
-          ` (latency ${currentLatencyMs.toFixed(0)}ms target ${targetLatencyMs}ms,` +
+          ` (latency ${smoothedLatencyMs.toFixed(0)}ms smoothed from` +
+          ` ${snap.currentLatencyMs.toFixed(0)}ms, target ${targetLatencyMs}ms,` +
           ` minBuf ${(effectiveMinBuffer * 1000).toFixed(0)}ms)`,
       );
     }
+  }
+
+  /**
+   * Exponentially smooth the WebCodecs latency reading. The reading is
+   * `Date.now() - lastPresentedMs`, and lastPresentedMs steps once per painted
+   * frame, so consecutive samples carry up to a frame interval of quantization
+   * noise that the rate branches would otherwise chase.
+   */
+  private smoothWebCodecsLatency(currentLatencyMs: number): number {
+    const prev = this.webcodecsLatencyEmaMs;
+    const next =
+      prev === null
+        ? currentLatencyMs
+        : prev + this.webcodecsLatencyEmaAlpha * (currentLatencyMs - prev);
+    this.webcodecsLatencyEmaMs = next;
+    return next;
+  }
+
+  /** Clear WebCodecs rate-controller state between sessions. */
+  private resetWebCodecsRateController(): void {
+    this.webcodecsLatencyEmaMs = null;
+    this.webcodecsRateEngaged = false;
   }
 
   /**
