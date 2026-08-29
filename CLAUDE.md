@@ -407,7 +407,7 @@ The project uses GitHub Actions for continuous integration:
 
 1. **CI Workflow** (`ci.yml`):
    - Runs on push to main and pull requests
-   - Tests on Node.js 20.x and 22.x
+   - Tests on Node.js 22.x and 24.x
    - Runs ESLint, Prettier checks, TypeScript type checking
    - Builds the project and uploads artifacts
    - Uploads test coverage to Codecov

@@ -28,7 +28,7 @@
   "author": "Eyevinn Technology AB",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
