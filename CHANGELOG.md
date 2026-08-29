@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-08-29
+
+A playback-rate stability fix for the WebCodecs (LOC) engine, and the audible
+audio artefact that came with it.
+
+### Fixed
+
+- The WebCodecs latency controller no longer flaps the playback rate. Its
+  input is `Date.now() - lastPresentedMs`, and the picture clock only advances
+  when a frame is painted, so the reading is a sawtooth one frame interval
+  deep — 40 ms at 25 fps. The rate branches compared it strictly against the
+  target, so the controller sat permanently in the speed-up or slow-down
+  branch and re-derived a rate every tick, settling into a ~1.003 / ~0.994
+  oscillation twice a second.
+
+  Each rate change re-anchors the audio schedule, and `onDecodedAudio`
+  recomputes every chunk's start from the anchor rather than from the previous
+  chunk's end, so the next chunk shifted by roughly
+  `lead × (1/r_new − 1/r_old)` — about 1.8 ms, or 87 samples at 48 kHz. A gap
+  or overlap between two `AudioBufferSourceNode`s twice a second, heard as a
+  click on the 880 Hz test tone, for both AAC and Opus.
+
+  The reading is now exponentially smoothed, and the controller has
+  hysteresis: it engages past 60 ms of error and disengages back to exactly
+  1.0x once inside 30 ms. The buffer-underrun guard still bypasses the
+  deadband — that is starvation protection, not latency trimming — and the
+  in-deadband case sets 1.0 explicitly, so a rate set during a transient can
+  no longer persist. The MSE engine is unaffected: `<video>.currentTime` is
+  continuous and never carried the sawtooth.
+
 ## [0.13.0] - 2026-08-06
 
 In-band CTA-608 captions on both render engines, delivered through a general
