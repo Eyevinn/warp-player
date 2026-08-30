@@ -1,14 +1,18 @@
+import {
+  VI64_MAX,
+  VI64_MAX_LEN,
+  encodeVi64,
+  readVi64,
+  vi64PeekLen,
+} from "./vi64";
+
 export interface KeyValuePair {
   type: bigint;
   value: bigint | Uint8Array;
 }
 
-const MAX_U6 = Math.pow(2, 6) - 1;
-const MAX_U14 = Math.pow(2, 14) - 1;
-const MAX_U30 = Math.pow(2, 30) - 1;
 const MAX_U31 = Math.pow(2, 31) - 1;
 const MAX_U53 = Number.MAX_SAFE_INTEGER;
-const MAX_U62: bigint = 2n ** 62n - 1n;
 
 // Reader wraps a stream and provides convenience methods for reading pieces from a stream
 export class Reader {
@@ -153,91 +157,21 @@ export class Reader {
 
   // NOTE: Returns a bigint instead of a number since it may be larger than 53-bits
   async u62(): Promise<bigint> {
-    await this.#fillTo(1);
-    const size = (this.#buffer[0] & 0xc0) >> 6;
-
-    if (size === 0) {
-      const first = this.#slice(1)[0];
-      return BigInt(first) & 0x3fn;
-    } else if (size === 1) {
-      await this.#fillTo(2);
-      const slice = this.#slice(2);
-      const view = new DataView(
-        slice.buffer,
-        slice.byteOffset,
-        slice.byteLength,
-      );
-
-      return BigInt(view.getInt16(0)) & 0x3fffn;
-    } else if (size === 2) {
-      await this.#fillTo(4);
-      const slice = this.#slice(4);
-      const view = new DataView(
-        slice.buffer,
-        slice.byteOffset,
-        slice.byteLength,
-      );
-
-      return BigInt(view.getUint32(0)) & 0x3fffffffn;
-    } else if (size === 3) {
-      await this.#fillTo(8);
-      const slice = this.#slice(8);
-      const view = new DataView(
-        slice.buffer,
-        slice.byteOffset,
-        slice.byteLength,
-      );
-
-      return BigInt(view.getBigUint64(0)) & 0x3fffffffffffffffn;
-    } else {
-      throw new Error("impossible");
-    }
+    return (await this.u62WithSize()).value;
   }
 
   // Returns a bigint and tracks the number of bytes read
+  // Returns a bigint and tracks the number of bytes read.
+  //
+  // draft-18 varints (vi64) carry the length as leading one-bits in the first
+  // byte, so the length is known from that byte alone and the value spans up
+  // to 9 bytes -- the full unsigned 64-bit range, not RFC 9000's 62 bits.
   async u62WithSize(): Promise<{ value: bigint; bytesRead: number }> {
     await this.#fillTo(1);
-    const size = (this.#buffer[0] & 0xc0) >> 6;
-
-    if (size === 0) {
-      const first = this.#slice(1)[0];
-      return { value: BigInt(first) & 0x3fn, bytesRead: 1 };
-    } else if (size === 1) {
-      await this.#fillTo(2);
-      const slice = this.#slice(2);
-      const view = new DataView(
-        slice.buffer,
-        slice.byteOffset,
-        slice.byteLength,
-      );
-
-      return { value: BigInt(view.getInt16(0)) & 0x3fffn, bytesRead: 2 };
-    } else if (size === 2) {
-      await this.#fillTo(4);
-      const slice = this.#slice(4);
-      const view = new DataView(
-        slice.buffer,
-        slice.byteOffset,
-        slice.byteLength,
-      );
-
-      return { value: BigInt(view.getUint32(0)) & 0x3fffffffn, bytesRead: 4 };
-    } else if (size === 3) {
-      await this.#fillTo(8);
-      const slice = this.#slice(8);
-      const view = new DataView(
-        slice.buffer,
-        slice.byteOffset,
-        slice.byteLength,
-      );
-
-      return {
-        value: BigInt(view.getBigUint64(0)) & 0x3fffffffffffffffn,
-        bytesRead: 8,
-      };
-    } else {
-      throw new Error(`invalid size: ${size}`);
-    }
+    const size = vi64PeekLen(this.#buffer[0]);
+    await this.#fillTo(size);
+    const { value, bytesRead } = readVi64(this.#slice(size), 0);
+    return { value, bytesRead };
   }
 
   async keyValuePairs(): Promise<KeyValuePair[]> {
@@ -283,7 +217,8 @@ export class Writer {
 
   constructor(stream: WritableStream<Uint8Array>) {
     this.#stream = stream;
-    this.#scratch = new Uint8Array(8);
+    // 9 bytes: the longest vi64 encoding (draft-18 Section 1.4.1).
+    this.#scratch = new Uint8Array(VI64_MAX_LEN);
     this.#writer = this.#stream.getWriter();
   }
 
@@ -313,8 +248,8 @@ export class Writer {
   async u62(v: bigint): Promise<void> {
     if (v < 0) {
       throw new Error(`underflow, value is negative: ${v}`);
-    } else if (v >= MAX_U62) {
-      throw new Error(`overflow, value larger than 62-bits: ${v}`);
+    } else if (v > VI64_MAX) {
+      throw new Error(`overflow, value larger than 64-bits: ${v}`);
     }
 
     await this.write(this.setVint62(this.#scratch, v));
@@ -347,31 +282,21 @@ export class Writer {
   }
 
   setVint53(dst: Uint8Array, v: number): Uint8Array {
-    if (v <= MAX_U6) {
-      return this.setUint8(dst, v);
-    } else if (v <= MAX_U14) {
-      return this.setUint16(dst, v | 0x4000);
-    } else if (v <= MAX_U30) {
-      return this.setUint32(dst, v | 0x80000000);
-    } else if (v <= MAX_U53) {
-      return this.setUint64(dst, BigInt(v) | 0xc000000000000000n);
-    } else {
+    if (v > MAX_U53) {
       throw new Error(`overflow, value larger than 53-bits: ${v}`);
     }
+    return this.setVint62(dst, BigInt(v));
   }
 
+  // Encodes v as a draft-18 vi64. The result is up to 9 bytes, so callers
+  // relying on the scratch buffer must size it for VI64_MAX_LEN.
   setVint62(dst: Uint8Array, v: bigint): Uint8Array {
-    if (v < MAX_U6) {
-      return this.setUint8(dst, Number(v));
-    } else if (v < MAX_U14) {
-      return this.setUint16(dst, Number(v) | 0x4000);
-    } else if (v <= MAX_U30) {
-      return this.setUint32(dst, Number(v) | 0x80000000);
-    } else if (v <= MAX_U62) {
-      return this.setUint64(dst, BigInt(v) | 0xc000000000000000n);
-    } else {
-      throw new Error(`overflow, value larger than 62-bits: ${v}`);
+    if (v < 0n || v > VI64_MAX) {
+      throw new Error(`overflow, value out of unsigned 64-bit range: ${v}`);
     }
+    const enc = encodeVi64(v);
+    dst.set(enc, 0);
+    return dst.slice(0, enc.length);
   }
 
   setUint64(dst: Uint8Array, v: bigint): Uint8Array {

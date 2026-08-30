@@ -29,8 +29,8 @@ import { EngineChoice, IPlaybackPipeline, resolveEngine } from "./pipeline";
 import { MsePipeline } from "./pipeline/msePipeline";
 import { WebCodecsLocPipeline } from "./pipeline/webcodecsLocPipeline";
 import { Client, DraftVersion } from "./transport/client";
-import { FilterType } from "./transport/control";
 import { MOQObject } from "./transport/tracks";
+import { FilterType } from "./transport/wire18";
 import {
   WarpCatalog,
   WarpTrack,
@@ -655,8 +655,8 @@ export class Player {
       this.connection = await this.client.connect();
 
       // Update status with negotiated version
-      const versionStr =
-        this.client.negotiatedVersion === 0xff000010 ? "draft-16" : "draft-14";
+      // Only draft-18 is spoken; connect() throws on anything else.
+      const versionStr = "draft-18";
       this.statusEl.className = "status connected";
       this.statusEl.innerHTML = `<span>●</span> Connected (${versionStr})`;
 
@@ -1113,7 +1113,7 @@ export class Player {
       "catalog",
       (obj: MOQObject) => applyCatalogObject(obj, "catalog subscription"),
       {
-        filterType: FilterType.LatestObject,
+        filterType: FilterType.LargestObject,
         skipObjectsUpToLargest: true,
       },
     );
