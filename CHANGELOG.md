@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Migrated to MoQ Transport draft-18. This is a breaking change with no
+compatibility shim: the player no longer speaks drafts 14 or 16, and needs a
+draft-18 server such as `mlmpub` at moqtransport v0.11.0 or later.
+
+### Changed
+
+- **The transport speaks draft-18 (`moqt-18`) and nothing else.** From
+  draft-17 the ALPN _is_ the version negotiation -- SETUP carries no version
+  field -- so a server that does not offer `moqt-18` cannot be spoken to and
+  the connection fails rather than falling back. Drafts 14 and 16 were dropped
+  for the same reason `moqtransport` dropped them: the wire below the ALPN
+  changed enough that carrying both would mean maintaining two codecs rather
+  than branching a few fields.
+- **Varints are vi64**, the leading-ones encoding of draft-18 Section 1.4.1,
+  not the RFC 9000 two-bit-prefix form. The codec `src/locmaf/vi64.ts` already
+  had for LOCMAF is now the canonical one at `src/transport/vi64.ts` -- vi64 is
+  defined by MOQT, so the transport owns it -- and `src/locmaf/vi64.ts`
+  re-exports it so LOCMAF's golden-vector tests are untouched.
+- **The control stream is a pair of unidirectional streams**, one per
+  direction, replacing the single bidirectional stream. Each side opens its own
+  and sends SETUP on it; the leading varint 0x2F00 is simultaneously the stream
+  type and SETUP's message type, so opening and sending are one act.
+- **Each request owns a bidirectional stream.** The stream is the request's
+  identity, so responses carry no Request ID and the `(kind, requestId)`
+  dispatch table is gone. Closing the stream is what ends a request -- draft-18
+  has no UNSUBSCRIBE or UNANNOUNCE message.
+- SUBSCRIBE's fixed fields moved into Message Parameters: subscriber priority,
+  group order, forward and the subscription filter are all parameters now, and
+  the largest location comes back as the `LARGEST_OBJECT` parameter of
+  SUBSCRIBE_OK rather than a field.
+- Subgroup stream types gained a FIRST_OBJECT flag, and the reserved
+  SUBGROUP_ID_MODE 0b11 is now rejected as a protocol violation.
+- FETCH response streams were rewritten: every record begins with Serialization
+  Flags, fields are deltas against the prior Object, and End of Range
+  indicators stand in for runs of Objects that were not serialized.
+- PADDING streams are recognised and drained.
+
+### Fixed
+
+- **The LOC capture timestamp is read from Object Property `0x0A`**, not
+  `0x06`. MOQT's Properties registry allocates `0x06` to
+  SUBGROUP_DELIVERY_TIMEOUT, which is Track scope only, so a `0x06` Object
+  Property makes the track malformed from draft-18 onwards;
+  draft-ietf-moq-loc-03 renumbered it for that reason. Object Property types
+  are also delta-encoded now, which a draft-16 parser reads as the wrong types
+  from the second pair onwards. Together these two made the video buffer read
+  as a nonsense figure -- 33378172119 ms in testing -- with playback never
+  stabilising.
+
 ## [0.13.1] - 2026-08-29
 
 A playback-rate stability fix for the WebCodecs (LOC) engine, and the audible

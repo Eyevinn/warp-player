@@ -56,8 +56,8 @@ These ensure code quality before changes are pushed to the repository.
 
 WARP Player is a browser-based TypeScript implementation of a media player,
 using the MOQ Transport protocol via WebTransport. It supports MOQ Transport
-draft-14 and draft-16 (negotiated through WebTransport ALPN, can be forced
-from the UI) and uses the MSF/CMSF catalog format
+draft-18 (negotiated through WebTransport ALPN) and uses the MSF/CMSF
+catalog format
 (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) to discover media tracks.
 
 Playback runs through one of two interchangeable render pipelines selected
@@ -83,11 +83,14 @@ The project follows the Eyevinn TypeScript project template structure:
 ```
 warp-player/
 ├── src/
-│   ├── transport/        # MOQ protocol implementation (draft-14 / draft-16)
-│   │   ├── client.ts     # WebTransport client implementation
-│   │   ├── setup.ts      # Setup message handling
-│   │   ├── tracks.ts     # Track subscription and management
-│   │   ├── control.ts    # Control stream handling
+│   ├── transport/        # MOQ protocol implementation (draft-18)
+│   │   ├── client.ts     # WebTransport client, session establishment
+│   │   ├── session18.ts  # Control stream pair, request streams, stream router
+│   │   ├── messages18.ts # draft-18 control messages and their framing
+│   │   ├── wire18.ts     # KVPs, Message Parameters, subscription filters
+│   │   ├── vi64.ts       # MOQT variable-length integers (draft-18 §1.4.1)
+│   │   ├── fetchstream.ts # FETCH response stream reader
+│   │   ├── tracks.ts     # Track subscription and data streams
 │   │   └── version.ts    # Draft version constants and ALPN strings
 │   ├── buffer/           # CMAF segment buffering for the MSE pipeline
 │   │   ├── mediaBuffer.ts         # CMAF segment parsing
@@ -101,7 +104,7 @@ warp-player/
 │   │   └── extensions.ts # LOC extension-header parsing (capture timestamps)
 │   ├── locmaf/           # LOCMAF (compact CMAF packaging) for MSE pipeline
 │   │   ├── locmaf.ts     # Version-gating wrapper used by player.ts
-│   │   ├── vi64.ts       # MOQT (draft-18 §1.4.1) varints + zigzag
+│   │   ├── vi64.ts       # Re-export of transport/vi64 (the canonical codec)
 │   │   └── v03/          # v0.3 codec: decoder, canonical reconstruction
 │   ├── pipeline/         # Pluggable render pipelines
 │   │   ├── index.ts                # IPlaybackPipeline + capability matrix
@@ -126,8 +129,10 @@ warp-player/
 
 ### Core Architecture
 
-The transport used is MOQ Transport, draft-14 or draft-16 (auto-negotiated
-via WebTransport ALPN strings `moq-00` and `moqt-16`).
+The transport used is MOQ Transport draft-18, selected by the WebTransport
+ALPN string `moqt-18`. From draft-17 the ALPN _is_ the version negotiation --
+SETUP carries no version field -- so a server that does not offer `moqt-18`
+cannot be spoken to at all.
 
 For the catalog, the specification used is MSF (draft-ietf-moq-msf-01)
 with CMSF (draft-ietf-moq-cmsf-01) for CMAF packaging. LOC packaging
@@ -192,14 +197,16 @@ The codebase is organized into several key modules:
 1. **Client** (`src/transport/client.ts`):
    - Main entry point for establishing WebTransport connections
    - Handles connection setup, track subscription, and message routing
-   - Negotiates draft-14 (`moq-00`) vs draft-16 (`moqt-16`) via ALPN
+   - Negotiates draft-18 (`moqt-18`) via ALPN
 
 2. **TrackAliasRegistry** (`src/transport/trackaliasregistry.ts`):
    - Manages mappings between track namespaces, names, and aliases
    - Tracks registration of callbacks for data objects
 
 3. **TracksManager** (`src/transport/tracks.ts`):
-   - Manages incoming unidirectional streams for data
+   - Opens a request stream per subscription and reads its responses
+   - Handles incoming unidirectional data streams routed to it by
+     `UniStreamRouter` (subgroup headers, FETCH_HEADER, PADDING)
    - Processes and routes incoming data objects to registered callbacks
    - Surfaces MoQ Object extension headers (used by LOC for capture
      timestamps) on `MOQObject.extensions`
@@ -248,9 +255,12 @@ The codebase is organized into several key modules:
     - `aac.ts` — build AudioSpecificConfig from catalog `samplerate`,
       `channels`, and `mp4a.OO.A` codec strings
     - `opus.ts` — build the `OpusHead` ID Header from catalog metadata
-    - `extensions.ts` — parse moqtransport KeyValuePair extension blobs
-      and read LOC property `0x06` (capture timestamp in microseconds
-      since the Unix epoch)
+    - `extensions.ts` — parse Object Properties (draft-16's extension
+      headers): a KVP list with vi64 varints and _delta-encoded_ types,
+      reading LOC property `0x0A` (capture timestamp in microseconds since
+      the Unix epoch). The codepoint moved from `0x06` in
+      draft-ietf-moq-loc-03 because MOQT's Properties registry gives `0x06`
+      to SUBGROUP_DELIVERY_TIMEOUT, which is Track scope only
 
 11. **LOCMAF helpers** (`src/locmaf/locmaf.ts`, `src/locmaf/v03/`):
     - Only LOCMAF packaging version **0.3** is supported;
@@ -277,11 +287,11 @@ The codebase is organized into several key modules:
 
 ## Technical Notes
 
-1. The implementation supports MOQ Transport draft-14 and draft-16, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-mzanaty-moq-loc).
+1. The implementation supports MOQ Transport draft-18, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-ietf-moq-loc-03).
 2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF packaging, which is expanded back into CMAF chunks before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AV1 OBU temporal units, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
-5. The client includes proper handling of bidirectional control streams for subscribing to content.
+5. Control messages travel on a _pair_ of unidirectional streams (one per direction); each request -- SUBSCRIBE, FETCH, PUBLISH_NAMESPACE -- owns a bidirectional stream, and closing it is what ends the request. There is no UNSUBSCRIBE or UNANNOUNCE message in draft-18.
 6. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source.
 7. Encrypted content always flows through the MSE engine; production browsers do not expose Encrypted WebCodecs.
 8. The project follows the Eyevinn code quality standards with:
@@ -362,8 +372,8 @@ directly with WebCodecs:
   `AudioData` is converted to an `AudioBuffer` and scheduled on a fresh
   `AudioBufferSourceNode` against the same wallclock anchor used by the
   video render loop; a shared `GainNode` implements mute
-- Capture timestamps travel in MoQ Object extension headers as LOC
-  property `0x06` (microseconds since the Unix epoch); see
+- Capture timestamps travel in MoQ Object Properties as LOC property
+  `0x0A` (microseconds since the Unix epoch); see
   `src/loc/extensions.ts`
 
 ### Render Engine Selector and Namespace Filter
@@ -384,11 +394,15 @@ directly with WebCodecs:
   attribute; the WebCodecs pipeline drives a shared `GainNode`. Both
   start muted to match the legacy `<video muted>` UX.
 
-### Draft-14 / Draft-16 Negotiation
+### Draft-18 Only
 
-- The transport layer supports both MOQ Transport draft-14 (`moq-00`)
-  and draft-16 (`moqt-16`), negotiated via WebTransport ALPN. The UI
-  exposes an "MOQ Transport draft" dropdown (Auto / Draft 14 / Draft 16) for forcing a specific version.
+- The transport speaks MOQ Transport draft-18 (`moqt-18`) and nothing
+  else. Drafts 14 and 16 were dropped for the same reason `moqtransport`
+  dropped them: the wire below the ALPN changed enough -- a different
+  variable-length integer encoding (vi64), a control stream _pair_ in place
+  of one bidirectional stream, and a bidirectional stream per request --
+  that carrying both would mean maintaining two codecs rather than
+  branching a few fields.
 
 ### Fingerprint Support for Self-Signed Certificates
 

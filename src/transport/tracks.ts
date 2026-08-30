@@ -1,39 +1,98 @@
 import { ILogger, LoggerFactory } from "../logger";
 
 import { Client } from "./client";
+import { FetchStreamReader, EndOfRange } from "./fetchstream";
 import {
-  Location,
-  CtrlStream,
-  Msg,
-  Subscribe,
-  SubscribeOk,
-  Fetch,
-  FetchError,
-  FetchTypeStandalone,
-  FetchTypeRelativeJoining,
+  CtrlType,
+  FetchType,
+  type Fetch,
+  type Subscribe,
+  type SubscribeOk,
+} from "./messages18";
+import { RequestStream, UniStreamRouter } from "./session18";
+import { Reader } from "./stream";
+import { TrackAliasRegistry } from "./trackaliasregistry";
+import {
   FilterType,
   GroupOrder,
-  Message,
-} from "./control";
-import { Reader, KeyValuePair } from "./stream";
-import { TrackAliasRegistry } from "./trackaliasregistry";
+  type Location,
+  PARAM_LARGEST_OBJECT,
+  findParameter,
+  subscriptionFilterParameter,
+} from "./wire18";
 
-// Bigint versions of stream types for comparison
+// Unidirectional stream types (draft-18 Table 3).
 const FETCH_HEADER_BIGINT = 0x05n;
+const PADDING_STREAM_BIGINT = 0x132b3e28n;
 
-/** Check if a stream type is a valid SUBGROUP_HEADER type.
- * Draft-14: 0x10-0x15, 0x18-0x1D
- * Draft-16: adds 0x30-0x35, 0x38-0x3D (with DEFAULT_PRIORITY bit 0x20)
+/**
+ * The SUBGROUP_HEADER stream type is a bitfield of the form 0b0XX1XXXX
+ * (draft-18 Section 11.4.2). Every optional header field is signalled by it,
+ * so the type and the header's contents are two views of the same thing.
  */
-function isSubgroupStreamType(streamType: bigint): boolean {
-  // Strip the DEFAULT_PRIORITY bit (0x20) to normalize
-  const low = streamType & 0x1fn;
-  return (low >= 0x10n && low <= 0x15n) || (low >= 0x18n && low <= 0x1dn);
+const SUBGROUP_FLAG_PROPERTIES = 0x01n;
+const SUBGROUP_ID_MODE_MASK = 0x06n;
+const SUBGROUP_ID_MODE_SHIFT = 1n;
+const SUBGROUP_FLAG_END_OF_GROUP = 0x08n;
+const SUBGROUP_MARKER = 0x10n;
+const SUBGROUP_FLAG_DEFAULT_PRIORITY = 0x20n;
+const SUBGROUP_FLAG_FIRST_OBJECT = 0x40n;
+
+/** The two-bit SUBGROUP_ID_MODE field of the stream type. */
+export const enum SubgroupIdMode {
+  /** The field is omitted; the Subgroup ID is 0. */
+  Zero = 0,
+  /**
+   * The field is omitted; the Subgroup ID is the Object ID of the first Object
+   * on the stream, so it is not known until that Object has been read.
+   */
+  FirstObject = 1,
+  /** The Subgroup ID is carried in the header. */
+  Explicit = 2,
+  /** 0b11, reserved. Sixteen stream types carry it; every one is a violation. */
+  Reserved = 3,
 }
 
-/** Draft-16: returns true when the DEFAULT_PRIORITY bit (0x20) is set */
+/** Whether a stream type is a SUBGROUP_HEADER. Bit 4 is the marker. */
+function isSubgroupStreamType(streamType: bigint): boolean {
+  return (
+    (streamType & SUBGROUP_MARKER) !== 0n &&
+    streamType <= 0x7fn &&
+    (streamType & 0x80n) === 0n
+  );
+}
+
+function subgroupIdMode(streamType: bigint): SubgroupIdMode {
+  return Number(
+    (streamType & SUBGROUP_ID_MODE_MASK) >> SUBGROUP_ID_MODE_SHIFT,
+  ) as SubgroupIdMode;
+}
+
+/** True when the header carries a Properties block on *every* Object. */
+function hasProperties(streamType: bigint): boolean {
+  return (streamType & SUBGROUP_FLAG_PROPERTIES) !== 0n;
+}
+
+/** True when Publisher Priority is omitted and inherited from the track. */
 function hasDefaultPriority(streamType: bigint): boolean {
-  return (streamType & 0x20n) !== 0n;
+  return (streamType & SUBGROUP_FLAG_DEFAULT_PRIORITY) !== 0n;
+}
+
+/**
+ * True when this subgroup carries the largest Object in the Group, so a FIN
+ * means no Object in the Group beyond the last one received exists. A reset
+ * says nothing of the kind.
+ */
+function isEndOfGroup(streamType: bigint): boolean {
+  return (streamType & SUBGROUP_FLAG_END_OF_GROUP) !== 0n;
+}
+
+/**
+ * True when the first Object on this stream is the first Object the original
+ * publisher published in the subgroup. New in draft-18.
+ */
+function isFirstObject(streamType: bigint): boolean {
+  return (streamType & SUBGROUP_FLAG_FIRST_OBJECT) !== 0n;
 }
 
 // Object received in a data stream
@@ -77,32 +136,35 @@ function afterLocation(a: Location, b: Location): boolean {
   return a.object > b.object;
 }
 
+/** Namespace fields and track names travel as bytes on the wire. */
+const encoder = new TextEncoder();
+
 // Tracks manager to handle incoming data streams
 export class TracksManager {
   private wt: WebTransport;
   private objectCallbacks: Map<string, ObjectCallback[]> = new Map();
   private fetchCallbacks: Map<bigint, ObjectCallback> = new Map();
   private trackRegistry: TrackAliasRegistry = new TrackAliasRegistry();
-  private controlStream: CtrlStream | null = null;
   private nextRequestId: bigint = 0n;
   private client: Client | null = null;
   private logger: ILogger;
   private isClosing: boolean = false;
+  /** One request stream per subscription; closing it ends the subscription. */
+  private subscribeStreams: Map<bigint, RequestStream> = new Map();
 
-  constructor(wt: WebTransport, controlStream?: CtrlStream, client?: Client) {
+  constructor(wt: WebTransport, router: UniStreamRouter, client?: Client) {
     this.wt = wt;
-    this.controlStream = controlStream || null;
     this.client = client || null;
     this.logger = LoggerFactory.getInstance().getLogger("Tracks");
-    this.startListeningForStreams();
-  }
-
-  /**
-   * Set the control stream for sending control messages
-   */
-  public setControlStream(controlStream: CtrlStream): void {
-    this.controlStream = controlStream;
-    this.logger.debug("Control stream set for tracks manager");
+    // The router owns the accept loop because the peer's control stream
+    // arrives on it too, and has to be adopted before SETUP completes.
+    router.setDataHandler((reader, streamType) => {
+      this.handleDataStream(reader, streamType).catch((error) => {
+        if (!this.isClosing) {
+          this.logger.error("Error handling incoming stream:", error);
+        }
+      });
+    });
   }
 
   /**
@@ -123,57 +185,27 @@ export class TracksManager {
   }
 
   /**
-   * Start listening for incoming unidirectional streams
+   * Handle one incoming unidirectional data stream whose type varint the
+   * router has already read.
    */
-  private async startListeningForStreams() {
-    this.logger.info("Starting to listen for incoming unidirectional streams");
-
+  private async handleDataStream(reader: Reader, streamType: bigint) {
+    this.logger.debug(`Incoming data stream. Type: ${streamType}`);
     try {
-      const reader = this.wt.incomingUnidirectionalStreams.getReader();
-
-      while (true) {
-        const { value: stream, done } = await reader.read();
-
-        if (done) {
-          this.logger.debug("Incoming stream reader is done");
-          break;
-        }
-
-        // Handle the stream in a separate task
-        this.handleIncomingStream(stream).catch((error) => {
-          this.logger.error("Error handling incoming stream:", error);
-        });
-      }
-    } catch (error) {
-      this.logger.error("Error listening for incoming streams:", error);
-    }
-  }
-
-  /**
-   * Handle an incoming unidirectional stream
-   */
-  private async handleIncomingStream(stream: ReadableStream<Uint8Array>) {
-    this.logger.debug("Received new incoming unidirectional stream");
-
-    const reader = new Reader(new Uint8Array(), stream);
-
-    try {
-      // Read the stream type
-      const streamType = await reader.u62();
-      this.logger.debug(`Incoming Unidirectional Stream. Type: ${streamType}`);
-
-      // Check if this is a SUBGROUP_HEADER stream
-      // Draft-14: 0x10-0x15, 0x18-0x1D
-      // Draft-16: adds 0x30-0x35, 0x38-0x3D (DEFAULT_PRIORITY bit)
       if (isSubgroupStreamType(streamType)) {
         await this.handleSubgroupStream(reader, streamType);
       } else if (streamType === FETCH_HEADER_BIGINT) {
         await this.handleFetchStream(reader);
+      } else if (streamType === PADDING_STREAM_BIGINT) {
+        // Everything after the stream type is padding to be discarded
+        // (Section 11.5.1). Draining it keeps flow control moving.
+        this.logger.debug("PADDING stream, draining");
+        while (!(await reader.done())) {
+          await reader.read(1);
+        }
       } else {
         this.logger.warn(`Unknown stream type: ${streamType}`);
       }
     } catch (error) {
-      // Suppress errors during shutdown - they are expected
       if (!this.isClosing) {
         this.logger.error("Error processing incoming stream:", error);
       } else {
@@ -197,29 +229,38 @@ export class TracksManager {
       const groupId = await reader.u62();
       this.logger.debug(`Track alias: ${trackAlias} Group ID: ${groupId}`);
 
-      // Determine subgroup ID based on the stream type
-      // Strip the DEFAULT_PRIORITY bit (0x20) to get the base type for SID mode
-      // Bit 0: has extensions, Bits 1-2: SID mode (00=zero, 01=firstObjID, 10=explicit)
-      // Bit 3: contains End of Group, Bit 5: DEFAULT_PRIORITY (draft-16)
-      let subgroupId: bigint | null = null;
-      const normalizedType = streamType & 0x1fn; // strip DEFAULT_PRIORITY bit
-      const hasExtensions = (normalizedType & 0x01n) === 0x01n;
-      const baseType = normalizedType & 0x07n;
-
-      if (baseType === 0x00n || baseType === 0x01n) {
-        // ZeroSID: Subgroup ID is implicitly 0
-        subgroupId = 0n;
-        this.logger.debug(`Subgroup ID: ${subgroupId} (implicit zero)`);
-      } else if (baseType === 0x02n || baseType === 0x03n) {
-        // NoSID: Subgroup ID is the first Object ID
-        this.logger.debug("Subgroup ID will be set to the first Object ID");
-      } else if (baseType === 0x04n || baseType === 0x05n) {
-        // ExplicitSID: Subgroup ID is explicitly provided
-        subgroupId = await reader.u62();
-        this.logger.debug(`Subgroup ID: ${subgroupId} (explicit)`);
+      // Determine the Subgroup ID from the stream type's SUBGROUP_ID_MODE.
+      const mode = subgroupIdMode(streamType);
+      if (mode === SubgroupIdMode.Reserved) {
+        // 0b11 is reserved; Section 11.4.2 makes it a PROTOCOL_VIOLATION.
+        throw new Error(
+          `Reserved SUBGROUP_ID_MODE in stream type 0x${streamType.toString(16)}`,
+        );
       }
 
-      // Read Publisher Priority unless DEFAULT_PRIORITY bit is set (draft-16)
+      let subgroupId: bigint | null = null;
+      if (mode === SubgroupIdMode.Zero) {
+        subgroupId = 0n;
+        this.logger.debug("Subgroup ID: 0 (implicit zero)");
+      } else if (mode === SubgroupIdMode.Explicit) {
+        subgroupId = await reader.u62();
+        this.logger.debug(`Subgroup ID: ${subgroupId} (explicit)`);
+      } else {
+        this.logger.debug("Subgroup ID will be set to the first Object ID");
+      }
+
+      // A Properties block is present on *every* Object of this stream when the
+      // bit is set, not merely permitted on some: an Object with no properties
+      // still writes a Properties Length of 0. The flag belongs to the header,
+      // so it is read once here rather than guessed per object.
+      const streamHasProperties = hasProperties(streamType);
+
+      this.logger.debug(
+        `Stream flags: endOfGroup=${isEndOfGroup(streamType)} firstObject=${isFirstObject(streamType)}`,
+      );
+
+      // Read Publisher Priority unless the DEFAULT_PRIORITY bit omits it, in
+      // which case Objects inherit the track's default.
       let publisherPriority = 0;
       if (hasDefaultPriority(streamType)) {
         this.logger.debug(
@@ -264,17 +305,16 @@ export class TracksManager {
           );
         }
 
-        // Handle extension headers if present
+        // Object Properties, if the header said this stream carries them.
+        // draft-18 renamed draft-16's extension headers; the encoding -- a
+        // length followed by that many bytes of Key-Value-Pairs -- is the same,
+        // so LOC's capture timestamps still ride here.
         let extensions: Uint8Array | null = null;
-        if (hasExtensions) {
-          const extensionHeadersLength = await reader.u62();
-          if (extensionHeadersLength > 0n) {
-            // Convert bigint to number for reading bytes
-            const extensionLength = Number(extensionHeadersLength);
-            extensions = await reader.read(extensionLength);
-            this.logger.debug(
-              `Read ${extensionLength} bytes of extension headers`,
-            );
+        if (streamHasProperties) {
+          const propertiesLength = await reader.u62();
+          if (propertiesLength > 0n) {
+            extensions = await reader.read(Number(propertiesLength));
+            this.logger.debug(`Read ${propertiesLength} bytes of properties`);
           }
         }
 
@@ -634,41 +674,45 @@ export class TracksManager {
       return;
     }
 
-    // Read objects from the fetch stream
-    // Each object: groupId, subgroupId, objectId, publisherPriority, extensionsLen, [extensions], payloadLen, payload
-    while (!(await reader.done())) {
-      const groupId = await reader.u62();
-      const subgroupId = await reader.u62();
-      const objectId = await reader.u62();
-      await reader.u8(); // publisherPriority - not needed
-      const extensionsLen = await reader.u62();
-      if (extensionsLen > 0n) {
-        await reader.read(Number(extensionsLen)); // skip extensions
+    // Group Order decides which way a Group ID Delta moves, so the reader
+    // cannot decode without it. This player never asks for Descending, and a
+    // FETCH that omitted the parameter is Ascending either way.
+    const objects = new FetchStreamReader(reader, GroupOrder.Ascending);
+    for (;;) {
+      const obj = await objects.next();
+      if (obj === null) {
+        break;
       }
-      const payloadLen = await reader.u62();
-      const payload =
-        payloadLen > 0n
-          ? await reader.read(Number(payloadLen))
-          : new Uint8Array(0);
+
+      if (obj.endOfRange !== EndOfRange.None) {
+        // A run of Objects that were not serialized. There is nothing to
+        // deliver: they either do not exist or their status is unknown.
+        this.logger.debug(
+          `Fetch end-of-range 0x${obj.endOfRange.toString(16)} through ` +
+            `group=${obj.groupId} obj=${obj.objectId}`,
+        );
+        continue;
+      }
 
       this.logger.debug(
-        `Fetch object: group=${groupId}, subgroup=${subgroupId}, obj=${objectId}, len=${payload.length}`,
+        `Fetch object: group=${obj.groupId}, subgroup=${obj.subgroupId}, ` +
+          `obj=${obj.objectId}, len=${obj.payload.length}`,
       );
 
       callback({
         trackAlias: 0n,
-        location: { group: groupId, object: objectId },
-        data: payload,
+        location: { group: obj.groupId, object: obj.objectId },
+        data: obj.payload,
+        ...(obj.properties !== undefined && { extensions: obj.properties }),
       });
     }
 
-    // Clean up the callback
     this.fetchCallbacks.delete(requestId);
   }
 
   /**
-   * Send a FETCH request for a track and register a callback for the response data.
-   * Returns a promise that resolves when the FETCH_OK is received.
+   * Send a standalone FETCH for a whole track and register a callback for the
+   * response data.
    */
   public async fetchTrack(
     namespace: string,
@@ -677,77 +721,33 @@ export class TracksManager {
   ): Promise<void> {
     this.logger.info(`Fetching track ${namespace}:${trackName}`);
 
-    if (!this.controlStream) {
-      throw new Error("Cannot fetch: Control stream not set");
-    }
-    if (!this.client) {
-      throw new Error("Cannot fetch: Client not set");
-    }
-
     const requestId = this.getNextRequestId();
-
-    const fetchMsg: Fetch = {
-      kind: Msg.Fetch,
+    const fetch: Fetch = {
+      kind: CtrlType.Fetch,
       requestId,
-      subscriberPriority: 0,
-      groupOrder: 0, // Publisher order
-      fetchType: FetchTypeStandalone,
-      namespace: [namespace],
-      trackName,
-      startGroup: 0n,
-      startObject: 0n,
-      endGroup: 0n,
-      endObject: 0n,
-      params: [],
+      fetchType: FetchType.Standalone,
+      standalone: {
+        namespace: [encoder.encode(namespace)],
+        name: encoder.encode(trackName),
+        start: { group: 0n, object: 0n },
+        end: { group: 0n, object: 0n },
+      },
+      parameters: [],
     };
 
-    // Register callback for fetch data before sending the message
+    // Register before sending: the FETCH_HEADER stream can arrive before
+    // FETCH_OK does.
     this.fetchCallbacks.set(requestId, callback);
-
-    const client = this.client;
-
-    const fetchPromise = new Promise<void>((resolve, reject) => {
-      const unregisterOk = client.registerMessageHandler(
-        Msg.FetchOk,
-        requestId,
-        () => {
-          this.logger.info(
-            `Received FetchOk for ${namespace}:${trackName}, requestId=${requestId}`,
-          );
-          unregisterErr();
-          resolve();
-        },
-      );
-
-      const unregisterErr = client.registerMessageHandler(
-        Msg.FetchError,
-        requestId,
-        (response: Message) => {
-          const fetchError = response as FetchError;
-          this.logger.error(
-            `Fetch error for ${namespace}:${trackName}: ${fetchError.reason}`,
-          );
-          unregisterOk();
-          this.fetchCallbacks.delete(requestId);
-          reject(new Error(`Fetch error: ${fetchError.reason}`));
-        },
-      );
-    });
-
-    this.logger.info(
-      `Sending FETCH for ${namespace}:${trackName} with requestId ${requestId}`,
-    );
-    await this.controlStream.send(fetchMsg);
-    await fetchPromise;
+    await this.sendFetch(fetch, requestId, `${namespace}:${trackName}`);
   }
 
   /**
-   * Send a Relative Joining FETCH (draft-14/16 §9.16.2) tied to an existing
-   * subscription. The publisher derives namespace, track and range from the
-   * subscription identified by joiningRequestId: with joiningStart = 0 the
-   * FETCH returns the current group from object 0 up to and including the
-   * subscription's largest location.
-   * Returns a promise that resolves when the FETCH_OK is received.
+   * Send a Relative Joining FETCH tied to an existing subscription.
+   *
+   * The publisher derives namespace, track and range from the subscription
+   * identified by joiningRequestId, so the fetched and subscribed Objects are
+   * contiguous and do not overlap. With joiningStart = 0 the FETCH returns the
+   * current group from object 0 up to the subscription's start.
    */
   public async fetchJoiningRelative(
     joiningRequestId: bigint,
@@ -758,64 +758,253 @@ export class TracksManager {
       `Joining FETCH for subscription requestId=${joiningRequestId}, joiningStart=${joiningStart}`,
     );
 
-    if (!this.controlStream) {
-      throw new Error("Cannot fetch: Control stream not set");
+    const requestId = this.getNextRequestId();
+    const fetch: Fetch = {
+      kind: CtrlType.Fetch,
+      requestId,
+      fetchType: FetchType.RelativeJoining,
+      joining: { joiningRequestId, joiningStart },
+      parameters: [],
+    };
+
+    this.fetchCallbacks.set(requestId, callback);
+    await this.sendFetch(fetch, requestId, `joining ${joiningRequestId}`);
+  }
+
+  /**
+   * Open a FETCH request stream and wait for FETCH_OK.
+   *
+   * A FETCH response's completion is not its request stream's ending: Section
+   * 10.12.3 lets FETCH_OK arrive at any time relative to object delivery,
+   * including after the last Object, so the stream is left open once the
+   * answer is in and the objects are read from the FETCH_HEADER data stream.
+   */
+  private async sendFetch(
+    fetch: Fetch,
+    requestId: bigint,
+    label: string,
+  ): Promise<void> {
+    const stream = await RequestStream.open(this.wt, fetch);
+    try {
+      for (;;) {
+        const msg = await stream.next();
+        if (msg === null) {
+          throw new Error(`FETCH for ${label} ended without a response`);
+        }
+        if (msg.kind === CtrlType.FetchOk) {
+          this.logger.info(
+            `Received FETCH_OK for ${label}, end=` +
+              `${msg.endLocation.group}/${msg.endLocation.object}`,
+          );
+          return;
+        }
+        if (msg.kind === CtrlType.RequestError) {
+          throw new Error(
+            `Fetch failed for ${label}: ${msg.errorReason} (code ${msg.errorCode})`,
+          );
+        }
+        this.logger.debug(`Ignoring ${msg.kind} while awaiting FETCH_OK`);
+      }
+    } catch (error) {
+      this.fetchCallbacks.delete(requestId);
+      stream.abort(error);
+      throw error;
     }
-    if (!this.client) {
-      throw new Error("Cannot fetch: Client not set");
-    }
+  }
+
+  public async subscribeTrackWithInfo(
+    namespace: string,
+    trackName: string,
+    callback: ObjectCallback,
+    options?: SubscribeOptions,
+  ): Promise<SubscriptionInfo> {
+    this.logger.info(`Subscribing to track ${namespace}:${trackName}`);
 
     const requestId = this.getNextRequestId();
 
-    const fetchMsg: Fetch = {
-      kind: Msg.Fetch,
+    // draft-18 moved subscriber priority, group order, forward and the filter
+    // out of SUBSCRIBE's fixed fields and into Message Parameters. Only the
+    // filter is set here; the rest are left at their defaults, which is what
+    // this player wants anyway.
+    const subscribe: Subscribe = {
+      kind: CtrlType.Subscribe,
       requestId,
-      subscriberPriority: 0,
-      groupOrder: 0, // Publisher order
-      fetchType: FetchTypeRelativeJoining,
-      joiningRequestId,
-      joiningStart,
-      params: [],
+      namespace: [encoder.encode(namespace)],
+      name: encoder.encode(trackName),
+      parameters: [
+        subscriptionFilterParameter({
+          type: options?.filterType ?? FilterType.NextGroupStart,
+        }),
+      ],
     };
 
-    // Register callback for fetch data before sending the message
-    this.fetchCallbacks.set(requestId, callback);
+    // The request's own bidirectional stream carries both the SUBSCRIBE and
+    // every response to it, so there is no request-ID dispatch table and no
+    // ambiguity about which subscription a response belongs to.
+    const stream = await RequestStream.open(this.wt, subscribe);
 
-    const client = this.client;
-
-    const fetchPromise = new Promise<void>((resolve, reject) => {
-      const unregisterOk = client.registerMessageHandler(
-        Msg.FetchOk,
-        requestId,
-        () => {
-          this.logger.info(
-            `Received FetchOk for joining fetch, requestId=${requestId}`,
-          );
-          unregisterErr();
-          resolve();
-        },
+    let subscribeOk: SubscribeOk;
+    try {
+      subscribeOk = await this.awaitSubscribeOk(
+        stream,
+        `${namespace}:${trackName}`,
       );
+    } catch (error) {
+      stream.abort(error);
+      throw error;
+    }
 
-      const unregisterErr = client.registerMessageHandler(
-        Msg.FetchError,
-        requestId,
-        (response: Message) => {
-          const fetchError = response as FetchError;
-          this.logger.error(
-            `Joining fetch error (requestId=${requestId}): ${fetchError.reason}`,
+    const trackAlias = subscribeOk.trackAlias;
+
+    // LARGEST_OBJECT is a parameter now, not a field. A publisher that has
+    // published anything on the track must send it, so its absence means the
+    // track is empty so far.
+    const largestParam = findParameter(
+      subscribeOk.parameters,
+      PARAM_LARGEST_OBJECT,
+    );
+    const largest = largestParam?.location;
+
+    // When a joining FETCH covers everything up to the largest location, drop
+    // those objects here so the callback sees each object exactly once.
+    let deliverCallback = callback;
+    if (options?.skipObjectsUpToLargest && largest) {
+      deliverCallback = (obj: MOQObject) => {
+        if (!afterLocation(obj.location, largest)) {
+          this.logger.debug(
+            `Skipping object (group=${obj.location.group}, obj=${obj.location.object}) ` +
+              `at or before largest (group=${largest.group}, obj=${largest.object})`,
           );
-          unregisterOk();
-          this.fetchCallbacks.delete(requestId);
-          reject(new Error(`Fetch error: ${fetchError.reason}`));
-        },
+          return;
+        }
+        callback(obj);
+      };
+    }
+
+    this.trackRegistry.registerTrackWithAlias(
+      namespace,
+      trackName,
+      requestId,
+      trackAlias,
+    );
+    this.trackRegistry.registerCallback(trackAlias, deliverCallback);
+    // Keep the stream: closing it is how the subscription is ended.
+    this.subscribeStreams.set(trackAlias, stream);
+
+    // PUBLISH_DONE and any later REQUEST_ERROR arrive on this same stream.
+    void this.drainSubscribeStream(
+      stream,
+      trackAlias,
+      `${namespace}:${trackName}`,
+    );
+
+    this.logger.info(
+      `Successfully subscribed to ${namespace}:${trackName} with trackAlias ${trackAlias}`,
+    );
+
+    return { trackAlias, requestId, largest };
+  }
+
+  /** Wait for SUBSCRIBE_OK, turning REQUEST_ERROR and silence into throws. */
+  private async awaitSubscribeOk(
+    stream: RequestStream,
+    label: string,
+  ): Promise<SubscribeOk> {
+    const timeoutMs = 2000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error(`Subscribe timeout (${timeoutMs}ms) for ${label}`)),
+        timeoutMs,
       );
     });
 
-    this.logger.info(
-      `Sending joining FETCH with requestId ${requestId} joining subscription ${joiningRequestId}`,
-    );
-    await this.controlStream.send(fetchMsg);
-    await fetchPromise;
+    try {
+      return await Promise.race([this.readSubscribeOk(stream, label), timeout]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private async readSubscribeOk(
+    stream: RequestStream,
+    label: string,
+  ): Promise<SubscribeOk> {
+    for (;;) {
+      const msg = await stream.next();
+      if (msg === null) {
+        throw new Error(`Subscribe for ${label} ended without a response`);
+      }
+      if (msg.kind === CtrlType.SubscribeOk) {
+        this.logger.info(
+          `Received SUBSCRIBE_OK for ${label}, trackAlias ${msg.trackAlias}`,
+        );
+        return msg;
+      }
+      if (msg.kind === CtrlType.RequestError) {
+        throw new Error(
+          `Subscribe failed for ${label}: ${msg.errorReason} (code ${msg.errorCode})`,
+        );
+      }
+      this.logger.debug(`Ignoring ${msg.kind} while awaiting SUBSCRIBE_OK`);
+    }
+  }
+
+  /** Read a subscription's stream until the publisher finishes it. */
+  private async drainSubscribeStream(
+    stream: RequestStream,
+    trackAlias: bigint,
+    label: string,
+  ): Promise<void> {
+    try {
+      for (;;) {
+        const msg = await stream.next();
+        if (msg === null) {
+          break;
+        }
+        if (msg.kind === CtrlType.PublishDone) {
+          this.logger.info(
+            `PUBLISH_DONE for ${label}: status ${msg.statusCode}` +
+              (msg.errorReason ? ` (${msg.errorReason})` : ""),
+          );
+          break;
+        }
+        this.logger.debug(`Received ${msg.kind} on the ${label} subscription`);
+      }
+    } catch (error) {
+      if (!this.isClosing) {
+        this.logger.debug(`Subscription stream for ${label} ended: ${error}`);
+      }
+    } finally {
+      this.subscribeStreams.delete(trackAlias);
+    }
+  }
+
+  /**
+   * Unsubscribe from a track by track alias
+   * @param trackAlias The track alias to unsubscribe from
+   * @throws Error if control stream is not set
+   */
+  public async unsubscribeTrack(trackAlias: bigint): Promise<void> {
+    this.logger.info(`Unsubscribing from track with alias ${trackAlias}`);
+
+    const stream = this.subscribeStreams.get(trackAlias);
+    if (!stream) {
+      throw new Error(
+        `Cannot unsubscribe: no request stream for alias ${trackAlias}`,
+      );
+    }
+
+    // draft-18 has no UNSUBSCRIBE message. Closing our side of the request
+    // stream is what ends the subscription (Section 10.7).
+    await stream.close();
+    this.subscribeStreams.delete(trackAlias);
+    this.trackRegistry.unregisterAllCallbacks(trackAlias);
+
+    this.logger.info(`Unsubscribed from track with alias ${trackAlias}`);
   }
 
   public async subscribeTrack(
@@ -829,210 +1018,6 @@ export class TracksManager {
       callback,
     );
     return info.trackAlias;
-  }
-
-  /**
-   * Subscribe to a track and return the subscription's request ID and the
-   * largest location reported in SUBSCRIBE_OK (needed for a joining FETCH),
-   * in addition to the track alias.
-   */
-  public async subscribeTrackWithInfo(
-    namespace: string,
-    trackName: string,
-    callback: ObjectCallback,
-    options?: SubscribeOptions,
-  ): Promise<SubscriptionInfo> {
-    this.logger.info(`Subscribing to track ${namespace}:${trackName}`);
-
-    if (!this.controlStream) {
-      throw new Error("Cannot subscribe: Control stream not set");
-    }
-
-    if (!this.client) {
-      throw new Error("Cannot subscribe: Client not set");
-    }
-
-    // Generate a request ID for this subscription
-    const requestId = this.getNextRequestId();
-
-    // Create the subscribe message (draft-14: no trackAlias - publisher assigns it)
-    const subscribeMsg: Subscribe = {
-      kind: Msg.Subscribe,
-      requestId,
-      namespace: [namespace],
-      name: trackName,
-      subscriber_priority: 0,
-      group_order: GroupOrder.Publisher,
-      forward: true,
-      filterType: options?.filterType ?? FilterType.NextGroupStart,
-      params: [] as KeyValuePair[],
-    };
-
-    this.logger.info(
-      `Sending subscribe message for ${namespace}:${trackName} with requestId ${requestId}`,
-    );
-
-    try {
-      // Store client reference for use in Promise callbacks
-      const client = this.client;
-
-      // Set up Promise for SUBSCRIBE_OK response
-      const subscribePromise = new Promise<SubscribeOk>((resolve, reject) => {
-        // Register handler for SUBSCRIBE_OK
-        const unregisterOk = client.registerMessageHandler(
-          Msg.SubscribeOk,
-          requestId,
-          (response: Message) => {
-            const subscribeOk = response as SubscribeOk;
-            this.logger.info(
-              `Received SubscribeOk for ${namespace}:${trackName} with requestId ${requestId}, trackAlias ${subscribeOk.trackAlias}`,
-            );
-            resolve(subscribeOk);
-          },
-        );
-
-        // Register handler for SUBSCRIBE_ERROR
-        const unregisterErr = client.registerMessageHandler(
-          Msg.SubscribeError,
-          requestId,
-          (response: Message) => {
-            unregisterOk();
-            this.logger.error(
-              `Received SubscribeError for ${namespace}:${trackName}: ${JSON.stringify(response)}`,
-            );
-            reject(new Error(`Subscribe failed: ${JSON.stringify(response)}`));
-          },
-        );
-
-        // Timeout after 2 seconds
-        setTimeout(() => {
-          unregisterOk();
-          unregisterErr();
-          reject(
-            new Error(
-              `Subscribe timeout (2000ms) for ${namespace}:${trackName} with requestId ${requestId}`,
-            ),
-          );
-        }, 2000);
-      });
-
-      // Send the subscribe message
-      await this.controlStream.send(subscribeMsg);
-
-      // Wait for SUBSCRIBE_OK (with timeout)
-      const subscribeOk = await subscribePromise;
-      const trackAlias = subscribeOk.trackAlias;
-      const largest = subscribeOk.largest;
-
-      // When a joining FETCH covers everything up to the largest location,
-      // drop those objects here so the callback sees each object exactly once.
-      let deliverCallback = callback;
-      if (options?.skipObjectsUpToLargest && largest) {
-        deliverCallback = (obj: MOQObject) => {
-          if (!afterLocation(obj.location, largest)) {
-            this.logger.debug(
-              `Skipping object (group=${obj.location.group}, obj=${obj.location.object}) ` +
-                `at or before largest (group=${largest.group}, obj=${largest.object})`,
-            );
-            return;
-          }
-          callback(obj);
-        };
-      }
-
-      // Register the callback
-      // Stream handler will immediately find it and deliver any buffered objects
-      this.trackRegistry.registerTrackWithAlias(
-        namespace,
-        trackName,
-        requestId,
-        trackAlias,
-      );
-      this.trackRegistry.registerCallback(trackAlias, deliverCallback);
-
-      this.logger.info(
-        `Successfully subscribed to ${namespace}:${trackName} with trackAlias ${trackAlias}`,
-      );
-
-      return { trackAlias, requestId, largest };
-    } catch (error) {
-      this.logger.error(
-        `Error subscribing to track ${namespace}:${trackName}:`,
-        error,
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * Unsubscribe from a track by track alias
-   * @param trackAlias The track alias to unsubscribe from
-   * @throws Error if control stream is not set
-   */
-  public async unsubscribeTrack(trackAlias: bigint): Promise<void> {
-    this.logger.info(`Unsubscribing from track with alias ${trackAlias}`);
-
-    if (!this.controlStream) {
-      throw new Error("Cannot unsubscribe: Control stream not set");
-    }
-
-    if (!this.client) {
-      throw new Error("Cannot unsubscribe: Client not set");
-    }
-
-    // Get track info from registry if available
-    const trackInfo = this.trackRegistry.getTrackInfoFromAlias(trackAlias);
-    if (!trackInfo) {
-      throw new Error(
-        `Cannot unsubscribe: No track info found for alias ${trackAlias}`,
-      );
-    }
-
-    const trackDescription = `${trackInfo.namespace}:${trackInfo.trackName}`;
-
-    // According to MOQ Transport draft-14, the unsubscribe message must use the same
-    // request ID that was used in the original subscribe message
-    const requestId = trackInfo.requestId;
-
-    // Need to cast to Message type to satisfy the CtrlStream.send() parameter type
-    const unsubscribeMsg = {
-      kind: Msg.Unsubscribe,
-      requestId,
-    } as Message;
-
-    this.logger.info(
-      `Sending unsubscribe message for track ${trackDescription} with original requestId ${requestId}`,
-    );
-
-    try {
-      // Create a Promise that will be resolved after a short delay
-      // Note: The MOQ spec doesn't require an acknowledgment for unsubscribe messages,
-      // so we'll just wait a short time to allow the message to be sent
-      const unsubscribePromise = new Promise<void>((resolve) => {
-        setTimeout(() => {
-          resolve();
-        }, 500); // 500ms delay to allow the message to be sent
-      });
-
-      // Send the unsubscribe message
-      await this.controlStream.send(unsubscribeMsg);
-
-      // Wait for the unsubscribe to complete (or timeout)
-      await unsubscribePromise;
-
-      // Unregister all callbacks for this track
-      this.trackRegistry.unregisterAllCallbacks(trackAlias);
-
-      this.logger.info(
-        `Successfully unsubscribed from track ${trackDescription}`,
-      );
-    } catch (error) {
-      this.logger.error(
-        `Error unsubscribing from track ${trackDescription}:`,
-        error,
-      );
-      throw error;
-    }
   }
 
   /**

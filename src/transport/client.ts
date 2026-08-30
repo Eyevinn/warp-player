@@ -1,29 +1,28 @@
 import { ILogger, LoggerFactory } from "../logger";
 
 import {
-  Msg,
-  FilterType,
-  Subscribe,
-  SubscribeOk,
-  CtrlStream,
-  Message,
-} from "./control";
-import * as Setup from "./setup";
-import * as Stream from "./stream";
+  CtrlType,
+  ctrlTypeName,
+  opensRequestStream,
+  type CtrlMessage,
+  type Setup,
+} from "./messages18";
+import { encodeCtrlMessage } from "./messages18";
+import { ControlStreamPair, UniStreamRouter, readCtrlBody } from "./session18";
+import { Reader, Writer } from "./stream";
 import {
   TracksManager,
   ObjectCallback,
   SubscribeOptions,
   SubscriptionInfo,
 } from "./tracks";
-import {
-  Version,
-  isDraft16,
-  PROTOCOL_DRAFT_14,
-  PROTOCOL_DRAFT_16,
-} from "./version";
+import { Version, SUPPORTED_PROTOCOLS, versionForProtocol } from "./version";
 
-export type DraftVersion = "auto" | "draft-14" | "draft-16";
+/**
+ * Only draft-18 is spoken. The option is kept so the UI can show which draft is
+ * in use and so a future draft can be added beside it.
+ */
+export type DraftVersion = "auto" | "draft-18";
 
 export interface ClientConfig {
   url: string;
@@ -32,12 +31,11 @@ export interface ClientConfig {
   // This is required to use self-signed certificates with Chrome
   fingerprint?: string;
 
-  // Protocol draft version: "auto" (default), "draft-14", or "draft-16"
+  // Protocol draft version. Only "auto" and "draft-18" are meaningful today.
   draftVersion?: DraftVersion;
 }
 
-// Type for message handlers based on message kind and request ID
-type MessageHandler = (message: Message) => void;
+const decoder = new TextDecoder();
 
 export class Client {
   #fingerprint: Promise<WebTransportHash | undefined>;
@@ -45,7 +43,7 @@ export class Client {
   // Track the next request ID to use (client IDs are even, starting at 0)
   #nextRequestId: bigint = 0n;
   // The negotiated protocol version (set during connect)
-  #negotiatedVersion: Version = Version.DRAFT_14;
+  #negotiatedVersion: Version = Version.DRAFT_18;
   // Store the trackAlias used for catalog subscription
   // eslint-disable-next-line no-unused-private-class-members
   #catalogTrackAlias: bigint | null = null;
@@ -53,10 +51,6 @@ export class Client {
   #tracksManager: TracksManager | null = null;
   // Logger instance
   private logger: ILogger;
-
-  // Message handling system
-  // Maps message kind to a map of request IDs to handlers
-  #messageHandlers: Map<Msg, Map<bigint, MessageHandler>> = new Map();
 
   constructor(config: ClientConfig) {
     this.config = config;
@@ -92,20 +86,13 @@ export class Client {
       );
     }
 
-    // Set WebTransport protocols for version negotiation
-    const draftVersion = this.config.draftVersion || "auto";
-    if (draftVersion === "draft-16") {
-      (options as any).protocols = [PROTOCOL_DRAFT_16];
-      this.logger.info(
-        `Requesting WebTransport protocol: ${PROTOCOL_DRAFT_16}`,
-      );
-    } else if (draftVersion === "auto") {
-      // Offer both protocols, server picks the best match
-      (options as any).protocols = [PROTOCOL_DRAFT_16, PROTOCOL_DRAFT_14];
-      this.logger.info(
-        `Requesting WebTransport protocols: ${PROTOCOL_DRAFT_16}, ${PROTOCOL_DRAFT_14}`,
-      );
-    }
+    // From draft-17 the ALPN is the whole of version negotiation: SETUP carries
+    // no version field, so a session whose subprotocol we did not offer cannot
+    // be spoken at all.
+    (options as any).protocols = [...SUPPORTED_PROTOCOLS];
+    this.logger.info(
+      `Requesting WebTransport protocol: ${SUPPORTED_PROTOCOLS.join(", ")}`,
+    );
 
     this.logger.info(`Connecting to ${this.config.url}...`);
     const wt = new WebTransport(this.config.url, options);
@@ -120,83 +107,36 @@ export class Client {
     await wt.ready;
     this.logger.info("WebTransport connection established");
 
-    // Determine negotiated version from WebTransport protocol
+    // The negotiated subprotocol is the version. Anything else is fatal rather
+    // than something to fall back from -- there is no in-band negotiation left.
     const negotiatedProtocol = (wt as any).protocol as string | undefined;
-    let version: Version;
-
-    if (draftVersion === "draft-14") {
-      // Forced draft-14
-      version = Version.DRAFT_14;
-      this.logger.info("Using forced draft-14");
-    } else if (negotiatedProtocol === PROTOCOL_DRAFT_16) {
-      // Server accepted draft-16 protocol
-      version = Version.DRAFT_16;
-      this.logger.info(
-        `Server negotiated protocol: ${negotiatedProtocol} -> draft-16`,
-      );
-    } else {
-      // Fall back to draft-14 in-band negotiation
-      version = Version.DRAFT_14;
-      this.logger.info(
-        `WebTransport protocol: ${negotiatedProtocol || "(none)"} -> falling back to draft-14`,
-      );
-    }
-
+    const version = versionForProtocol(negotiatedProtocol);
     this.#negotiatedVersion = version;
+    this.logger.info(`Negotiated ${negotiatedProtocol} -> draft-18`);
 
-    const stream = await wt.createBidirectionalStream();
-    this.logger.info("Bidirectional stream created");
+    // Accepting has to start before SETUP: object streams and the peer's own
+    // control stream may arrive first, and the router buffers whatever turns
+    // up early rather than dropping it.
+    const router = new UniStreamRouter(wt);
 
-    const writer = new Stream.Writer(stream.writable);
-    const reader = new Stream.Reader(new Uint8Array(), stream.readable);
-
-    const setup = new Setup.Stream(reader, writer, version);
-
-    // Send the client setup message
-    this.logger.info(
-      `Sending client setup message (${isDraft16(version) ? "draft-16" : "draft-14"})`,
+    // SETUP carries Setup Options and nothing else; the version is already
+    // settled. We send none: every option we would set is at its default.
+    const setup: Setup = { kind: CtrlType.Setup, options: [] };
+    const control = await ControlStreamPair.establish(wt, setup, () =>
+      router.controlStream(),
     );
-    await setup.send.client({
-      versions: isDraft16(version) ? [] : [Version.DRAFT_14],
-      params: [
-        {
-          type: 0x02n, // MAX_REQUEST_ID parameter type
-          value: 64n,
-        },
-      ],
-    });
+    this.logger.info("Control stream pair established");
 
-    // Receive the server setup message
-    this.logger.info("Waiting for server setup message");
-    const server = await setup.recv.server();
-    this.logger.info("Received server setup:", server);
-
-    if (!isDraft16(version)) {
-      // Draft-14: validate server version
-      if (
-        server.version !== Version.DRAFT_14 &&
-        server.version !== Version.DRAFT_16
-      ) {
-        throw new Error(`Unsupported server version: ${server.version}`);
-      }
-    }
-
-    // Create control stream with version
-    const control = new CtrlStream(reader, writer, version);
-    this.logger.info(
-      `Control stream established (${isDraft16(version) ? "draft-16" : "draft-14"})`,
-    );
-
-    // Create tracks manager for handling data streams
-    this.#tracksManager = new TracksManager(wt, control, this);
-    this.logger.info(
-      "Tracks manager created with control stream and client reference",
-    );
+    // Each request gets its own bidirectional stream, so the tracks manager
+    // needs the connection to open them on.
+    this.#tracksManager = new TracksManager(wt, router, this);
+    this.logger.info("Tracks manager created");
 
     const connection = new Connection(wt, control, this);
 
-    // Start listening for control messages
-    this.#listenForControlMessages(control);
+    // Server-initiated requests -- PUBLISH_NAMESPACE above all -- arrive on
+    // bidirectional streams the server opens, not on the control stream.
+    void this.#acceptRequestStreams(wt);
 
     return connection;
   }
@@ -253,214 +193,110 @@ export class Client {
   }
 
   /**
-   * Register a handler for a specific message kind and request ID
-   * @param kind The message kind to handle
-   * @param requestId The request ID to match
-   * @param handler The handler function to call when a matching message is received
-   * @returns A function to unregister the handler
+   * Accept the request streams the server opens.
+   *
+   * In draft-18 a server-initiated request is a bidirectional stream whose
+   * first message says what it is; PUBLISH_NAMESPACE is the one this player
+   * cares about. Anything else is answered with REQUEST_ERROR rather than
+   * ignored, so the peer is not left waiting on a stream nobody will read.
    */
-  registerMessageHandler(
-    kind: Msg,
-    requestId: bigint,
-    handler: MessageHandler,
-  ): () => void {
-    this.logger.debug(
-      `Registering handler for message kind ${kind} with requestId ${requestId}`,
-    );
-
-    // Initialize the map for this message kind if it doesn't exist
-    if (!this.#messageHandlers.has(kind)) {
-      this.#messageHandlers.set(kind, new Map());
-    }
-
-    // Get the map for this message kind
-    const handlersForKind = this.#messageHandlers.get(kind);
-
-    // This should never be null since we just initialized it if needed
-    if (!handlersForKind) {
-      throw new Error(`Handler map for message kind ${kind} not found`);
-    }
-
-    // Register the handler for this request ID
-    handlersForKind.set(requestId, handler);
-
-    // Return a function to unregister the handler
-    return () => {
-      this.logger.debug(
-        `Unregistering handler for message kind ${kind} with requestId ${requestId}`,
-      );
-      const handlersMap = this.#messageHandlers.get(kind);
-      if (handlersMap) {
-        handlersMap.delete(requestId);
-      }
-    };
-  }
-
-  /**
-   * Listen for control messages and dispatch them to registered handlers
-   */
-  async #listenForControlMessages(control: CtrlStream) {
-    this.logger.info("Starting to listen for control messages");
+  async #acceptRequestStreams(wt: WebTransport): Promise<void> {
     try {
-      while (true) {
-        const msg = await control.recv();
-
-        if (msg.kind === Msg.PublishNamespace) {
-          this.logger.info(
-            `Received publish namespace message with namespace: ${msg.namespace.join(
-              "/",
-            )}, requestId: ${msg.requestId}`,
-          );
-
-          // Send PublishNamespaceOk back to the server
-          try {
-            await control.send({
-              kind: Msg.PublishNamespaceOk,
-              requestId: msg.requestId,
-              namespace: msg.namespace,
-            });
-            this.logger.info(
-              `Sent PublishNamespaceOk for requestId ${msg.requestId}`,
-            );
-          } catch (error) {
-            this.logger.error(
-              `Error sending PublishNamespaceOk: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          }
-
-          // Notify all registered publish namespace callbacks
-          this.#publishNamespaceCallbacks.forEach((callback) => {
-            try {
-              callback(msg.namespace);
-            } catch (error) {
-              this.logger.error(
-                `Error in publish namespace callback: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            }
-          });
-        } else if ("requestId" in msg) {
-          // For messages with request IDs, check if we have a handler registered
-          const requestId = msg.requestId as bigint;
-          const handlersForKind = this.#messageHandlers.get(msg.kind);
-
-          if (handlersForKind && handlersForKind.has(requestId)) {
-            this.logger.debug(
-              `Found handler for message kind ${msg.kind} with requestId ${requestId}`,
-            );
-            try {
-              // Call the handler with the message
-              const handler = handlersForKind.get(requestId);
-              if (handler) {
-                handler(msg);
-              } else {
-                this.logger.warn(
-                  `Handler for message kind ${msg.kind} with requestId ${requestId} was null`,
-                );
-              }
-
-              // Remove the handler after it's been called (one-time use)
-              handlersForKind.delete(requestId);
-            } catch (error) {
-              this.logger.error(
-                `Error in message handler for kind ${
-                  msg.kind
-                } with requestId ${requestId}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            }
-          } else {
-            this.logger.debug(
-              `No handler found for message kind ${msg.kind} with requestId ${requestId}`,
-            );
-          }
-        } else {
-          this.logger.debug(
-            `Received message of kind ${msg.kind} without a request ID`,
-          );
+      const streams = wt.incomingBidirectionalStreams.getReader();
+      for (;;) {
+        const { value: stream, done } = await streams.read();
+        if (done) {
+          return;
         }
+        void this.#handleRequestStream(stream);
       }
     } catch (error) {
-      // Check if this is a WebTransportError due to session closure
       if (
         error instanceof Error &&
         error.message.includes("session is closed")
       ) {
-        this.logger.debug(
-          "Control message listener stopped: connection closed",
-        );
+        this.logger.debug("Request stream listener stopped: connection closed");
       } else {
-        this.logger.error("Error while listening for control messages:", error);
+        this.logger.error("Error accepting request streams:", error);
       }
     }
   }
 
-  /**
-   * Subscribe to a track
-   * @param subscribeParams Parameters for the subscribe message
-   * @returns The track alias assigned to the subscription
-   */
-  async subscribe(subscribeParams: {
-    track_namespace: string;
-    track_name: string;
-    group_order: number;
-    forward: boolean;
-    filterType: FilterType;
-    startLocation?: any;
-    endGroup?: bigint;
-    params?: Stream.KeyValuePair[];
-  }): Promise<bigint> {
-    if (!this.#tracksManager) {
-      throw new Error("Cannot subscribe: Tracks manager not initialized");
+  async #handleRequestStream(
+    stream: WebTransportBidirectionalStream,
+  ): Promise<void> {
+    const reader = new Reader(new Uint8Array(), stream.readable);
+    const writer = new Writer(stream.writable);
+    try {
+      const type = Number(await reader.u62()) as CtrlType;
+      if (!opensRequestStream(type)) {
+        // A bidirectional stream beginning with anything else is a
+        // PROTOCOL_VIOLATION, including a type valid later on the same stream.
+        throw new Error(`${ctrlTypeName(type)} may not open a request stream`);
+      }
+
+      const msg = await readCtrlBody(reader, type, false);
+      if (msg.kind !== CtrlType.PublishNamespace) {
+        this.logger.info(
+          `Rejecting unsupported ${ctrlTypeName(type)} request stream`,
+        );
+        await writer.write(
+          encodeCtrlMessage({
+            kind: CtrlType.RequestError,
+            // NOT_SUPPORTED. Answering is a legitimate response, and adding a
+            // handler later changes no signature.
+            errorCode: 0x2n,
+            retryInterval: 0n,
+            errorReason: "not supported",
+          }),
+        );
+        await writer.close();
+        return;
+      }
+
+      const namespace = msg.namespace.map((f) => decoder.decode(f));
+      this.logger.info(`Received PUBLISH_NAMESPACE for ${namespace.join("/")}`);
+
+      // REQUEST_OK goes back on the request's own stream, and carries no
+      // Request ID: the stream is the identity.
+      await writer.write(
+        encodeCtrlMessage({
+          kind: CtrlType.RequestOk,
+          parameters: [],
+          trackProperties: [],
+        }),
+      );
+
+      this.#publishNamespaceCallbacks.forEach((callback) => {
+        try {
+          callback(namespace);
+        } catch (error) {
+          this.logger.error(`Error in publish namespace callback: ${error}`);
+        }
+      });
+
+      // The stream stays open: NAMESPACE_DONE and further updates arrive on it.
+      await this.#drainNamespaceStream(reader, namespace.join("/"));
+    } catch (error) {
+      this.logger.error(`Error on incoming request stream: ${error}`);
+      try {
+        stream.writable.abort(error);
+        void stream.readable.cancel(error);
+      } catch {
+        // The stream may already be gone; nothing else to do.
+      }
     }
+  }
 
-    // Get a connection to send the subscribe message
-    const connection = await this.connect();
-    const control = connection.control;
-
-    // Create a subscribe message
-    const requestId = connection.getNextRequestId();
-
-    // draft-14: trackAlias is assigned by server in SUBSCRIBE_OK
-    const subscribeMsg: Subscribe = {
-      kind: Msg.Subscribe,
-      requestId,
-      namespace: [subscribeParams.track_namespace],
-      name: subscribeParams.track_name,
-      subscriber_priority: 0,
-      group_order: subscribeParams.group_order,
-      forward: subscribeParams.forward,
-      filterType: subscribeParams.filterType,
-      startLocation: subscribeParams.startLocation,
-      endGroup: subscribeParams.endGroup,
-      params: subscribeParams.params || [],
-    };
-
-    this.logger.info(
-      `Subscribing to track: ${subscribeParams.track_namespace}/${subscribeParams.track_name}`,
-    );
-
-    // Send the subscribe message
-    await control.send(subscribeMsg);
-
-    // Wait for the subscribe response
-    const response = await control.recv();
-
-    if (response.kind !== Msg.SubscribeOk) {
-      throw new Error(`Subscribe failed: ${JSON.stringify(response)}`);
+  async #drainNamespaceStream(reader: Reader, label: string): Promise<void> {
+    for (;;) {
+      if (await reader.done()) {
+        return;
+      }
+      const type = Number(await reader.u62()) as CtrlType;
+      const msg: CtrlMessage = await readCtrlBody(reader, type, false);
+      this.logger.debug(`Received ${ctrlTypeName(msg.kind)} for ${label}`);
     }
-
-    // draft-14: get trackAlias from SUBSCRIBE_OK response
-    const subscribeOk = response as SubscribeOk;
-    const trackAlias = subscribeOk.trackAlias;
-
-    this.logger.info(`Subscribed to track with alias: ${trackAlias}`);
-
-    return trackAlias;
   }
 
   /**
@@ -633,11 +469,11 @@ export class Client {
 export class Connection {
   // The established WebTransport session
   #wt: WebTransport;
-  #control: CtrlStream;
+  #control: ControlStreamPair;
   #client: Client;
   private logger: ILogger;
 
-  constructor(wt: WebTransport, control: CtrlStream, client: Client) {
+  constructor(wt: WebTransport, control: ControlStreamPair, client: Client) {
     this.#wt = wt;
     this.#control = control;
     this.#client = client;
@@ -645,9 +481,10 @@ export class Connection {
   }
 
   /**
-   * Get the control stream for sending messages
+   * The control stream pair. Requests do not go through it -- each opens its
+   * own bidirectional stream -- so this is only for session-level messages.
    */
-  get control(): CtrlStream {
+  get control(): ControlStreamPair {
     return this.#control;
   }
 

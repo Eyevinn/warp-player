@@ -11,6 +11,7 @@ import {
   readVi64,
   readZigzagVi64,
   vi64Len,
+  vi64PeekLen,
 } from "./vi64";
 
 const U64_MAX = (1n << 64n) - 1n;
@@ -198,5 +199,30 @@ describe("zigzag", () => {
     }
     expect(Array.from(encodeZigzagVi64(-1n))).toEqual([0x01]);
     expect(Array.from(encodeZigzagVi64(64n))).toEqual([0x80, 0x80]);
+  });
+});
+
+describe("vi64PeekLen", () => {
+  // The whole point of peekLen is that it reads the *encoding's* length from
+  // the first byte alone, so it must agree with Table 2 including the
+  // non-minimal 0x8025, where vi64Len would disagree.
+  for (const { enc, value } of draftExamples) {
+    const hex = enc.map((b) => b.toString(16).padStart(2, "0")).join(" ");
+    it(`reports ${enc.length} bytes for ${hex}`, () => {
+      expect(vi64PeekLen(enc[0])).toBe(enc.length);
+      void value;
+    });
+  }
+
+  it("disagrees with vi64Len on a non-minimal encoding", () => {
+    // 0x8025 is 37 written in two bytes; peekLen sees the two bytes actually
+    // on the wire, vi64Len reports the one byte 37 would encode to.
+    expect(vi64PeekLen(0x80)).toBe(2);
+    expect(vi64Len(37n)).toBe(1);
+  });
+
+  it("covers every length from 1 to 9", () => {
+    const firstBytes = [0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, 0xff];
+    expect(firstBytes.map(vi64PeekLen)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 });

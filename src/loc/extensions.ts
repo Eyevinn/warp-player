@@ -1,18 +1,28 @@
-// LOC (Low Overhead Container) extension-header parsing.
+// LOC (Low Overhead Container) Object Property parsing.
 //
-// LOC objects carry metadata in MoQ Object extension headers, which are encoded
-// as a sequence of moqtransport KeyValuePairs concatenated without an outer
-// count or length. The extensions blob is what tracks.ts exposes on
+// LOC objects carry metadata in MoQ Object Properties -- draft-16 called them
+// extension headers -- encoded as a sequence of Key-Value-Pairs that runs to the
+// end of the block, with no outer count. The blob is what tracks.ts exposes on
 // MOQObject.extensions.
 //
-// moqtransport's KVP parity rule (see moqtransport/internal/wire/key_value_pair.go):
-//   type % 2 == 0  →  ValueVarInt (single varint, no length)
-//   type % 2 == 1  →  ValueBytes  (varint length followed by bytes)
+// The KVP parity rule selects the value:
+//   type % 2 == 0  →  a varint, no length
+//   type % 2 == 1  →  a varint length followed by that many bytes
 //
-// LOC property IDs used by mlmpub today (see moqlivemock/internal/sub/loc.go):
-//   0x06  Capture timestamp, microseconds since the Unix epoch (varint).
+// Three things changed with draft-18 and all three break a draft-16 parser:
+//
+//   - Varints are vi64 (leading-ones), not the RFC 9000 two-bit-prefix form.
+//   - Pair *types* are delta-encoded against the preceding type, so they must
+//     be accumulated rather than read absolute.
+//   - The LOC Timestamp property moved from 0x06 to 0x0A. MOQT's Properties
+//     registry allocates 0x06 to SUBGROUP_DELIVERY_TIMEOUT, which is Track
+//     scope only, so a 0x06 Object Property makes the track malformed from
+//     draft-18 onwards; draft-ietf-moq-loc-03 renumbered it for that reason.
 
-export const LOC_EXT_TIMESTAMP = 0x06n;
+import { ByteReader, readKvpList } from "../transport/wire18";
+
+/** Capture timestamp, microseconds since the Unix epoch (draft-loc-03). */
+export const LOC_EXT_TIMESTAMP = 0x0an;
 
 export interface LocKvp {
   type: bigint;
@@ -30,69 +40,24 @@ export class LocExtensionParseError extends Error {
 }
 
 /**
- * Read a single QUIC variable-length integer from `buf` at `offset`.
- * Returns the value and the number of bytes consumed.
- */
-export function readQuicVarint(
-  buf: Uint8Array,
-  offset: number,
-): { value: bigint; bytesRead: number } {
-  if (offset >= buf.length) {
-    throw new LocExtensionParseError(
-      `varint read out of bounds at offset ${offset}`,
-    );
-  }
-  const first = buf[offset];
-  const sizeCode = (first & 0xc0) >> 6;
-  const length = 1 << sizeCode;
-  if (offset + length > buf.length) {
-    throw new LocExtensionParseError(
-      `varint of size ${length} extends past end (offset ${offset}, buf ${buf.length})`,
-    );
-  }
-  // Strip the size bits from the first byte and accumulate.
-  let value = BigInt(first & 0x3f);
-  for (let i = 1; i < length; i++) {
-    value = (value << 8n) | BigInt(buf[offset + i]);
-  }
-  return { value, bytesRead: length };
-}
-
-/**
- * Parse a flat extension-headers blob into KVPs. Returns an empty list when
- * `blob` is undefined or empty. Throws LocExtensionParseError on malformed input.
+ * Parse an Object Properties blob into KVPs. Returns an empty list when `blob`
+ * is undefined or empty. Throws LocExtensionParseError on malformed input.
  */
 export function parseMoqExtensions(blob: Uint8Array | undefined): LocKvp[] {
   if (!blob || blob.length === 0) {
     return [];
   }
-  const result: LocKvp[] = [];
-  let offset = 0;
-  while (offset < blob.length) {
-    const typeRead = readQuicVarint(blob, offset);
-    offset += typeRead.bytesRead;
-    const type = typeRead.value;
-
-    if ((type & 1n) === 0n) {
-      const valueRead = readQuicVarint(blob, offset);
-      offset += valueRead.bytesRead;
-      result.push({ type, valueVarInt: valueRead.value });
-    } else {
-      const lenRead = readQuicVarint(blob, offset);
-      offset += lenRead.bytesRead;
-      const length = Number(lenRead.value);
-      if (offset + length > blob.length) {
-        throw new LocExtensionParseError(
-          `length-prefixed value of ${length} bytes extends past end ` +
-            `(offset ${offset}, buf ${blob.length})`,
-        );
-      }
-      const valueBytes = blob.slice(offset, offset + length);
-      offset += length;
-      result.push({ type, valueBytes });
-    }
+  try {
+    return readKvpList(new ByteReader(blob)).map((kvp) => ({
+      type: kvp.type,
+      ...(kvp.varint !== undefined && { valueVarInt: kvp.varint }),
+      ...(kvp.bytes !== undefined && { valueBytes: kvp.bytes }),
+    }));
+  } catch (e) {
+    throw new LocExtensionParseError(
+      e instanceof Error ? e.message : String(e),
+    );
   }
-  return result;
 }
 
 /**
