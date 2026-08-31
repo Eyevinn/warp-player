@@ -32,6 +32,11 @@ function properties(
   const parts: Uint8Array[] = [];
   let prev = 0n;
   for (const p of pairs) {
+    if (p.type < prev) {
+      throw new Error(
+        `properties(): types must be non-decreasing, got 0x${p.type.toString(16)} after 0x${prev.toString(16)}`,
+      );
+    }
     parts.push(encodeVi64(p.type - prev));
     prev = p.type;
     if (p.type % 2n === 1n) {
@@ -73,17 +78,17 @@ describe("parseMoqExtensions", () => {
     const bytes = new Uint8Array([0xaa, 0xbb]);
     const blob = properties([
       { type: LOC_EXT_TIMESTAMP, varint: ts },
-      { type: 0x0bn, bytes },
-      { type: 0x0cn, varint: 0n },
+      { type: 0x11n, bytes },
+      { type: 0x12n, varint: 0n },
     ]);
     const out = parseMoqExtensions(blob);
     expect(out).toHaveLength(3);
     expect(out[0]).toEqual({ type: LOC_EXT_TIMESTAMP, valueVarInt: ts });
-    expect(out[1].type).toBe(0x0bn);
+    expect(out[1].type).toBe(0x11n);
     const valueBytes = out[1].valueBytes;
     expect(valueBytes).toBeDefined();
     expect(Array.from(valueBytes as Uint8Array)).toEqual([0xaa, 0xbb]);
-    expect(out[2]).toEqual({ type: 0x0cn, valueVarInt: 0n });
+    expect(out[2]).toEqual({ type: 0x12n, valueVarInt: 0n });
   });
 
   it("accumulates delta-encoded types rather than reading them absolute", () => {
@@ -139,13 +144,14 @@ describe("getLocCaptureTimestampUs", () => {
   });
 
   it("matches a hand-encoded blob equivalent to mlmpub output", () => {
-    // mlmpub writes a single Object Property: type 0x0A, value = µs since the
+    // mlmpub writes a single Object Property: type 0x10, value = µs since the
     // epoch. As the first pair its delta is the type itself, and a timestamp
     // past Nov 2023 needs the 8-byte vi64 form. Pinning the exact bytes is what
-    // catches a silent codepoint or varint change on the wire.
+    // catches a silent codepoint or varint change on the wire -- this property
+    // has already moved twice (0x06 -> 0x0A in loc-03, -> 0x10 in loc-04).
     const ts = 1_759_924_158_381_000n;
     const expected = new Uint8Array([
-      0x0a,
+      0x10,
       // 8-byte vi64: first byte 0xFE, then the value's seven low bytes... the
       // form carries 56 value bits, so byte 0 is 0xFE | (ts >> 56) which is
       // zero here, and the remaining seven bytes are the value.
