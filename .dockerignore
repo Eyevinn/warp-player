@@ -1,0 +1,22 @@
+# Produced inside the image
+node_modules
+dist
+coverage
+
+# Version control and CI
+.git
+.gitignore
+.github
+.husky
+
+# Local archives, logs and screenshots
+*.tgz
+*.log
+*.png
+
+# Not needed to build the production bundle
+docs
+test
+*.md
+Dockerfile
+.dockerignore
