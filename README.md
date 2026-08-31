@@ -33,7 +33,7 @@ This project implements a media player that:
    - **MSE** for CMAF (`packaging: "cmaf"`) and LOCMAF
      (`packaging: "locmaf"`, [draft-einarsson-moq-locmaf]), with optional EME
      for protected content
-   - **WebCodecs** for LOC (`packaging: "loc"`, [draft-mzanaty-moq-loc]), clear content only
+   - **WebCodecs** for LOC (`packaging: "loc"`, [draft-ietf-moq-loc]), clear content only
 6. Provides adaptive buffer management for a smooth playback experience
 7. This player is intended to work towards the [moqlivemock][moqlivemock]
    publisher and uses the CMSF ContentProtection signaling
@@ -51,7 +51,7 @@ packagings:
   LOCMAF and CMAF share the same init data and render path. Decoding mirrors the
   reusable [`Eyevinn/locmaf`](https://github.com/Eyevinn/locmaf) reference
   implementation; only LOCMAF packaging version `0.3` is accepted.
-- **LOC** (`packaging: "loc"`, [draft-mzanaty-moq-loc]) — raw codec frames,
+- **LOC** (`packaging: "loc"`, [draft-ietf-moq-loc]) — raw codec frames,
   decoded directly by the WebCodecs pipeline (clear content only).
 
 Catalogs follow **MSF [draft-ietf-moq-msf-01]** with **CMSF
@@ -270,7 +270,7 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
   - **MSE / CMAF** — the default for CMAF tracks, also handles encrypted content via EME
   - **WebCodecs / LOC** — clear-only pipeline for `packaging: "loc"` tracks,
     supporting AVC, HEVC and AV1 video plus AAC and Opus audio
-    ([draft-mzanaty-moq-loc])
+    ([draft-ietf-moq-loc])
 - In-band **CTA-608** CC1 captions on both engines, decoded from the video SEI
   and painted on the true 32x15 grid inside the CTA-608 safe area — colours,
   background boxes and the pop-on / roll-up / paint-on screen model. They work
@@ -329,7 +329,8 @@ on the `<video>` element using a wallclock-anchored `requestAnimationFrame`
 loop. Audio decoded via `AudioDecoder` is converted to `AudioBuffer`s and
 scheduled on a single `AudioContext` so video and audio share the same
 wallclock anchor. The capture timestamp travels in MoQ Object extension
-headers (LOC property `0x06`, microseconds since the Unix epoch).
+Properties (LOC Timestamp, property `0x10`, microseconds since the Unix
+epoch).
 
 ## Buffer Control Algorithm
 
@@ -448,4 +449,4 @@ Want to know more about Eyevinn, contact us at info@eyevinn.se!
 [draft-ietf-moq-msf-01]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01
 [draft-ietf-moq-cmsf-01]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-cmsf-01
 [draft-einarsson-moq-locmaf]: https://datatracker.ietf.org/doc/draft-einarsson-moq-locmaf/
-[draft-mzanaty-moq-loc]: https://datatracker.ietf.org/doc/html/draft-mzanaty-moq-loc
+[draft-ietf-moq-loc]: https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc

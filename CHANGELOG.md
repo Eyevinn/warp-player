@@ -46,11 +46,12 @@ draft-18 server such as `mlmpub` at moqtransport v0.11.0 or later.
 
 ### Fixed
 
-- **The LOC capture timestamp is read from Object Property `0x0A`**, not
+- **The LOC capture timestamp is read from Object Property `0x10`**, not
   `0x06`. MOQT's Properties registry allocates `0x06` to
   SUBGROUP_DELIVERY_TIMEOUT, which is Track scope only, so a `0x06` Object
-  Property makes the track malformed from draft-18 onwards;
-  draft-ietf-moq-loc-03 renumbered it for that reason. Object Property types
+  Property makes the track malformed from draft-18 onwards.
+  draft-ietf-moq-loc-03 renumbered it to `0x0A` for that reason and draft-04
+  moved it again to `0x10` as the registry table settled. Object Property types
   are also delta-encoded now, which a draft-16 parser reads as the wrong types
   from the second pair onwards. Together these two made the video buffer read
   as a nonsense figure -- 33378172119 ms in testing -- with playback never

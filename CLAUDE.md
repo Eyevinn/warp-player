@@ -68,7 +68,7 @@ per session:
   ClearKey). LOCMAF objects are expanded into standard CMAF chunks (the
   draft's canonical reconstruction) before being appended to the
   `SourceBuffer`.
-- **WebCodecs / LOC** for `packaging: "loc"` tracks (draft-mzanaty-moq-loc),
+- **WebCodecs / LOC** for `packaging: "loc"` tracks (draft-ietf-moq-loc-04),
   clear content only, supporting AVC, HEVC, and AV1 video plus AAC and Opus
   audio.
 
@@ -136,7 +136,7 @@ cannot be spoken to at all.
 
 For the catalog, the specification used is MSF (draft-ietf-moq-msf-01)
 with CMSF (draft-ietf-moq-cmsf-01) for CMAF packaging. LOC packaging
-follows draft-mzanaty-moq-loc.
+follows draft-ietf-moq-loc-04.
 
 The codebase is organized into several key modules:
 
@@ -257,10 +257,11 @@ The codebase is organized into several key modules:
     - `opus.ts` — build the `OpusHead` ID Header from catalog metadata
     - `extensions.ts` — parse Object Properties (draft-16's extension
       headers): a KVP list with vi64 varints and _delta-encoded_ types,
-      reading LOC property `0x0A` (capture timestamp in microseconds since
-      the Unix epoch). The codepoint moved from `0x06` in
-      draft-ietf-moq-loc-03 because MOQT's Properties registry gives `0x06`
-      to SUBGROUP_DELIVERY_TIMEOUT, which is Track scope only
+      reading LOC property `0x10` (capture timestamp in microseconds since
+      the Unix epoch). The codepoint has moved twice: off `0x06`, which
+      MOQT's Properties registry gives to SUBGROUP_DELIVERY_TIMEOUT (Track
+      scope only), to `0x0A` in draft-ietf-moq-loc-03, then to `0x10` in
+      draft-04 as the registry table settled
 
 11. **LOCMAF helpers** (`src/locmaf/locmaf.ts`, `src/locmaf/v03/`):
     - Only LOCMAF packaging version **0.3** is supported;
@@ -287,7 +288,7 @@ The codebase is organized into several key modules:
 
 ## Technical Notes
 
-1. The implementation supports MOQ Transport draft-18, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-ietf-moq-loc-03).
+1. The implementation supports MOQ Transport draft-18, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-ietf-moq-loc-04).
 2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF packaging, which is expanded back into CMAF chunks before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AV1 OBU temporal units, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
@@ -373,7 +374,7 @@ directly with WebCodecs:
   `AudioBufferSourceNode` against the same wallclock anchor used by the
   video render loop; a shared `GainNode` implements mute
 - Capture timestamps travel in MoQ Object Properties as LOC property
-  `0x0A` (microseconds since the Unix epoch); see
+  `0x10` (microseconds since the Unix epoch); see
   `src/loc/extensions.ts`
 
 ### Render Engine Selector and Namespace Filter

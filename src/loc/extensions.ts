@@ -14,15 +14,17 @@
 //   - Varints are vi64 (leading-ones), not the RFC 9000 two-bit-prefix form.
 //   - Pair *types* are delta-encoded against the preceding type, so they must
 //     be accumulated rather than read absolute.
-//   - The LOC Timestamp property moved from 0x06 to 0x0A. MOQT's Properties
-//     registry allocates 0x06 to SUBGROUP_DELIVERY_TIMEOUT, which is Track
-//     scope only, so a 0x06 Object Property makes the track malformed from
-//     draft-18 onwards; draft-ietf-moq-loc-03 renumbered it for that reason.
+//   - The LOC Timestamp property moved off 0x06. MOQT's Properties registry
+//     allocates 0x06 to SUBGROUP_DELIVERY_TIMEOUT, which is Track scope only,
+//     so a 0x06 Object Property makes the track malformed from draft-18
+//     onwards. draft-ietf-moq-loc-03 renumbered it to 0x0A for that reason and
+//     draft-04 moved it again to 0x10, publishing a settled registry table
+//     where -03 still carried "IANA, please assign" on its neighbours.
 
 import { ByteReader, readKvpList } from "../transport/wire18";
 
-/** Capture timestamp, microseconds since the Unix epoch (draft-loc-03). */
-export const LOC_EXT_TIMESTAMP = 0x0an;
+/** Capture timestamp, microseconds since the Unix epoch (draft-ietf-moq-loc-04). */
+export const LOC_EXT_TIMESTAMP = 0x10n;
 
 export interface LocKvp {
   type: bigint;
