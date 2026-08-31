@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-31
+
 Migrated to MoQ Transport draft-18. This is a breaking change with no
 compatibility shim: the player no longer speaks drafts 14 or 16, and needs a
 draft-18 server such as `mlmpub` at moqtransport v0.11.0 or later.
