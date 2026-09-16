@@ -18,6 +18,7 @@ import {
   type Location,
   PARAM_LARGEST_OBJECT,
   findParameter,
+  namespaceFields,
   subscriptionFilterParameter,
 } from "./wire18";
 
@@ -145,7 +146,8 @@ export class TracksManager {
   private objectCallbacks: Map<string, ObjectCallback[]> = new Map();
   private fetchCallbacks: Map<bigint, ObjectCallback> = new Map();
   private trackRegistry: TrackAliasRegistry = new TrackAliasRegistry();
-  private nextRequestId: bigint = 0n;
+  /** Only used when no client is attached, e.g. in unit tests. */
+  private fallbackRequestId: bigint = 0n;
   private client: Client | null = null;
   private logger: ILogger;
   private isClosing: boolean = false;
@@ -176,11 +178,19 @@ export class TracksManager {
   }
 
   /**
-   * Get the next request ID (even numbers for client requests)
+   * Get the next request ID (even numbers for client requests).
+   *
+   * Section 3.2 gives a session one Request ID sequence, shared by every kind
+   * of request. Counting separately here meant the first SUBSCRIBE reused the
+   * ID a SUBSCRIBE_NAMESPACE had already spent, and the peer closed the
+   * session with INVALID_REQUEST_ID. The client owns the sequence.
    */
   private getNextRequestId(): bigint {
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
+    if (this.client) {
+      return this.client.getNextRequestId();
+    }
+    const requestId = this.fallbackRequestId;
+    this.fallbackRequestId += 2n;
     return requestId;
   }
 
@@ -727,7 +737,7 @@ export class TracksManager {
       requestId,
       fetchType: FetchType.Standalone,
       standalone: {
-        namespace: [encoder.encode(namespace)],
+        namespace: namespaceFields(namespace),
         name: encoder.encode(trackName),
         start: { group: 0n, object: 0n },
         end: { group: 0n, object: 0n },
@@ -829,7 +839,7 @@ export class TracksManager {
     const subscribe: Subscribe = {
       kind: CtrlType.Subscribe,
       requestId,
-      namespace: [encoder.encode(namespace)],
+      namespace: namespaceFields(namespace),
       name: encoder.encode(trackName),
       parameters: [
         subscriptionFilterParameter({
