@@ -49,6 +49,8 @@ export class Player {
   private connection: any = null;
   private serverUrl: string;
   private fingerprintUrl?: string;
+  /** Prefixes to ask the peer for; empty asks for every namespace it has. */
+  private namespacePrefixes: string[][] = [];
   private catalogManager: WarpCatalogManager;
   private unregisterCatalogCallback: (() => void) | null = null;
   private unregisterPublishNamespaceCallback: (() => void) | null = null;
@@ -261,6 +263,7 @@ export class Player {
    * @param statusEl The HTML element to display connection status
    * @param uiLogger Optional function to log messages to the UI
    * @param fingerprintUrl Optional URL to fetch certificate fingerprint for self-signed certificates
+   * @param namespacePrefixes Slash-joined prefixes to ask the peer for; empty asks for all
    */
   constructor(
     serverUrl: string,
@@ -272,9 +275,13 @@ export class Player {
     ) => void,
     fingerprintUrl?: string,
     draftVersion?: DraftVersion,
+    namespacePrefixes?: string[],
   ) {
     this.serverUrl = serverUrl;
     this.fingerprintUrl = fingerprintUrl;
+    this.namespacePrefixes = (namespacePrefixes ?? [])
+      .map((p) => p.split("/").filter((f) => f.length > 0))
+      .filter((p) => p.length > 0);
     this.draftVersion = draftVersion || "auto";
     this.tracksContainerEl = tracksContainerEl;
     this.statusEl = statusEl;
@@ -677,7 +684,11 @@ export class Player {
       // Listen for published namespaces - catalog subscription will happen after namespace is received
       this.listenForPublishedNamespaces();
 
-      this.logger.info("Waiting for published namespaces...");
+      // Then ask. A publisher volunteers its namespaces, but a relay only owes
+      // them to a subscriber that sent SUBSCRIBE_NAMESPACE, so without this the
+      // player waits forever behind one. The listener above is registered first
+      // so nothing is missed between the request and its answer.
+      this.discoverNamespaces();
 
       // Handle connection closure
       this.connection
@@ -876,6 +887,78 @@ export class Player {
     }
   }
 
+  /** How long to wait for a namespace before saying so in the UI. */
+  private static readonly NAMESPACE_DISCOVERY_TIMEOUT_MS = 5000;
+
+  /**
+   * Ask the peer for its namespaces, and say something if none turn up.
+   *
+   * A peer with no namespace subscription to offer (mlmpub answers
+   * NOT_SUPPORTED) is fine -- it volunteers PUBLISH_NAMESPACE anyway. What is
+   * not fine is showing an idle page: before this, a relay that had nothing to
+   * announce left the player looking connected and busy forever.
+   */
+  private discoverNamespaces(): void {
+    this.logger.info("Waiting for published namespaces...");
+
+    const client = this.client;
+    if (!client) {
+      return;
+    }
+
+    // One request per configured prefix, or a single empty one for "all".
+    // Section 10.18 rejects a prefix overlapping an established subscription
+    // with PREFIX_OVERLAP, so these must be disjoint -- and an empty prefix
+    // overlaps everything, which is why it cannot be one of several.
+    const prefixes =
+      this.namespacePrefixes.length > 0 ? this.namespacePrefixes : [[]];
+    for (const prefix of prefixes) {
+      const label = prefix.length ? prefix.join("/") : "(all)";
+      client
+        .subscribeNamespace(prefix)
+        .then((subscribed) => {
+          if (!subscribed) {
+            this.logger.info(
+              `Peer does not support SUBSCRIBE_NAMESPACE; relying on announcements it sends unprompted`,
+            );
+          }
+        })
+        .catch((error) => {
+          this.logger.warn(
+            `Namespace discovery for ${label} failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+    }
+
+    window.setTimeout(() => {
+      if (this.publishedNamespaces.length > 0 || !this.connection) {
+        return;
+      }
+      this.logger.warn(
+        "No namespaces after 5s. The peer announced none and answered no namespace subscription -- if it is a relay, it may have no publisher upstream.",
+      );
+      this.showNoNamespacesNotice();
+    }, Player.NAMESPACE_DISCOVERY_TIMEOUT_MS);
+  }
+
+  /** Put the empty-discovery message where the namespace buttons would go. */
+  private showNoNamespacesNotice(): void {
+    if (!this.publishedNamespacesEl) {
+      this.createPublishedNamespacesSection();
+    }
+    if (!this.publishedNamespacesEl || this.publishedNamespaces.length > 0) {
+      return;
+    }
+    this.publishedNamespacesEl.innerHTML = "";
+    const notice = document.createElement("div");
+    notice.className = "namespace-empty-notice";
+    notice.textContent =
+      "No namespaces available from this server. If it is a relay, check that a publisher is connected to it.";
+    this.publishedNamespacesEl.appendChild(notice);
+  }
+
   /**
    * Known non-media namespace prefixes. These are surfaced in the namespace
    * picker as inert labels rather than selectable buttons because warp-player
@@ -910,26 +993,27 @@ export class Player {
     if (engineChoice === "auto") {
       return true;
     }
-    const joined = namespace.join("/");
-    if (joined.startsWith("cmsf/")) {
+    // The packaging marker is a field of the namespace, not necessarily the
+    // first one: mlmpub puts a publisher field in front (mlm/cmsf/clear), and
+    // a relay may carry namespaces nested deeper still. This is only a guess
+    // to dim the picker before a catalog arrives -- the catalog's `packaging`
+    // is what actually decides, once it is fetched.
+    if (namespace.includes("cmsf")) {
       return engineChoice === "mse";
     }
-    if (joined.startsWith("msf/")) {
+    if (namespace.includes("msf")) {
       return engineChoice === "webcodecs";
     }
     return true;
   }
 
   private isNonMediaNamespace(namespace: string[]): boolean {
-    // Namespaces arrive on the wire either as a real multi-element tuple
-    // (e.g. ["moq-test", "interop"]) or as a single tuple element that
-    // already contains slashes (e.g. ["moq-mi/clear"], the form mlmpub
-    // emits for its content namespaces). Compare against the slash-joined
-    // form so both shapes are recognised.
-    const joined = namespace.join("/");
-    return Player.NON_MEDIA_PREFIXES.some(
-      (prefix) => joined === prefix || joined.startsWith(prefix + "/"),
-    );
+    // Match on any field rather than the leading one, for the same reason
+    // namespaceMatchesEngineChoice does: a publisher prefix may sit in front
+    // of the marker. A peer that still sends one field carrying the slashes
+    // is recognised too, by splitting it back apart.
+    const fields = namespace.flatMap((f) => f.split("/"));
+    return Player.NON_MEDIA_PREFIXES.some((marker) => fields.includes(marker));
   }
 
   /**
