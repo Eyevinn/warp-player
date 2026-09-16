@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Track Namespaces are encoded as tuples on the wire.** SUBSCRIBE and FETCH
+  put the whole slash-joined namespace into a single Track Namespace Field, so
+  `cmsf/clear` went out as one field rather than two. Section 2.4.1 makes a
+  namespace an ordered set of fields and Section 8.4 matches it a field at a
+  time, so a relay asked to match the prefix `("cmsf")` matched nothing. This
+  only ever worked because mlmpub announced the same single slash-bearing
+  field. `namespaceFields()` splits at the wire boundary, the exact inverse of
+  the join applied to everything received, so the slash-joined string stays the
+  namespace's identity everywhere else in the player.
+- `Writer.encodeTuple` wrote a field count of N followed by a single joined
+  value, which is a namespace no peer can parse. It had no callers; it does now
+  encode what it claims to.
+- **One Request ID sequence per session.** `TracksManager` counted separately
+  from `Client`, which was harmless only while nothing else spent an ID. The
+  moment anything did, the first SUBSCRIBE reused an ID and the peer closed the
+  session with INVALID_REQUEST_ID. Section 3.2 gives a session one sequence,
+  and the client owns it.
+
 ## [0.14.0] - 2026-08-31
 
 Migrated to MoQ Transport draft-18. This is a breaking change with no

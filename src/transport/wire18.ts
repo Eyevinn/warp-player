@@ -526,3 +526,30 @@ export enum GroupOrder {
 
 /** The subscriber priority a publisher assumes when the parameter is absent. */
 export const DEFAULT_SUBSCRIBER_PRIORITY = 128;
+
+// ---------------------------------------------------------------------------
+// Namespaces
+// ---------------------------------------------------------------------------
+
+const namespaceEncoder = new TextEncoder();
+
+/**
+ * Split the slash-joined string form of a namespace into its wire fields.
+ *
+ * Section 2.4.1 makes a Track Namespace a tuple, and Section 8.4 matches it a
+ * field at a time, so sending "cmsf/clear" as a single field costs every relay
+ * and namespace subscriber the ability to match the prefix ("cmsf") -- the
+ * whole point of the structure. The player keeps the slash-joined string as a
+ * namespace's identity, since that is what the track registry keys on and what
+ * the UI shows, so the split belongs here at the wire boundary, where it is
+ * the exact inverse of the join applied to everything received.
+ *
+ * Empty fields are dropped: Section 2.4.1 requires each field to carry at
+ * least one byte.
+ */
+export function namespaceFields(namespace: string): Uint8Array[] {
+  return namespace
+    .split("/")
+    .filter((field) => field.length > 0)
+    .map((field) => namespaceEncoder.encode(field));
+}

@@ -326,14 +326,18 @@ export class Writer {
     return result;
   }
 
+  // Encodes a Track Namespace per draft-18 Section 2.4.1: a field count
+  // followed by one length-prefixed value per field. Joining the fields into
+  // a single value would announce a count the bytes do not back, and would
+  // also cost the peer per-field prefix matching (Section 8.4), which is the
+  // whole point of the tuple.
   encodeTuple(buffer: Uint8Array, tuple: string[]): Uint8Array {
-    const tupleBytes = new TextEncoder().encode(tuple.join("/"));
-
-    return this.concatBuffer([
-      this.setVint53(buffer, tuple.length),
-      this.setVint53(buffer, tupleBytes.length),
-      tupleBytes,
-    ]);
+    const parts: Uint8Array[] = [this.setVint53(buffer, tuple.length)];
+    for (const field of tuple) {
+      const fieldBytes = new TextEncoder().encode(field);
+      parts.push(this.setVint53(buffer, fieldBytes.length), fieldBytes);
+    }
+    return this.concatBuffer(parts);
   }
 
   encodeString(buffer: Uint8Array, str: string): Uint8Array {
