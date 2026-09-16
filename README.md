@@ -283,6 +283,8 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 - Engine selector with `Auto` mode that picks MSE or WebCodecs from the
   selected tracks' packaging and encryption status, and namespace filtering
   that dims out namespaces incompatible with the chosen engine
+- Namespace discovery over SUBSCRIBE_NAMESPACE, with a **Namespace prefixes**
+  field to say which namespaces to ask a relay for (see below)
 - Engine legend overlay showing the active namespace, engine, DRM system,
   and selected video / audio tracks
 - Advanced two-parameter buffer control system (see Buffer Control Algorithm
@@ -323,6 +325,29 @@ The `Auto` engine choice resolves at subscribe time:
 Forcing `MSE (CMAF)` or `WebCodecs (LOC)` overrides the auto choice and
 filters the namespace selector so only compatible namespaces remain
 selectable.
+
+## Namespace discovery
+
+On connect the player sends SUBSCRIBE_NAMESPACE and lists what comes back. It
+also still accepts namespaces a peer announces unprompted, so a publisher that
+volunteers them works either way; a peer that answers `NOT_SUPPORTED` is fine.
+
+The **Namespace prefixes** field says which namespaces to ask for, comma-
+separated — blank asks for every namespace the peer has. Blank is right against
+a single publisher or a dedicated relay. Name the prefixes when pointing at a
+shared relay carrying unrelated publishers: `mlm` gets everything
+[moqlivemock](https://github.com/Eyevinn/moqlivemock)'s `mlmpub` serves, and
+`cmsf, msf` would select by packaging.
+
+A Track Namespace is a tuple of fields, and a relay matches a prefix one field
+at a time, so `mlm` matches `mlm/cmsf/clear` but `ml` matches nothing. One
+SUBSCRIBE_NAMESPACE is sent per prefix, and the prefixes must not overlap each
+other — a peer rejects an overlapping one with `PREFIX_OVERLAP`, and a blank
+prefix overlaps everything, so it cannot be combined with another.
+
+The field is remembered between sessions, and can be preset with
+`?namespacePrefixes=` or the `namespacePrefixes` key in `config.json`
+(see [CONFIG.md](CONFIG.md)).
 
 The WebCodecs pipeline draws decoded `VideoFrame`s onto a canvas overlaid
 on the `<video>` element using a wallclock-anchored `requestAnimationFrame`
