@@ -843,6 +843,30 @@
               >
             </div>
           </div>
+          <div class="form-group" id="namespacePrefixSection">
+            <label for="namespacePrefixes"
+              >Namespace prefixes
+              <span style="font-size: 0.75rem; color: var(--text-secondary)"
+                >(comma-separated; blank asks for all)</span
+              ></label
+            >
+            <input
+              type="text"
+              id="namespacePrefixes"
+              placeholder="e.g. cmsf, msf"
+            />
+            <div
+              style="
+                font-size: 0.75rem;
+                color: var(--text-secondary);
+                margin-top: 0.25rem;
+              "
+            >
+              Which namespaces to ask a relay for. A shared relay may carry many
+              publishers, and a blank prefix asks it for every one of them.
+              Prefixes must not overlap each other.
+            </div>
+          </div>
           <div
             class="form-group"
             style="display: flex; gap: 1rem; align-items: flex-end"
@@ -851,6 +875,7 @@
               <label for="draftVersion">Protocol Version</label>
               <select
                 id="draftVersion"
+                disabled
                 style="
                   background: var(--input-bg);
                   color: var(--text-primary);
@@ -860,8 +885,7 @@
                   width: 100%;
                 "
               >
-                <option value="auto">Auto (negotiate)</option>
-                <option value="draft-18">Draft 18</option>
+                <option value="draft-18">Draft 18 (moqt-18)</option>
               </select>
             </div>
             <div style="flex: 1; min-width: 0">

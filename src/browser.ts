@@ -12,6 +12,7 @@ import { DraftVersion } from "./transport/client";
 // DOM Elements
 let serverUrlInput: HTMLInputElement;
 let fingerprintUrlInput: HTMLInputElement;
+let namespacePrefixesInput: HTMLInputElement;
 let connectBtn: HTMLButtonElement;
 let disconnectBtn: HTMLButtonElement;
 let statusEl: HTMLDivElement;
@@ -37,6 +38,8 @@ const logger = LoggerFactory.getInstance().getLogger("Browser");
 interface Config {
   defaultServerUrl?: string;
   fingerprintUrl?: string;
+  // Comma-separated namespace prefixes to ask the peer for; blank asks for all.
+  namespacePrefixes?: string;
   // Per-(engine × browser) buffer/latency profile table. Omit to use the
   // built-in default (Safari+MSE 500/800ms, everything else 200/300ms).
   bufferProfiles?: BufferProfiles;
@@ -85,10 +88,12 @@ function getUrlParams(): URLSearchParams {
 function saveConnectionSettings(
   serverUrl: string,
   fingerprintUrl: string,
+  namespacePrefixes: string,
 ): void {
   try {
     localStorage.setItem("warp-player-serverUrl", serverUrl);
     localStorage.setItem("warp-player-fingerprintUrl", fingerprintUrl);
+    localStorage.setItem("warp-player-namespacePrefixes", namespacePrefixes);
     logger.debug("Connection settings saved to localStorage");
   } catch (error) {
     logger.warn("Failed to save connection settings to localStorage:", error);
@@ -99,18 +104,33 @@ function saveConnectionSettings(
 function loadConnectionSettings(): {
   serverUrl?: string;
   fingerprintUrl?: string;
+  namespacePrefixes?: string;
 } {
   try {
     const serverUrl = localStorage.getItem("warp-player-serverUrl");
     const fingerprintUrl = localStorage.getItem("warp-player-fingerprintUrl");
+    const namespacePrefixes = localStorage.getItem(
+      "warp-player-namespacePrefixes",
+    );
     return {
       serverUrl: serverUrl || undefined,
       fingerprintUrl: fingerprintUrl || undefined,
+      namespacePrefixes: namespacePrefixes || undefined,
     };
   } catch (error) {
     logger.warn("Failed to load connection settings from localStorage:", error);
     return {};
   }
+}
+
+// Split the namespace-prefix field into individual prefixes. Blank means
+// "ask for everything", which is right against a publisher or a dedicated
+// relay and wrong against a shared one carrying unrelated publishers.
+function parseNamespacePrefixes(value: string): string[] {
+  return value
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
 }
 
 // Initialize the application when the DOM is loaded
@@ -127,6 +147,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   serverUrlInput = document.getElementById("serverUrl") as HTMLInputElement;
   fingerprintUrlInput = document.getElementById(
     "fingerprintUrl",
+  ) as HTMLInputElement;
+  namespacePrefixesInput = document.getElementById(
+    "namespacePrefixes",
   ) as HTMLInputElement;
   connectBtn = document.getElementById("connectBtn") as HTMLButtonElement;
   disconnectBtn = document.getElementById("disconnectBtn") as HTMLButtonElement;
@@ -174,9 +197,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     config.fingerprintUrl ||
     "";
 
+  // Namespace prefixes: URL param > localStorage > config.json > all
+  const namespacePrefixes =
+    urlParams.get("namespacePrefixes") ||
+    savedSettings.namespacePrefixes ||
+    config.namespacePrefixes ||
+    "";
+
   // Apply to UI elements
   serverUrlInput.value = serverUrl;
   fingerprintUrlInput.value = fingerprintUrl;
+  namespacePrefixesInput.value = namespacePrefixes;
 
   // Hide fingerprint section if no fingerprint URL is configured, with toggle to show/hide
   if (!fingerprintUrl) {
@@ -221,10 +252,18 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Save connection settings when they change
   serverUrlInput.addEventListener("change", () => {
-    saveConnectionSettings(serverUrlInput.value, fingerprintUrlInput.value);
+    saveConnectionSettings(
+      serverUrlInput.value,
+      fingerprintUrlInput.value,
+      namespacePrefixesInput.value,
+    );
   });
   fingerprintUrlInput.addEventListener("change", () => {
-    saveConnectionSettings(serverUrlInput.value, fingerprintUrlInput.value);
+    saveConnectionSettings(
+      serverUrlInput.value,
+      fingerprintUrlInput.value,
+      namespacePrefixesInput.value,
+    );
   });
 
   // Check WebTransport support
@@ -261,6 +300,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     legacyLogMessage,
     fingerprintUrlInput.value || undefined,
     draftVersionSelect.value as DraftVersion,
+    parseNamespacePrefixes(namespacePrefixesInput.value),
   );
 
   // Set connection state callback to manage button states
@@ -674,6 +714,7 @@ async function connect() {
     legacyLogMessage,
     fingerprintUrlInput.value || undefined,
     draftVersionSelect.value as DraftVersion,
+    parseNamespacePrefixes(namespacePrefixesInput.value),
   );
 
   // Set connection state callback to manage button states
@@ -705,7 +746,11 @@ async function connect() {
     // Start/Stop buttons will be enabled by the connection state callback
 
     // Save connection settings to localStorage for future sessions
-    saveConnectionSettings(serverUrlInput.value, fingerprintUrlInput.value);
+    saveConnectionSettings(
+      serverUrlInput.value,
+      fingerprintUrlInput.value,
+      namespacePrefixesInput.value,
+    );
   } catch (error) {
     logger.error(
       `Connection error: ${

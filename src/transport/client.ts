@@ -8,7 +8,12 @@ import {
   type Setup,
 } from "./messages18";
 import { encodeCtrlMessage } from "./messages18";
-import { ControlStreamPair, UniStreamRouter, readCtrlBody } from "./session18";
+import {
+  ControlStreamPair,
+  RequestStream,
+  UniStreamRouter,
+  readCtrlBody,
+} from "./session18";
 import { Reader, Writer } from "./stream";
 import {
   TracksManager,
@@ -36,6 +41,7 @@ export interface ClientConfig {
 }
 
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 export class Client {
   #fingerprint: Promise<WebTransportHash | undefined>;
@@ -49,6 +55,8 @@ export class Client {
   #catalogTrackAlias: bigint | null = null;
   // Reference to the tracks manager
   #tracksManager: TracksManager | null = null;
+  // The live session, so namespace discovery can open its own request stream
+  #wt: WebTransport | null = null;
   // Logger instance
   private logger: ILogger;
 
@@ -96,6 +104,7 @@ export class Client {
 
     this.logger.info(`Connecting to ${this.config.url}...`);
     const wt = new WebTransport(this.config.url, options);
+    this.#wt = wt;
     // Attach a handler to wt.closed up front. When the handshake fails (e.g.
     // self-signed cert with no fingerprint to pin against), Safari rejects
     // both wt.ready and wt.closed; without a handler on closed, Safari
@@ -267,13 +276,7 @@ export class Client {
         }),
       );
 
-      this.#publishNamespaceCallbacks.forEach((callback) => {
-        try {
-          callback(namespace);
-        } catch (error) {
-          this.logger.error(`Error in publish namespace callback: ${error}`);
-        }
-      });
+      this.#notifyNamespace(namespace);
 
       // The stream stays open: NAMESPACE_DONE and further updates arrive on it.
       await this.#drainNamespaceStream(reader, namespace.join("/"));
@@ -430,6 +433,106 @@ export class Client {
       `Client unsubscribing from track with alias ${trackAlias}`,
     );
     await this.#tracksManager.unsubscribeTrack(trackAlias);
+  }
+
+  /**
+   * Ask the peer which namespaces it has under a prefix, and to keep us posted.
+   *
+   * A publisher such as mlmpub volunteers PUBLISH_NAMESPACE to everything that
+   * connects, so a player that only listens works against it by luck. A relay
+   * owes us nothing of the sort: Section 6.1 makes SUBSCRIBE_NAMESPACE the
+   * in-band discovery mechanism, and Section 8.4 only obliges a relay to
+   * forward PUBLISH_NAMESPACE to subscribers whose prefix matches one. Without
+   * asking, the player waits for an announcement that never comes.
+   *
+   * An empty prefix asks for all of them. Resolves false when the peer has no
+   * namespace subscription to offer -- mlmpub answers NOT_SUPPORTED -- which is
+   * not fatal, since the passive PUBLISH_NAMESPACE listener covers that case.
+   */
+  async subscribeNamespace(prefix: string[] = []): Promise<boolean> {
+    const wt = this.#wt;
+    if (!wt) {
+      throw new Error("Cannot subscribe to namespaces: not connected");
+    }
+    const label = prefix.length ? prefix.join("/") : "(all)";
+    const stream = await RequestStream.open(wt, {
+      kind: CtrlType.SubscribeNamespace,
+      requestId: this.getNextRequestId(),
+      prefix: prefix.map((f) => encoder.encode(f)),
+      parameters: [],
+    });
+
+    const answer = await stream.next();
+    if (answer?.kind === CtrlType.RequestError) {
+      this.logger.info(
+        `Peer declined SUBSCRIBE_NAMESPACE ${label}: ${answer.errorReason}`,
+      );
+      await stream.close();
+      return false;
+    }
+    if (answer?.kind !== CtrlType.RequestOk) {
+      stream.abort("expected REQUEST_OK for SUBSCRIBE_NAMESPACE");
+      throw new Error(
+        `SUBSCRIBE_NAMESPACE ${label} answered with ${
+          answer ? ctrlTypeName(answer.kind) : "a closed stream"
+        }`,
+      );
+    }
+    this.logger.info(`Subscribed to namespaces under ${label}`);
+
+    // NAMESPACE and NAMESPACE_DONE keep arriving on this stream for as long as
+    // the subscription lives, each carrying a suffix relative to our prefix.
+    void this.#drainNamespaceSubscription(stream, prefix, label);
+    return true;
+  }
+
+  async #drainNamespaceSubscription(
+    stream: RequestStream,
+    prefix: string[],
+    label: string,
+  ): Promise<void> {
+    try {
+      for (;;) {
+        const msg = await stream.next();
+        if (!msg) {
+          this.logger.debug(`Namespace subscription ${label} ended`);
+          return;
+        }
+        if (msg.kind === CtrlType.Namespace) {
+          const namespace = [
+            ...prefix,
+            ...msg.suffix.map((f) => decoder.decode(f)),
+          ];
+          this.logger.info(
+            `Received NAMESPACE for ${namespace.join("/")} under ${label}`,
+          );
+          this.#notifyNamespace(namespace);
+        } else if (msg.kind === CtrlType.NamespaceDone) {
+          const namespace = [
+            ...prefix,
+            ...msg.suffix.map((f) => decoder.decode(f)),
+          ];
+          this.logger.info(`Namespace ${namespace.join("/")} withdrawn`);
+        } else {
+          this.logger.debug(
+            `Ignoring ${ctrlTypeName(msg.kind)} on namespace subscription ${label}`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.debug(`Namespace subscription ${label} stopped: ${error}`);
+    }
+  }
+
+  /** Report a namespace to everyone listening, however it was learned. */
+  #notifyNamespace(namespace: string[]): void {
+    this.#publishNamespaceCallbacks.forEach((callback) => {
+      try {
+        callback(namespace);
+      } catch (error) {
+        this.logger.error(`Error in publish namespace callback: ${error}`);
+      }
+    });
   }
 
   /**

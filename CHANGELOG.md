@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The player asks for namespaces instead of waiting to be told.** It only
+  ever listened for PUBLISH_NAMESPACE, which a publisher such as mlmpub
+  volunteers but a relay does not: Section 6.1 makes SUBSCRIBE_NAMESPACE the
+  in-band discovery mechanism, and Section 8.4 obliges a relay to forward
+  PUBLISH_NAMESPACE only to subscribers whose prefix matches one. Behind a
+  relay the player sat at "Waiting for published namespaces..." forever, with
+  no timeout and no way to name a namespace by hand. It now sends
+  SUBSCRIBE_NAMESPACE on connect, keeps the passive listener as a fallback,
+  treats a peer's NOT_SUPPORTED as unremarkable (mlmpub answers that and
+  announces anyway), and says so on screen when nothing arrives within 5s.
+- **Namespace prefixes** field: which namespaces to ask for, comma-separated,
+  blank for all. A shared relay may carry many publishers and a blank prefix
+  asks it for every one of them. One SUBSCRIBE_NAMESPACE goes out per prefix,
+  since Section 10.18 rejects a prefix overlapping an established subscription
+  with PREFIX_OVERLAP -- which also means a blank prefix cannot be combined
+  with any other. Remembered in localStorage, and settable by `?namespacePrefixes=`
+  or `config.json`.
+
+### Changed
+
+- The engine and non-media namespace checks match `cmsf`, `msf`, `moq-mi` and
+  `moq-test` against any field of the namespace rather than the leading one, so
+  a publisher prefix in front of the marker -- `mlm/cmsf/clear` -- still
+  resolves. The check only dims the picker before a catalog arrives; the
+  catalog's `packaging` decides once it is fetched.
+
 ### Fixed
 
 - **Track Namespaces are encoded as tuples on the wire.** SUBSCRIBE and FETCH
