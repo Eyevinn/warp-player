@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-16
+
+The player asks which namespaces a peer has instead of waiting to be told, and
+puts real tuples on the wire. Both were needed to work through a relay at all.
+
+Listening alone only ever worked against a publisher that volunteers its
+namespaces; a relay owes PUBLISH_NAMESPACE only to subscribers that sent
+SUBSCRIBE_NAMESPACE, so behind one the player waited forever. A **Namespace
+prefixes** field says which to ask for, which matters on a shared relay
+carrying many publishers.
+
+Namespaces also went out as a single Track Namespace Field, which matched a
+prefix never; that worked only because `mlmpub` sent the same single
+slash-bearing field. Pair this release with moqlivemock v0.15.0, whose
+namespaces carry an `mlm` publisher prefix.
+
 ### Added
 
 - **The player asks for namespaces instead of waiting to be told.** It only
@@ -470,7 +486,13 @@ Full [MOQ Transport draft-14][moqt-d14] compliance release.
 - Support for video and audio track selection
 - Real-time playback metrics (buffer levels, latency, playback rate)
 
-[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/Eyevinn/warp-player/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/Eyevinn/warp-player/compare/v0.13.1...v0.14.0
+[0.13.1]: https://github.com/Eyevinn/warp-player/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/Eyevinn/warp-player/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/Eyevinn/warp-player/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/Eyevinn/warp-player/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Eyevinn/warp-player/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Eyevinn/warp-player/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Eyevinn/warp-player/compare/v0.7.1...v0.8.0
