@@ -10,6 +10,7 @@ same file lives at `src/config.json` for the built-in defaults.
 {
   "defaultServerUrl": "https://moqlivemock.demo.osaas.io/moq",
   "fingerprintUrl": "",
+  "namespacePrefixes": "",
   "bufferProfiles": {
     "base": { "minimalBuffer": 200, "targetLatency": 300 },
     "rules": []
@@ -22,6 +23,13 @@ same file lives at `src/config.json` for the built-in defaults.
 - **defaultServerUrl**: The default MOQ server URL shown in the connection input field.
 - **fingerprintUrl**: Optional URL for fetching a self-signed certificate
   fingerprint (see [FINGERPRINT.md](FINGERPRINT.md)). Leave empty to disable.
+- **namespacePrefixes**: Which namespaces to ask the peer for, comma-separated
+  (e.g. `"mlm"` or `"cmsf, msf"`). Blank asks for every namespace the peer has,
+  which is what you want against a publisher or a dedicated relay; name the
+  prefixes when pointing at a shared relay carrying unrelated publishers. One
+  SUBSCRIBE_NAMESPACE is sent per prefix, so the prefixes must not overlap each
+  other -- a peer rejects an overlapping one with PREFIX_OVERLAP -- and a blank
+  prefix cannot be combined with any other, since it overlaps everything.
 - **bufferProfiles**: Buffer/latency defaults, resolved per render engine and
   browser (see below). Omit the whole object to use the built-in default.
 
@@ -62,3 +70,8 @@ default is used.
 
 1. After `npm run build`, edit `dist/config.json`.
 2. Reload the app; settings load on startup.
+
+`defaultServerUrl`, `fingerprintUrl` and `namespacePrefixes` can also be set per
+load as query parameters -- `?serverUrl=...`, `?fingerprintUrl=...`,
+`?namespacePrefixes=...` -- which win over both `config.json` and the values the
+browser remembered from the last session.

@@ -1,6 +1,7 @@
 {
   "defaultServerUrl": "https://localhost:4443/moq",
   "fingerprintUrl": "",
+  "namespacePrefixes": "",
   "bufferProfiles": {
     "base": { "minimalBuffer": 200, "targetLatency": 300 },
     "rules": []
