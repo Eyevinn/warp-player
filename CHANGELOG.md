@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The namespace-prefix examples named prefixes that match nothing. `cmsf, msf`
+  was written before `mlmpub` moved its namespaces under an `mlm` publisher
+  field, and a prefix is matched a field at a time, so `cmsf` no longer matches
+  `mlm/cmsf/clear` -- anyone copying the placeholder got an empty namespace
+  list. The examples are now `mlm` and `mlm/cmsf`.
+
 ### Changed
 
 - The MSF catalog `version` may now be either `"1"` or `"draft-01"`. Only
