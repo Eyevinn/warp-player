@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The MSF catalog `version` may now be either `"1"` or `"draft-01"`. Only
+  `"draft-01"` was accepted before, so a publisher that had followed the
+  draft's examples -- all fifteen of which use `"1"` -- had its catalog
+  rejected unparsed and nothing played. draft-ietf-moq-msf-01 is inconsistent
+  on this: the examples say `"1"`, Section 5.1.1's prose recommends the
+  `draft-XX` convention `mlmpub` follows. Both name the same format, and that
+  section still forbids parsing any version outside the accepted set.
+
 ## [0.15.0] - 2026-09-16
 
 The player asks which namespaces a peer has instead of waiting to be told, and

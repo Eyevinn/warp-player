@@ -9,18 +9,29 @@ import { ILogger, LoggerFactory } from "./logger";
 type CatalogCallback = (catalog: WarpCatalog) => void;
 
 /**
- * MSF catalog version this player understands (draft-ietf-moq-msf-01).
- * Per the spec a subscriber MUST NOT attempt to parse a catalog version it
- * does not understand, so catalogs advertising any other version are rejected.
+ * MSF catalog versions this player understands.
+ *
+ * Section 5.1.1 requires a subscriber not to parse a catalog version it does
+ * not understand, so anything outside this set is rejected.
+ *
+ * Two spellings are accepted because draft-ietf-moq-msf-01 contradicts itself
+ * about which to use. Its Section 5.1.1 prose recommends the `draft-XX`
+ * convention for Internet-Draft releases, and mlmpub follows it with
+ * `"draft-01"`; every one of the fifteen JSON examples in the same document
+ * instead shows `"1"`. Implementers copy the examples, so both forms are in
+ * the wild and neither is wrong. They name the same format.
  */
-export const MSF_SUPPORTED_VERSION = "draft-01";
+export const MSF_SUPPORTED_VERSIONS: readonly string[] = ["1", "draft-01"];
+
+/** The version this player names first when it has to name one. */
+export const MSF_SUPPORTED_VERSION = MSF_SUPPORTED_VERSIONS[0];
 
 /**
  * MSF catalog interface definition.
  * Conforms to draft-ietf-moq-msf-01.
  */
 export interface WarpCatalog {
-  /** MSF version. Required. A JSON string; must be "draft-01". */
+  /** MSF version. Required. A JSON string; see MSF_SUPPORTED_VERSIONS. */
   version: string;
   /** Wallclock time at which this catalog was generated, in ms since Unix epoch. */
   generatedAt?: number;
@@ -224,12 +235,12 @@ export class WarpCatalogManager {
         return;
       }
 
-      // Reject catalog versions we do not understand (draft-ietf-moq-msf-01
+      // Reject catalog versions we do not understand (draft-ietf-moq-msf
       // §5.1.1: a subscriber MUST NOT parse an unknown catalog version).
-      if (data.version !== MSF_SUPPORTED_VERSION) {
+      if (!MSF_SUPPORTED_VERSIONS.includes(data.version)) {
         this.logger.error(
           `Unsupported MSF catalog version "${data.version}"; ` +
-            `expected "${MSF_SUPPORTED_VERSION}"`,
+            `expected one of ${MSF_SUPPORTED_VERSIONS.map((v) => `"${v}"`).join(", ")}`,
         );
         return;
       }

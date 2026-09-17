@@ -1,6 +1,6 @@
 import {
   CTA608_ACCESSIBILITY_SCHEME,
-  MSF_SUPPORTED_VERSION,
+  MSF_SUPPORTED_VERSIONS,
   WarpCatalog,
   WarpCatalogManager,
   trackHasCta608,
@@ -35,9 +35,23 @@ describe("WarpCatalogManager draft-01 init data", () => {
     initDataList: [{ id: "init-video", type: "inline", data: "QUJD" }],
   };
 
-  it("parses the draft-01 string version", () => {
+  it("parses the version as a string this player supports", () => {
     expect(typeof catalog.version).toBe("string");
-    expect(catalog.version).toBe(MSF_SUPPORTED_VERSION);
+    expect(MSF_SUPPORTED_VERSIONS).toContain(catalog.version);
+  });
+
+  it("accepts both spellings of the supported version", () => {
+    // draft-ietf-moq-msf-01 shows "1" in all its JSON examples but its
+    // Section 5.1.1 prose recommends the draft-XX convention, which mlmpub
+    // follows. Both forms are in the wild, so both must parse.
+    expect(MSF_SUPPORTED_VERSIONS).toContain("1");
+    expect(MSF_SUPPORTED_VERSIONS).toContain("draft-01");
+
+    for (const version of ["1", "draft-01"]) {
+      const mgr = new WarpCatalogManager();
+      mgr.handleCatalogData({ ...catalog, version });
+      expect(mgr.getCatalog()).not.toBeNull();
+    }
   });
 
   it("accepts a draft-01 catalog", () => {
@@ -47,9 +61,13 @@ describe("WarpCatalogManager draft-01 init data", () => {
   });
 
   it("rejects a catalog with an unsupported version", () => {
-    const mgr = new WarpCatalogManager();
-    mgr.handleCatalogData({ ...catalog, version: "1" });
-    expect(mgr.getCatalog()).toBeNull();
+    // "1" used to stand in for "unsupported" here; it is supported now, so
+    // the rejection case needs a version this player really cannot read.
+    for (const version of ["2", "draft-00", "draft-02", ""]) {
+      const mgr = new WarpCatalogManager();
+      mgr.handleCatalogData({ ...catalog, version });
+      expect(mgr.getCatalog()).toBeNull();
+    }
   });
 
   it("resolves a track initRef to the shared init data entry", () => {
