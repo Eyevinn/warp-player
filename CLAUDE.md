@@ -314,7 +314,13 @@ The codebase is organized into several key modules:
   points at an entry by `initRef` (draft-ietf-moq-msf-01). A CMAF track and
   its LOCMAF counterpart share one entry. Resolve via
   `WarpCatalogManager.getInitData(track)`.
-- The catalog `version` is a JSON string (`"1"`) in draft-01.
+- The catalog `version` is a JSON string. Both `"1"` and `"draft-01"` are
+  accepted; see `MSF_SUPPORTED_VERSIONS` in `src/warpcatalog.ts`. The draft
+  disagrees with itself here -- all fifteen JSON examples in
+  draft-ietf-moq-msf-01 use `"1"`, while its Section 5.1.1 prose recommends
+  the `draft-XX` convention that mlmpub emits -- so both forms occur in
+  practice. That same section forbids parsing a version the subscriber does
+  not understand, so anything else is rejected.
 - Tracks that omit `namespace` inherit it from the announce namespace of
   the catalog track they were delivered on
 - Delta updates are an ordered `deltaUpdate` array of `{op, tracks}`

@@ -56,7 +56,10 @@ packagings:
 
 Catalogs follow **MSF [draft-ietf-moq-msf-01]** with **CMSF
 [draft-ietf-moq-cmsf-01]** for CMAF packaging. The catalog `version` string must
-be `"draft-01"`. Initialization data lives in a catalog-level `initDataList`,
+be `"1"` or `"draft-01"`. Both are accepted, because
+[draft-ietf-moq-msf-01] is inconsistent: its examples all use `"1"`, while
+Section 5.1.1 recommends the `draft-XX` convention that `mlmpub` follows. Any
+other value is rejected unparsed, as that same section requires. Initialization data lives in a catalog-level `initDataList`,
 and each track references an entry by `initRef` — so a CMAF track and its LOCMAF
 counterpart share one init-data entry. Content protection (Widevine, PlayReady,
 FairPlay, and ClearKey) is signaled through the CMSF ContentProtection catalog
