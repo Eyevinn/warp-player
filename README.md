@@ -340,7 +340,7 @@ separated — blank asks for every namespace the peer has. Blank is right agains
 a single publisher or a dedicated relay. Name the prefixes when pointing at a
 shared relay carrying unrelated publishers: `mlm` gets everything
 [moqlivemock](https://github.com/Eyevinn/moqlivemock)'s `mlmpub` serves, and
-`cmsf, msf` would select by packaging.
+`mlm/cmsf` narrows that to its CMSF namespaces alone.
 
 A Track Namespace is a tuple of fields, and a relay matches a prefix one field
 at a time, so `mlm` matches `mlm/cmsf/clear` but `ml` matches nothing. One

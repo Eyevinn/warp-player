@@ -24,7 +24,7 @@ same file lives at `src/config.json` for the built-in defaults.
 - **fingerprintUrl**: Optional URL for fetching a self-signed certificate
   fingerprint (see [FINGERPRINT.md](FINGERPRINT.md)). Leave empty to disable.
 - **namespacePrefixes**: Which namespaces to ask the peer for, comma-separated
-  (e.g. `"mlm"` or `"cmsf, msf"`). Blank asks for every namespace the peer has,
+  (e.g. `"mlm"` or `"mlm/cmsf"`). Blank asks for every namespace the peer has,
   which is what you want against a publisher or a dedicated relay; name the
   prefixes when pointing at a shared relay carrying unrelated publishers. One
   SUBSCRIBE_NAMESPACE is sent per prefix, so the prefixes must not overlap each
