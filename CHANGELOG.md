@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-29
+
+The player shows the catalog's subtitle tracks, CMAF and LOCMAF, in step with
+the picture, including the experimental paint-model formats `stpc` and `wvtc`.
+Pair this release with moqlivemock v0.16.0, which publishes the paint-model
+tracks and a `_locmaf` variant of every subtitle track.
+
 ### Added
 
 - Text subtitles from the catalog's subtitle tracks, CMAF and LOCMAF: TTML
@@ -17,25 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Measure all subtitle tracks side by side**: per-track bitrate and parse
   cost in a table.
 
-### Fixed
-
-- The namespace-prefix examples named prefixes that match nothing. `cmsf, msf`
-  was written before `mlmpub` moved its namespaces under an `mlm` publisher
-  field, and a prefix is matched a field at a time, so `cmsf` no longer matches
-  `mlm/cmsf/clear` -- anyone copying the placeholder got an empty namespace
-  list. The examples are now `mlm` and `mlm/cmsf`.
-
 ### Changed
 
 - The **CC** button is a shortcut for the Subtitles / CC selector: on turns
   the text off, off brings back the last choice.
-- The MSF catalog `version` may now be either `"1"` or `"draft-01"`. Only
-  `"draft-01"` was accepted before, so a publisher that had followed the
-  draft's examples -- all fifteen of which use `"1"` -- had its catalog
-  rejected unparsed and nothing played. draft-ietf-moq-msf-01 is inconsistent
-  on this: the examples say `"1"`, Section 5.1.1's prose recommends the
-  `draft-XX` convention `mlmpub` follows. Both name the same format, and that
-  section still forbids parsing any version outside the accepted set.
+- The MSF catalog `version` may be `"1"` as well as `"draft-01"`, so a catalog
+  that follows the draft's examples is no longer rejected.
+
+### Fixed
+
+- The namespace-prefix examples are now `mlm` and `mlm/cmsf`; the old
+  `cmsf, msf` matched no `mlmpub` namespace.
 
 ## [0.15.0] - 2026-09-16
 
@@ -516,7 +515,8 @@ Full [MOQ Transport draft-14][moqt-d14] compliance release.
 - Support for video and audio track selection
 - Real-time playback metrics (buffer levels, latency, playback rate)
 
-[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/Eyevinn/warp-player/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Eyevinn/warp-player/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Eyevinn/warp-player/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/Eyevinn/warp-player/compare/v0.13.0...v0.13.1
