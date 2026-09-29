@@ -3,6 +3,7 @@ import {
   isPlayreadySupported,
   isFairplaySupported,
 } from "@eyevinn/is-drm-supported";
+import imscHtml from "imsc/src/main/js/html.js";
 
 import { MediaBuffer, MediaSegmentBuffer, MediaTrackInfo } from "./buffer";
 import { extractCta608FromFragment } from "./buffer/cta608Fragment";
@@ -22,12 +23,25 @@ import {
   isLocmafTrack,
 } from "./locmaf/locmaf";
 import { ILogger, LoggerFactory } from "./logger";
-import { StateChannel } from "./overlay";
+import { CueChannel, StateChannel } from "./overlay";
 import { DomOverlayLayer } from "./overlay/overlayLayer";
 import { Cta608Renderer } from "./overlay/renderers/cta608";
+import { SubtitleRenderer } from "./overlay/renderers/subtitles";
 import { EngineChoice, IPlaybackPipeline, resolveEngine } from "./pipeline";
 import { MsePipeline } from "./pipeline/msePipeline";
 import { WebCodecsLocPipeline } from "./pipeline/webcodecsLocPipeline";
+import { SubtitleController, subtitleTrackKey } from "./subtitles/controller";
+import { renderSubtitleStats } from "./subtitles/statsView";
+import {
+  TEXT_CC1,
+  TEXT_OFF,
+  carryTextSelection,
+  ccButtonState,
+  ccToggleTarget,
+  isShowable,
+  type TextChoices,
+} from "./subtitles/textSelection";
+import type { SubtitleCue } from "./subtitles/types";
 import { Client, DraftVersion } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
 import { FilterType } from "./transport/wire18";
@@ -39,6 +53,18 @@ import {
   DRMSystem,
   trackHasCta608,
 } from "./warpcatalog";
+
+/** The Subtitles / CC selector's name for the in-band captions. */
+const CC1_LABEL = "CC1 (in-band CTA-608)";
+
+/** Why CC1 cannot be shown, by caption availability. */
+const CC1_UNAVAILABLE = {
+  "no-track": "no video track selected",
+  "no-descriptor": "this video track does not advertise CTA-608 captions",
+  "unsupported-codec":
+    "the player cannot read CTA-608 from this codec (AV1 carries it in a " +
+    "metadata OBU, not an SEI NAL unit)",
+} as const;
 
 /**
  * Player class for handling MOQ transport connections, MSF/CMSF track subscriptions, and UI updates.
@@ -167,12 +193,27 @@ export class Player {
   private overlay: DomOverlayLayer | null = null;
   /** CTA-608 channel on the overlay. Caption sources push snapshots here. */
   private cc608Channel: StateChannel<Cc608Snapshot> | null = null;
+  /** Text subtitle channel on the overlay, fed by the displayed subtitle track. */
+  private subtitleChannel: CueChannel<SubtitleCue> | null = null;
+  /** Whether the caption gate is open (captions decoded and painted). */
+  private captionsActive = false;
   /**
-   * The user's captions on/off intent. Off by default (#165) and deliberately
-   * independent of availability, so it survives a switch through an
-   * uncaptioned track and is restored on the way back.
+   * Subtitle subscriptions: the displayed track, plus every subtitle track
+   * of the catalog when "measure all" is on (see src/subtitles).
    */
-  private captionsEnabled = false;
+  private subtitles: SubtitleController;
+  /** Refreshes the subtitle comparison table while subtitle tracks are received. */
+  private subtitleStatsTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * The text the user chose in the Subtitles / CC selector: TEXT_OFF,
+   * TEXT_CC1 for the in-band CTA-608 captions, or a subtitle track key. One
+   * at a time. Off by default (#165) and, for CC1, deliberately independent of
+   * availability, so it survives a switch through an uncaptioned video track
+   * and is restored on the way back. See src/subtitles/textSelection.ts.
+   */
+  private textSelection: string = TEXT_OFF;
+  /** What the CC button turns back on: the last non-off selection. */
+  private lastTextSelection: string = TEXT_CC1;
   /** Notified whenever caption availability changes, so the CC button can follow. */
   private captionAvailabilityListener: ((available: boolean) => void) | null =
     null;
@@ -311,6 +352,31 @@ export class Player {
       this.processWarpCatalog(catalog),
     );
 
+    this.subtitles = new SubtitleController({
+      subscribe: (track, onObject) => {
+        if (!this.client) {
+          return Promise.reject(new Error("not connected"));
+        }
+        return this.client.subscribeTrack(
+          track.namespace || "",
+          track.name,
+          onObject,
+        );
+      },
+      unsubscribe: async (alias) => {
+        if (this.client && !this.isDisconnecting) {
+          await this.client.unsubscribeTrack(alias);
+        }
+      },
+      initSegment: (track) => {
+        const initData = this.catalogManager.getInitData(track);
+        return initData
+          ? new Uint8Array(this.base64ToArrayBuffer(initData))
+          : null;
+      },
+      warn: (msg) => this.logger.warn(msg),
+    });
+
     // Timed-text overlay. Created up front and kept for the session; the
     // surface and clock are (re)bound whenever a pipeline starts.
     this.setupOverlay();
@@ -345,6 +411,15 @@ export class Player {
       return;
     }
     this.overlay = new DomOverlayLayer(container);
+    // Subtitles first, so that CTA-608 captions paint above them.
+    this.subtitleChannel = this.overlay.attach<SubtitleCue>(
+      "subtitles",
+      new SubtitleRenderer((isd, element, height, width) => {
+        imscHtml.render(isd, element, null, height, width, false, null);
+      }),
+      "cues",
+    );
+    this.subtitles.setChannel(this.subtitleChannel);
     this.cc608Channel = this.overlay.attach<Cc608Snapshot>(
       "cc608",
       new Cta608Renderer(),
@@ -433,16 +508,42 @@ export class Player {
    */
   public getCaptionAvailability():
     "available" | "no-track" | "no-descriptor" | "unsupported-codec" {
-    if (!this.videoTrack) {
+    const track = this.captionVideoTrack();
+    if (!track) {
       return "no-track";
     }
-    if (!trackHasCta608(this.videoTrack)) {
+    if (!trackHasCta608(track)) {
       return "no-descriptor";
     }
-    if (!codecCanCarryCta608(this.videoTrack.codec)) {
+    if (!codecCanCarryCta608(track.codec)) {
       return "unsupported-codec";
     }
     return "available";
+  }
+
+  /**
+   * The video track captions are judged by: the one playing, or before
+   * playback the one selected, so the Subtitles / CC selector can say
+   * whether CC1 will show before Start is pressed.
+   */
+  private captionVideoTrack(): WarpTrack | null {
+    if (this.videoTrack) {
+      return this.videoTrack;
+    }
+    const select = document.getElementById(
+      "video-tracks-select",
+    ) as HTMLSelectElement | null;
+    const option = select?.options[select.selectedIndex];
+    if (!option) {
+      return null;
+    }
+    return (
+      this.getTrackFromCatalog(
+        option.dataset.namespace || "",
+        option.dataset.trackName || "",
+        "video",
+      ) ?? null
+    );
   }
 
   /**
@@ -458,18 +559,49 @@ export class Player {
   }
 
   /**
-   * The user's captions on/off intent. Remembered across track and namespace
-   * switches, so returning to a captioned track restores the user's choice
-   * rather than silently dropping it.
+   * Choose CC1 (true), or turn it off (false) if it is what is chosen.
+   * Remembered across track and namespace switches, so returning to a
+   * captioned track restores the user's choice rather than silently dropping
+   * it. The Subtitles / CC selector is the general form: selectText().
    */
   public setCaptionsEnabled(enabled: boolean): void {
-    this.captionsEnabled = enabled;
-    this.applyCaptionState();
+    if (enabled) {
+      this.selectText(TEXT_CC1);
+    } else if (this.textSelection === TEXT_CC1) {
+      this.selectText(TEXT_OFF);
+    }
   }
 
-  /** The user's captions on/off intent (not whether captions are available). */
+  /** Whether CC1 is chosen (not whether captions are available). */
   public getCaptionsEnabled(): boolean {
-    return this.captionsEnabled;
+    return this.textSelection === TEXT_CC1;
+  }
+
+  /**
+   * Show `selection` — TEXT_OFF, TEXT_CC1 or a subtitle track key — and
+   * nothing else. Applies at once while playing, and at Start otherwise.
+   */
+  private selectText(selection: string): void {
+    this.textSelection = selection;
+    if (selection !== TEXT_OFF) {
+      this.lastTextSelection = selection;
+    }
+    this.applyCaptionState();
+    void this.applySubtitleSelection();
+  }
+
+  /** What the Subtitles / CC selector can show now. */
+  private textChoices(): TextChoices {
+    return {
+      cc1Available: this.areCaptionsAvailable(),
+      subtitleKeys: this.catalogSubtitleTracks().map(subtitleTrackKey),
+    };
+  }
+
+  private catalogSubtitleTracks(): WarpTrack[] {
+    return (this.catalogManager.getCatalog()?.tracks ?? []).filter(
+      (track) => track.role === "subtitle",
+    );
   }
 
   /**
@@ -490,15 +622,20 @@ export class Player {
   private applyCaptionState(): void {
     const available = this.areCaptionsAvailable();
     const gate = resolveCaptionGate({
-      enabled: this.captionsEnabled,
+      enabled: this.textSelection === TEXT_CC1,
       available,
       engine: this.currentPipeline?.engine ?? null,
     });
     const sink = gate.active ? this.getCc608Sink() : null;
 
-    // The overlay keeps its timeline while hidden; setEnabled only stops
-    // resolution and painting.
-    this.overlay?.setEnabled(gate.active);
+    // The overlay also carries subtitles, so it can be showing while captions
+    // are off. A closed gate stops caption extraction, so drop the caption
+    // timeline too: otherwise its last screen would stay up under subtitles.
+    this.captionsActive = gate.active;
+    if (!gate.active) {
+      this.cc608Channel?.clear();
+    }
+    this.updateOverlayEnabled();
 
     // Each extractor is fed only by its own engine's path, so the sink goes to
     // the one that is playing and is cleared everywhere else. A null sink is
@@ -510,6 +647,17 @@ export class Player {
     this.webcodecsPipeline?.setCc608Enabled(gate.active);
 
     this.captionAvailabilityListener?.(available);
+    this.refreshTextControls();
+  }
+
+  /**
+   * Show the overlay while captions or subtitles are on. The overlay keeps
+   * its timelines while hidden; setEnabled only stops resolution and painting.
+   */
+  private updateOverlayEnabled(): void {
+    this.overlay?.setEnabled(
+      this.captionsActive || this.subtitles.isDisplaying(),
+    );
   }
 
   /**
@@ -734,6 +882,10 @@ export class Player {
       this.unregisterPublishNamespaceCallback();
       this.unregisterPublishNamespaceCallback = null;
     }
+
+    // The connection is going; forget the subtitle subscriptions with it.
+    void this.subtitles.stop();
+    this.stopSubtitleStats();
 
     // Unsubscribe from all tracks
     this.trackSubscriptions.forEach((trackAlias, trackName) => {
@@ -1037,6 +1189,9 @@ export class Player {
 
     // Captions from the previous namespace must not survive the switch — a
     // stale screen showing an old timestamp is worse than no caption at all.
+    // Nor may its subtitle subscriptions.
+    void this.subtitles.stop().then(() => this.updateOverlayEnabled());
+    this.stopSubtitleStats();
     this.overlay?.reset();
 
     // Hide start/stop buttons until new tracks are loaded
@@ -1324,6 +1479,19 @@ export class Player {
     // Display tracks in the UI
     this.displayTracks("video-tracks", `Video Tracks${drmLabel}`, videoTracks);
     this.displayTracks("audio-tracks", `Audio Tracks${drmLabel}`, audioTracks);
+    // Carry the text choice over to the new catalog: CC1 as it is, a subtitle
+    // track by key or else by name, and off when it is gone.
+    const subtitleTracks = catalog.tracks.filter(
+      (track) => track.role === "subtitle",
+    );
+    const keyed = subtitleTracks.map((track) => ({
+      key: subtitleTrackKey(track),
+      name: track.name,
+    }));
+    this.textSelection = carryTextSelection(this.textSelection, keyed);
+    this.lastTextSelection =
+      carryTextSelection(this.lastTextSelection, keyed) || TEXT_CC1;
+    this.displayTextTracks(subtitleTracks, videoTracks);
 
     // Update catalog JSON view
     const catalogSection = document.getElementById("catalog-section");
@@ -1632,6 +1800,160 @@ export class Player {
   }
 
   /**
+   * The Subtitles / CC selector: one choice of Off, the in-band CTA-608 CC1
+   * captions (listed when a video track advertises them), or a subtitle
+   * track, since captions and subtitles share the picture. Below it, a
+   * "measure all" switch that also receives every subtitle track for its
+   * counts, and the comparison table those counts fill. Changes apply at once
+   * while playing, and at the next Start otherwise.
+   */
+  private displayTextTracks(
+    subtitleTracks: WarpTrack[],
+    videoTracks: WarpTrack[],
+  ): void {
+    const hasCc1 = videoTracks.some((track) => trackHasCta608(track));
+    if (!this.tracksContainerEl || (subtitleTracks.length === 0 && !hasCc1)) {
+      this.refreshTextControls();
+      return;
+    }
+    const section = document.createElement("div");
+    section.className = "tracks-section";
+    const titleEl = document.createElement("h3");
+    titleEl.textContent = "Subtitles / CC";
+    section.appendChild(titleEl);
+
+    const selectorContainer = document.createElement("div");
+    selectorContainer.className = "selector-container";
+    const select = document.createElement("select");
+    select.id = "text-tracks-select";
+    select.className = "track-select";
+    const off = document.createElement("option");
+    off.value = TEXT_OFF;
+    off.textContent = "Off";
+    select.appendChild(off);
+    if (hasCc1) {
+      const cc1 = document.createElement("option");
+      cc1.value = TEXT_CC1;
+      cc1.textContent = CC1_LABEL;
+      select.appendChild(cc1);
+    }
+    for (const track of subtitleTracks) {
+      const option = document.createElement("option");
+      option.value = subtitleTrackKey(track);
+      option.textContent = `${track.name} (${track.codec ?? "?"}, ${track.packaging ?? "cmaf"})`;
+      const details = [`Codec: ${track.codec ?? "?"}`];
+      if (track.language) {
+        details.push(`Language: ${track.language}`);
+      }
+      if (track.bitrate) {
+        details.push(`Bitrate: ${this.formatBitrate(track.bitrate)}`);
+      }
+      option.title = details.join(" | ");
+      select.appendChild(option);
+    }
+    select.addEventListener("change", () => this.selectText(select.value));
+    selectorContainer.appendChild(select);
+
+    if (subtitleTracks.length > 0) {
+      const measureLabel = document.createElement("label");
+      measureLabel.className = "subtitle-measure";
+      const measure = document.createElement("input");
+      measure.type = "checkbox";
+      measure.id = "subtitle-measure-all";
+      measure.addEventListener(
+        "change",
+        () => void this.applySubtitleSelection(),
+      );
+      measureLabel.appendChild(measure);
+      measureLabel.appendChild(
+        document.createTextNode(" Measure all subtitle tracks side by side"),
+      );
+      selectorContainer.appendChild(measureLabel);
+    }
+    section.appendChild(selectorContainer);
+
+    const stats = document.createElement("div");
+    stats.id = "subtitle-stats";
+    stats.className = "subtitle-stats-container";
+    section.appendChild(stats);
+
+    this.tracksContainerEl.appendChild(section);
+
+    // Before playback, whether CC1 can show depends on the selected video track.
+    document
+      .getElementById("video-tracks-select")
+      ?.addEventListener("change", () => this.refreshTextControls());
+    this.refreshTextControls();
+  }
+
+  /** The subtitle track to display and the ones to measure. */
+  private selectedSubtitleTracks(): {
+    displayed: WarpTrack | null;
+    measured: WarpTrack[];
+  } {
+    const measureAll =
+      (
+        document.getElementById(
+          "subtitle-measure-all",
+        ) as HTMLInputElement | null
+      )?.checked ?? false;
+    const all = this.catalogSubtitleTracks();
+    const displayed =
+      all.find((track) => subtitleTrackKey(track) === this.textSelection) ??
+      null;
+    return { displayed, measured: measureAll ? all : [] };
+  }
+
+  /**
+   * Bring the subtitle subscriptions in line with the UI. Does nothing
+   * before playback has started: Start applies the selection itself.
+   */
+  private async applySubtitleSelection(): Promise<void> {
+    if (!this.currentPipeline) {
+      return;
+    }
+    const { displayed, measured } = this.selectedSubtitleTracks();
+    if (displayed) {
+      this.logger.info(
+        `Displaying subtitle track ${subtitleTrackKey(displayed)}` +
+          (measured.length ? ` and measuring ${measured.length} tracks` : ""),
+      );
+    }
+    await this.subtitles.update(displayed, measured);
+    this.updateOverlayEnabled();
+    if (displayed || measured.length > 0) {
+      this.startSubtitleStats();
+    } else {
+      this.stopSubtitleStats();
+    }
+    this.refreshSubtitleStats();
+  }
+
+  private startSubtitleStats(): void {
+    if (this.subtitleStatsTimer === null) {
+      this.subtitleStatsTimer = setInterval(
+        () => this.refreshSubtitleStats(),
+        1000,
+      );
+    }
+  }
+
+  private stopSubtitleStats(): void {
+    if (this.subtitleStatsTimer !== null) {
+      clearInterval(this.subtitleStatsTimer);
+      this.subtitleStatsTimer = null;
+    }
+  }
+
+  private refreshSubtitleStats(): void {
+    const container = document.getElementById("subtitle-stats");
+    const rows = this.subtitles.getRows();
+    if (container && rows.length > 0) {
+      renderSubtitleStats(container, rows);
+    }
+  }
+
+  /**
    * Add a Stop button to the tracks container
    */
   private addStopButton(): void {
@@ -1676,71 +1998,114 @@ export class Player {
    * path hides the <video> entirely.
    */
   /**
-   * Wire the CC toggle. The button is disabled unless the selected video
-   * track advertises the CTA-608 accessibility descriptor, and follows
-   * availability automatically as tracks and namespaces change.
-   *
-   * Note the button reflects *effective* state (intent AND availability)
-   * while `captionsEnabled` stores intent alone — so a detour through an
-   * uncaptioned track shows "CC Off" and disabled, then comes back on when a
-   * captioned track is selected again.
+   * Wire the CC button: a shortcut for the Subtitles / CC selector. On, it
+   * turns the text off; off, it brings back the last choice (or CC1, or the
+   * first subtitle track). Its look follows the selector through
+   * refreshTextControls().
    */
   private wireCaptionButton(): void {
     const ccBtn = document.getElementById("ccBtn") as HTMLButtonElement | null;
     if (!ccBtn) {
       return;
     }
-
-    const refresh = (available: boolean) => {
-      const on = available && this.getCaptionsEnabled();
-      ccBtn.disabled = !available;
-      ccBtn.setAttribute("aria-pressed", String(on));
-      // A disabled button must say *why*, or an unsupported combination looks
-      // identical to a broken player (#166).
-      const REASONS = {
-        "no-track": "Start playback to enable closed captions",
-        "no-descriptor": "This track does not advertise CTA-608 captions",
-        "unsupported-codec":
-          "This track advertises CTA-608, but the player cannot read captions " +
-          "from this codec (AV1 carries them in a metadata OBU, not an SEI NAL unit)",
-      } as const;
-      const availability = this.getCaptionAvailability();
-      ccBtn.title = available
-        ? on
-          ? "Turn closed captions off"
-          : "Turn closed captions on"
-        : (REASONS[availability as keyof typeof REASONS] ??
-          "Closed captions unavailable on this track");
-      // Dimming alone is too quiet: a greyed CC button is the normal state on
-      // most tracks, so it reads as "nothing here" rather than "this track
-      // cannot be captioned" — the confusion AV1 renditions caused, where
-      // playback works and only captions are impossible. Strike the button
-      // through so the state is legible without hovering for the reason.
-      // "no-track" is excluded: before playback starts nothing is unavailable
-      // yet, it is simply not applicable.
-      ccBtn.classList.toggle(
-        "btn-unavailable",
-        !available && availability !== "no-track",
-      );
-      const icon = document.createElement("span");
-      icon.setAttribute("aria-hidden", "true");
-      icon.textContent = "💬";
-      ccBtn.replaceChildren(
-        icon,
-        document.createTextNode(on ? " CC On" : " CC Off"),
-      );
-    };
-
-    // Registering also fires once with the current value.
-    this.onCaptionAvailabilityChange(refresh);
-
     ccBtn.onclick = () => {
       if (ccBtn.disabled) {
         return;
       }
-      // setCaptionsEnabled -> applyCaptionState -> the listener above.
-      this.setCaptionsEnabled(!this.getCaptionsEnabled());
+      const choices = this.textChoices();
+      this.selectText(
+        isShowable(this.textSelection, choices)
+          ? TEXT_OFF
+          : ccToggleTarget(this.lastTextSelection, choices),
+      );
     };
+    this.refreshTextControls();
+  }
+
+  /**
+   * Bring the Subtitles / CC selector and the CC button in line with the
+   * selection and with what can be shown. Called on every selection change,
+   * caption-availability change and video track change.
+   *
+   * The button reflects *effective* state (selection AND availability) while
+   * the selection stores intent alone — so choosing CC1 and then a video
+   * track without captions shows "CC Off", with CC1 greyed out in the
+   * selector, and captions come back when a captioned track is chosen again.
+   */
+  private refreshTextControls(): void {
+    const choices = this.textChoices();
+    const availability = this.getCaptionAvailability();
+    // A disabled control must say *why*, or an unsupported combination looks
+    // identical to a broken player (#166).
+    const reason =
+      CC1_UNAVAILABLE[availability as keyof typeof CC1_UNAVAILABLE];
+
+    const select = document.getElementById(
+      "text-tracks-select",
+    ) as HTMLSelectElement | null;
+    if (select) {
+      const cc1 = Array.from(select.options).find((o) => o.value === TEXT_CC1);
+      if (cc1) {
+        cc1.disabled = !choices.cc1Available;
+        cc1.textContent = choices.cc1Available
+          ? CC1_LABEL
+          : `${CC1_LABEL} — ${reason ?? "unavailable"}`;
+        cc1.title = choices.cc1Available ? "" : (reason ?? "");
+      }
+      // A choice this catalog cannot offer at all shows as Off; the intent is
+      // kept for the next catalog.
+      const listed = Array.from(select.options).some(
+        (o) => o.value === this.textSelection,
+      );
+      select.value = listed ? this.textSelection : TEXT_OFF;
+    }
+
+    const ccBtn = document.getElementById("ccBtn") as HTMLButtonElement | null;
+    if (!ccBtn) {
+      return;
+    }
+    const state = ccButtonState(this.textSelection, choices);
+    ccBtn.disabled = state.disabled;
+    ccBtn.setAttribute("aria-pressed", String(state.on));
+    if (state.disabled) {
+      ccBtn.title =
+        availability === "no-track"
+          ? "No captions or subtitles to show"
+          : `No subtitle tracks, and ${reason ?? "no CTA-608 captions"}`;
+    } else if (state.on) {
+      ccBtn.title = `Turn ${this.textLabel(this.textSelection)} off`;
+    } else {
+      ccBtn.title = `Show ${this.textLabel(
+        ccToggleTarget(this.lastTextSelection, choices),
+      )}`;
+    }
+    // Dimming alone is too quiet: a greyed CC button is the normal state on
+    // most tracks, so it reads as "nothing here" rather than "this track
+    // cannot be captioned" — the confusion AV1 renditions caused, where
+    // playback works and only captions are impossible. Strike the button
+    // through so the state is legible without hovering for the reason.
+    ccBtn.classList.toggle(
+      "btn-unavailable",
+      state.disabled && availability !== "no-track",
+    );
+    const icon = document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "💬";
+    ccBtn.replaceChildren(
+      icon,
+      document.createTextNode(state.on ? " CC On" : " CC Off"),
+    );
+  }
+
+  /** A selection as the CC button's tooltip names it. */
+  private textLabel(selection: string): string {
+    if (selection === TEXT_CC1) {
+      return "CC1 captions";
+    }
+    const track = this.catalogSubtitleTracks().find(
+      (t) => subtitleTrackKey(t) === selection,
+    );
+    return track ? `subtitles ${track.name}` : "subtitles";
   }
 
   private wireMuteButton(): void {
@@ -1798,6 +2163,12 @@ export class Player {
 
     // Stop synchronized playback first
     this.stopSynchronizedPlayback();
+
+    // Subtitles: leave the last figures in the table, then unsubscribe.
+    this.refreshSubtitleStats();
+    this.stopSubtitleStats();
+    await this.subtitles.stop();
+    this.updateOverlayEnabled();
 
     // Unsubscribe from all active track subscriptions
     if (this.client && this.trackSubscriptions.size > 0) {
@@ -1875,6 +2246,7 @@ export class Player {
 
     // Reset state
     this.resetPlaybackState();
+    this.refreshTextControls();
 
     this.logger.info("Playback stopped");
   }
@@ -3103,6 +3475,7 @@ export class Player {
       const locAudio =
         audioTrack && audioTrack.packaging === "loc" ? audioTrack : null;
       await this.setupLocPlayback(videoTrack, locAudio);
+      await this.applySubtitleSelection();
       return;
     }
 
@@ -3113,6 +3486,7 @@ export class Player {
     if (videoTrack) {
       this.setupVideoPlayback(videoTrack);
     }
+    await this.applySubtitleSelection();
   }
 
   /**

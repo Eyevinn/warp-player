@@ -528,6 +528,41 @@
         white-space: nowrap;
       }
 
+      .subtitle-measure {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        white-space: nowrap;
+      }
+
+      .subtitle-stats-container {
+        overflow-x: auto;
+        margin-top: 0.5rem;
+      }
+
+      table.subtitle-stats {
+        border-collapse: collapse;
+        font-size: 0.75rem;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-secondary);
+      }
+
+      table.subtitle-stats th,
+      table.subtitle-stats td {
+        padding: 0.2rem 0.6rem;
+        text-align: right;
+        white-space: nowrap;
+        border-bottom: 1px solid var(--border-color);
+      }
+
+      table.subtitle-stats th:nth-child(-n + 3),
+      table.subtitle-stats td:nth-child(-n + 3) {
+        text-align: left;
+      }
+
+      table.subtitle-stats tr.displayed td {
+        color: var(--text-primary);
+      }
+
       /* Logging Section */
       .logging-section {
         background-color: var(--bg-card);

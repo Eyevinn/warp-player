@@ -35,6 +35,12 @@ export default (env, argv) => {
       extensionAlias: {
         ".js": [".js", ".ts"],
       },
+      // Node core modules sax (imscJS's XML parser) asks for. Only its unused
+      // SAXStream needs them; see src/shims/stream.ts.
+      fallback: {
+        stream: path.resolve(__dirname, "src/shims/stream.ts"),
+        string_decoder: false,
+      },
     },
     output: {
       filename: isProduction ? "[name].[contenthash].js" : "bundle.js",

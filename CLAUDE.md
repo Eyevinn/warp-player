@@ -106,6 +106,9 @@ warp-player/
 │   │   ├── locmaf.ts     # Version-gating wrapper used by player.ts
 │   │   ├── vi64.ts       # Re-export of transport/vi64 (the canonical codec)
 │   │   └── v03/          # v0.3 codec: decoder, canonical reconstruction
+│   ├── overlay/          # Timed-text overlay seam and its renderers
+│   ├── subtitles/        # Text subtitle tracks: CMAF/LOCMAF samples, TTML
+│   │                     #   (imscJS), WebVTT, paint-model receiver, stats
 │   ├── pipeline/         # Pluggable render pipelines
 │   │   ├── index.ts                # IPlaybackPipeline + capability matrix
 │   │   ├── msePipeline.ts          # MSE/CMAF pipeline (with optional EME)
@@ -393,6 +396,36 @@ directly with WebCodecs:
 - An "Engine legend" overlay on the player surface shows the active
   namespace, render engine, DRM system, and selected video / audio
   track names while playback is active.
+
+### Text Subtitles
+
+- Subtitle tracks (`role: "subtitle"`) never go to MSE. `src/subtitles/`
+  reads the samples of each object itself — CMAF chunks directly, LOCMAF
+  objects through the v0.3 decoder's effective values — and feeds cues to a
+  "cues" channel of the overlay seam, rendered by
+  `src/overlay/renderers/subtitles.ts`.
+- TTML goes through imscJS (npm `imsc`, as in dash.js): `fromXML` +
+  `generateISD` per document, `renderHTML` to paint. Import its modules one
+  by one (`imsc/src/main/js/doc.js`, `isd.js`, `html.js`): `html.js` reads
+  `window` when it loads, so only `player.ts` may import it, and the tests
+  run in node. sax, inside imscJS, asks for Node's `stream` module; the
+  webpack config resolves it to `src/shims/stream.ts`.
+- The paint-model formats `stpc` and `wvtc`
+  (github.com/Eyevinn/paint-model-subtitles) are gated on the `stsd` sample
+  entry, never the codecs string. `ttmn`/`vttn` are whole-sample 8-byte
+  boxes meaning "no change"; `ttmb` carries a `<body>` to splice into the
+  group's first document. Dependent samples never cross a MoQ group.
+- One text choice at a time: the Subtitles / CC selector holds Off, CC1 (the
+  in-band CTA-608 captions, listed when a video track advertises them) and the
+  subtitle tracks, and the CC button is a shortcut for it. The rules (what
+  the button turns on, carrying a choice across catalogs) are pure functions
+  in `src/subtitles/textSelection.ts`; `Player.textSelection` is the intent,
+  and CC1 availability is judged by the playing video track, or before
+  playback by the selected one.
+- Cue payloads are interned by content, so a cue restated in every 40 ms
+  chunk is one object and the overlay paints it once.
+- `test/media-files/subtitles/` holds real `mlmpub` output for every format
+  and packaging; see its README.
 
 ### Mute Toggle
 
