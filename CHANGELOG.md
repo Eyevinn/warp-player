@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Text subtitles from the catalog's subtitle tracks, CMAF and LOCMAF: TTML
+  laid out by imscJS (as in dash.js), WebVTT by the player's own renderer.
+- The experimental paint-model subtitle formats `stpc` and `wvtc`, selected by
+  the sample entry of the init segment.
+- A **Subtitles / CC** selector: Off, CC1 or one subtitle track at a time.
+- **Measure all subtitle tracks side by side**: per-track bitrate and parse
+  cost in a table.
+
 ### Fixed
 
 - The namespace-prefix examples named prefixes that match nothing. `cmsf, msf`
@@ -17,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The **CC** button is a shortcut for the Subtitles / CC selector: on turns
+  the text off, off brings back the last choice.
 - The MSF catalog `version` may now be either `"1"` or `"draft-01"`. Only
   `"draft-01"` was accepted before, so a publisher that had followed the
   draft's examples -- all fifteen of which use `"1"` -- had its catalog

@@ -107,7 +107,15 @@ warp-player/
 │   │   └── gate.ts       # Where the caption sink goes, and whether to extract
 │   ├── overlay/          # Timed-text / graphics overlay seam
 │   │   ├── overlayLayer.ts        # Snapshot timeline, clock, geometry
-│   │   └── renderers/cta608.ts    # CTA-608 screens on the true 32x15 grid
+│   │   ├── renderers/cta608.ts    # CTA-608 screens on the true 32x15 grid
+│   │   └── renderers/subtitles.ts # TTML (via imscJS) and WebVTT cues
+│   ├── subtitles/        # Text subtitle tracks (stpp, stpc, wvtt, wvtc)
+│   │   ├── mp4.ts        # Sample entry from stsd, timed samples of a CMAF chunk
+│   │   ├── receiver.ts   # Per-track receiver: paint-model rules, parse counts
+│   │   ├── ttml.ts       # TTML documents to ISD intervals through imscJS
+│   │   ├── webvtt.ts     # vttc boxes, cue text and cue settings
+│   │   ├── controller.ts # Displayed and measured subtitle subscriptions
+│   │   └── statsView.ts  # The subtitle comparison table
 │   ├── locmaf/           # LOCMAF (compact CMAF packaging) for the MSE pipeline
 │   │   ├── locmaf.ts     # Version-gating wrapper (LOCMAF v0.3 only)
 │   │   ├── vi64.ts       # MOQT (draft-18 §1.4.1) varints + zigzag
@@ -278,11 +286,28 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
   and painted on the true 32x15 grid inside the CTA-608 safe area — colours,
   background boxes and the pop-on / roll-up / paint-on screen model. They work
   on encrypted namespaces too, because the caption SEI sits in the clear
-  subsample leader. The CC button enables only when the track advertises
+  subsample leader. CC1 can be chosen only when the video track advertises
   `urn:scte:dash:cc:cea-608:2015` and its codec can carry the captions, so AV1
   renditions play but are not captioned (AV1 uses a metadata OBU instead of an
   SEI NAL unit). Captions ride a general timed-text overlay seam
   (`src/overlay`) that WebVTT, IMSC-1 and ograf renderers can share
+- One **Subtitles / CC** selector for all text: Off, the in-band CC1 captions
+  and every subtitle track, one at a time, since captions and subtitles share
+  the lower part of the picture. CC1 is greyed out, with the reason, when the
+  selected video track cannot carry it. The **CC** button is a shortcut: on,
+  it turns the text off; off, it brings back the last choice
+- Text **subtitles** from the catalog's `role: "subtitle"` tracks, in both
+  packagings (CMAF and LOCMAF), painted on the overlay against the picture
+  clock and so independent of the render engine: TTML (`stpp`) laid out by
+  [imscJS](https://github.com/sandflow/imscJS), the IMSC renderer dash.js uses,
+  and WebVTT (`wvtt`). The experimental
+  [paint-model](https://github.com/Eyevinn/paint-model-subtitles) variants
+  `stpc` and `wvtc` are supported too, gated on the sample entry of the init
+  segment: a `ttmn` or `vttn` sample shows the previous state again without
+  parsing, and a `ttmb` body is spliced into the head of the group's first
+  document. "Measure all subtitle tracks" subscribes to every subtitle track
+  and shows, per track, the wire bitrate and what the player parses per
+  second, so the formats and packagings can be compared side by side
 - Engine selector with `Auto` mode that picks MSE or WebCodecs from the
   selected tracks' packaging and encryption status, and namespace filtering
   that dims out namespaces incompatible with the chosen engine

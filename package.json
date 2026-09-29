@@ -61,6 +61,7 @@
     "@eyevinn/is-drm-supported": "^2.0.0",
     "@svta/cml-608": "^1.1.0",
     "@svta/cml-iso-bmff": "^1.0.5",
-    "codem-isoboxer": "^0.3.10"
+    "codem-isoboxer": "^0.3.10",
+    "imsc": "^1.1.5"
   }
 }
