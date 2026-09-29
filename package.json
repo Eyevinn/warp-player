@@ -31,28 +31,28 @@
     "node": ">=22.15.0"
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.2.2",
+    "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.0.2",
     "@eslint/js": "^10.0.1",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.2.0",
-    "@typescript-eslint/eslint-plugin": "^8.68.0",
-    "@typescript-eslint/parser": "^8.68.0",
+    "@typescript-eslint/eslint-plugin": "^8.70.1",
+    "@typescript-eslint/parser": "^8.70.1",
     "copy-webpack-plugin": "^14.0.0",
     "eslint": "^10.8.1",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import-x": "^4.17.1",
-    "globals": "^17.11.0",
+    "globals": "^17.12.0",
     "html-webpack-plugin": "^5.6.8",
     "husky": "^9.1.7",
     "jest": "^30.4.2",
     "prettier": "^3.9.6",
     "serve": "^14.2.6",
-    "ts-jest": "^29.4.12",
+    "ts-jest": "^29.4.14",
     "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.68.0",
+    "typescript-eslint": "^8.70.1",
     "webpack": "^5.109.2",
     "webpack-cli": "^7.2.2",
     "webpack-dev-server": "^6.0.0"
@@ -60,7 +60,7 @@
   "dependencies": {
     "@eyevinn/is-drm-supported": "^2.0.0",
     "@svta/cml-608": "^1.1.0",
-    "@svta/cml-iso-bmff": "^1.0.5",
+    "@svta/cml-iso-bmff": "^1.0.6",
     "codem-isoboxer": "^0.3.10",
     "imsc": "^1.1.5"
   }
