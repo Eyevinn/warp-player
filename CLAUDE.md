@@ -56,8 +56,8 @@ These ensure code quality before changes are pushed to the repository.
 
 WARP Player is a browser-based TypeScript implementation of a media player,
 using the MOQ Transport protocol via WebTransport. It supports MOQ Transport
-draft-18 (negotiated through WebTransport ALPN) and uses the MSF/CMSF
-catalog format
+draft-22 and draft-18 (negotiated through WebTransport ALPN) and uses the
+MSF/CMSF catalog format
 (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) to discover media tracks.
 
 Playback runs through one of two interchangeable render pipelines selected
@@ -83,11 +83,11 @@ The project follows the Eyevinn TypeScript project template structure:
 ```
 warp-player/
 ├── src/
-│   ├── transport/        # MOQ protocol implementation (draft-18)
+│   ├── transport/        # MOQ protocol implementation (draft-22, draft-18)
 │   │   ├── client.ts     # WebTransport client, session establishment
 │   │   ├── session18.ts  # Control stream pair, request streams, stream router
-│   │   ├── messages18.ts # draft-18 control messages and their framing
-│   │   ├── wire18.ts     # KVPs, Message Parameters, subscription filters
+│   │   ├── messages18.ts # Control messages and their framing, per draft
+│   │   ├── wire18.ts     # KVPs, Message Parameters, location filters
 │   │   ├── vi64.ts       # MOQT variable-length integers (draft-18 §1.4.1)
 │   │   ├── fetchstream.ts # FETCH response stream reader
 │   │   ├── tracks.ts     # Track subscription and data streams
@@ -132,10 +132,14 @@ warp-player/
 
 ### Core Architecture
 
-The transport used is MOQ Transport draft-18, selected by the WebTransport
-ALPN string `moqt-18`. From draft-17 the ALPN _is_ the version negotiation --
-SETUP carries no version field -- so a server that does not offer `moqt-18`
-cannot be spoken to at all.
+The transport is MOQ Transport draft-22 or draft-18, selected by the
+WebTransport ALPN string `moqt-22` or `moqt-18`. From draft-17 the ALPN _is_
+the version negotiation -- SETUP carries no version field -- so the player
+offers both (or the one picked in the UI or with `?draft=`) and speaks
+whichever the server chose for the whole session. The `*18.ts` modules hold
+the codec for both drafts; where draft-22 differs (the parameter registry,
+LOCATION_FILTER's encoding, FETCH's range, GOAWAY, PUBLISH_STATE_NOTIFY) they
+take the session's `Version`.
 
 For the catalog, the specification used is MSF (draft-ietf-moq-msf-01)
 with CMSF (draft-ietf-moq-cmsf-01) for CMAF packaging. LOC packaging
@@ -200,7 +204,7 @@ The codebase is organized into several key modules:
 1. **Client** (`src/transport/client.ts`):
    - Main entry point for establishing WebTransport connections
    - Handles connection setup, track subscription, and message routing
-   - Negotiates draft-18 (`moqt-18`) via ALPN
+   - Negotiates draft-22 (`moqt-22`) or draft-18 (`moqt-18`) via ALPN
 
 2. **TrackAliasRegistry** (`src/transport/trackaliasregistry.ts`):
    - Manages mappings between track namespaces, names, and aliases
@@ -291,14 +295,15 @@ The codebase is organized into several key modules:
 
 ## Technical Notes
 
-1. The implementation supports MOQ Transport draft-18, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-ietf-moq-loc-04).
+1. The implementation supports MOQ Transport draft-22 and draft-18, with the MSF/CMSF catalog format (draft-ietf-moq-msf-01 / draft-ietf-moq-cmsf-01) and LOC packaging (draft-ietf-moq-loc-04).
 2. WebTransport is available in Chrome 87+, Edge 87+, Firefox, and Safari 26.4+. The WebCodecs render engine additionally requires WebCodecs (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+).
 3. The client uses MSB (Most Significant Byte) 16-bit length fields for control messages.
 4. Media data is delivered either as CMAF (ISO BMFF) — including the LOCMAF packaging, which is expanded back into CMAF chunks before MSE append — for the MSE pipeline, or as raw codec payloads (length-prefixed AVC/HEVC NALUs, raw AV1 OBU temporal units, raw AAC access units, raw Opus packets) for the WebCodecs pipeline.
-5. Control messages travel on a _pair_ of unidirectional streams (one per direction); each request -- SUBSCRIBE, FETCH, PUBLISH_NAMESPACE -- owns a bidirectional stream, and closing it is what ends the request. There is no UNSUBSCRIBE or UNANNOUNCE message in draft-18.
-6. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source.
-7. Encrypted content always flows through the MSE engine; production browsers do not expose Encrypted WebCodecs.
-8. The project follows the Eyevinn code quality standards with:
+5. Control messages travel on a _pair_ of unidirectional streams (one per direction); each request -- SUBSCRIBE, FETCH, PUBLISH_NAMESPACE -- owns a bidirectional stream, and ending it is what ends the request: a FIN in draft-18, a reset (RESET_STREAM plus STOP_SENDING) in draft-22, where a FIN is not a cancellation. There is no UNSUBSCRIBE or UNANNOUNCE message in either draft.
+6. Draft-22 has no Joining FETCH. The catalog join subscribes from the Next Object and asks for a fill of the current group in FILL_PARAMETERS; the fill arrives on a FETCH_HEADER stream carrying the SUBSCRIBE's Request ID. A fill that is refused, empty, or missing after three seconds is replaced by a standalone FETCH of that group.
+7. The player should work fine towards https://github.com/Eyevinn/moqlivemock/cmd/mlmpub as a source.
+8. Encrypted content always flows through the MSE engine; production browsers do not expose Encrypted WebCodecs.
+9. The project follows the Eyevinn code quality standards with:
    - Conventional commits using commitlint
    - Prettier for code formatting
    - ESLint for code linting
@@ -434,15 +439,16 @@ directly with WebCodecs:
   attribute; the WebCodecs pipeline drives a shared `GainNode`. Both
   start muted to match the legacy `<video muted>` UX.
 
-### Draft-18 Only
+### Draft-22 and Draft-18
 
-- The transport speaks MOQ Transport draft-18 (`moqt-18`) and nothing
+- The transport speaks MOQ Transport draft-22 (`moqt-22`) and draft-18
+  (`moqt-18`), the two drafts the IETF 127 hackathon targets, and nothing
   else. Drafts 14 and 16 were dropped for the same reason `moqtransport`
   dropped them: the wire below the ALPN changed enough -- a different
   variable-length integer encoding (vi64), a control stream _pair_ in place
   of one bidirectional stream, and a bidirectional stream per request --
-  that carrying both would mean maintaining two codecs rather than
-  branching a few fields.
+  that carrying them would mean maintaining a second codec rather than
+  branching a few fields. Draft-18 to draft-22 is the branching kind.
 
 ### Fingerprint Support for Self-Signed Certificates
 

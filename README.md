@@ -25,7 +25,7 @@
 This project implements a media player that:
 
 1. Establishes a WebTransport connection to a MOQ server
-2. Negotiates MOQ Transport draft-18 with the server
+2. Negotiates MOQ Transport draft-22 or draft-18 with the server
 3. Subscribes to and parses MSF/CMSF catalogs for available media
    ([draft-ietf-moq-msf-01], [draft-ietf-moq-cmsf-01])
 4. Subscribes to selected media tracks through the MOQ transport protocol
@@ -76,7 +76,7 @@ validates MSF/CMSF draft-01 catalogs including the `locmaf` packaging and
 - A modern browser that supports WebTransport (Chrome 87+, Edge 87+, Firefox, or Safari 26.4+)
 - For the WebCodecs pipeline, a browser that exposes the WebCodecs API
   (Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+)
-- A MOQ server that supports draft-18 such as moqlivemock
+- A MOQ server that supports draft-22 or draft-18 such as moqlivemock
 - Node.js version 20+
 
 ## Project Structure
@@ -84,7 +84,7 @@ validates MSF/CMSF draft-01 catalogs including the `locmaf` packaging and
 ```
 warp-player/
 ├── src/
-│   ├── transport/        # MOQ protocol implementation (draft-18)
+│   ├── transport/        # MOQ protocol implementation (draft-22, draft-18)
 │   │   ├── client.ts     # WebTransport client implementation
 │   │   ├── setup.ts      # Setup message handling
 │   │   ├── tracks.ts     # Track subscription and management
@@ -268,12 +268,15 @@ See [CONFIG.md](CONFIG.md) for detailed configuration options.
 
 ## Features
 
-- MOQ client implementation supporting draft-18
-  (auto-negotiated via WebTransport ALPN; can be forced from the UI)
+- MOQ client implementation supporting draft-22 and draft-18
+  (auto-negotiated via WebTransport ALPN; can be forced from the UI or with
+  `?draft=draft-22` / `?draft=draft-18` in the page URL)
 - MSF/CMSF catalog support for discovering available media streams
   ([draft-ietf-moq-msf-01], [draft-ietf-moq-cmsf-01])
 - CMAF, LOCMAF (compact CMAF, [draft-einarsson-moq-locmaf]), and LOC packaging
-- Catalog retrieval via SUBSCRIBE plus a relative joining FETCH by default, so
+- Catalog retrieval via SUBSCRIBE plus a relative joining FETCH by default
+  (draft-18), or a SUBSCRIBE that asks for a fill of the current group
+  (draft-22, falling back to a FETCH of that group when no fill arrives), so
   playback starts from the latest catalog group aligned to the live edge; a
   "Catalog retrieval" selector (joining | subscribe | fetch) is exposed in the
   UI, with a fallback to a plain subscription against legacy publishers
