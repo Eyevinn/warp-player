@@ -203,6 +203,14 @@ export class Reader {
     await this.#stream.cancel();
   }
 
+  /**
+   * Cancel the stream with `reason` -- STOP_SENDING on WebTransport -- while
+   * this Reader holds its lock. The stream itself refuses while locked.
+   */
+  async cancel(reason?: unknown): Promise<void> {
+    await this.#reader.cancel(reason);
+  }
+
   release(): [Uint8Array, ReadableStream<Uint8Array>] {
     this.#reader.releaseLock();
     return [this.#buffer, this.#stream];
@@ -377,6 +385,14 @@ export class Writer {
   async close(): Promise<void> {
     this.#writer.releaseLock();
     await this.#stream.close();
+  }
+
+  /**
+   * Abort the stream with `reason` -- RESET_STREAM on WebTransport -- while
+   * this Writer holds its lock. The stream itself refuses while locked.
+   */
+  async abort(reason?: unknown): Promise<void> {
+    await this.#writer.abort(reason);
   }
 
   release(): WritableStream<Uint8Array> {

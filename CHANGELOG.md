@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A request abandoned after an error now resets its stream. The reset used to
+  fail, because the stream was locked by its reader and writer.
+
 ## [0.16.0] - 2026-09-29
 
 The player shows the catalog's subtitle tracks, CMAF and LOCMAF, in step with
