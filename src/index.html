@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MOQ Player - CMSF (draft-18)</title>
+    <title>MOQ Player - CMSF (draft-22, draft-18)</title>
     <style>
       * {
         margin: 0;
@@ -910,7 +910,6 @@
               <label for="draftVersion">Protocol Version</label>
               <select
                 id="draftVersion"
-                disabled
                 style="
                   background: var(--input-bg);
                   color: var(--text-primary);
@@ -920,6 +919,8 @@
                   width: 100%;
                 "
               >
+                <option value="auto">Auto (moqt-22, moqt-18)</option>
+                <option value="draft-22">Draft 22 (moqt-22)</option>
                 <option value="draft-18">Draft 18 (moqt-18)</option>
               </select>
             </div>
@@ -955,7 +956,9 @@
             <div class="fetch-option">
               <label for="catalogMode">Catalog retrieval</label>
               <select id="catalogMode" class="track-select">
-                <option value="joining">SUBSCRIBE + joining FETCH</option>
+                <option value="joining">
+                  SUBSCRIBE + joining FETCH or fill
+                </option>
                 <option value="subscribe">SUBSCRIBE only</option>
                 <option value="fetch">Standalone FETCH</option>
               </select>

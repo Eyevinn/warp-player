@@ -44,7 +44,12 @@ import {
 import type { SubtitleCue } from "./subtitles/types";
 import { Client, DraftVersion } from "./transport/client";
 import { MOQObject } from "./transport/tracks";
-import { FilterType } from "./transport/wire18";
+import { Version, draftName } from "./transport/version";
+import {
+  absoluteRangeFilter,
+  nextObjectFilter,
+  relativeStartFilter,
+} from "./transport/wire18";
 import {
   WarpCatalog,
   WarpTrack,
@@ -56,6 +61,14 @@ import {
 
 /** The Subtitles / CC selector's name for the in-band captions. */
 const CC1_LABEL = "CC1 (in-band CTA-608)";
+
+/**
+ * How long a draft-22 catalog join waits for its fill before fetching the
+ * catalog instead. Some relays open no fill stream at all, and a fill stream
+ * reset before its header cannot be matched to its subscription, so the wait
+ * has to be bounded here.
+ */
+const CATALOG_FILL_WAIT_MS = 3000;
 
 /** Why CC1 cannot be shown, by caption availability. */
 const CC1_UNAVAILABLE = {
@@ -810,8 +823,7 @@ export class Player {
       this.connection = await this.client.connect();
 
       // Update status with negotiated version
-      // Only draft-18 is spoken; connect() throws on anything else.
-      const versionStr = "draft-18";
+      const versionStr = draftName(this.client.negotiatedVersion);
       this.statusEl.className = "status connected";
       this.statusEl.innerHTML = `<span>●</span> Connected (${versionStr})`;
 
@@ -1205,8 +1217,9 @@ export class Player {
     // Update the visual selection state
     this.renderNamespaceSelector();
 
-    // Catalog retrieval mode: "joining" (SUBSCRIBE + relative joining FETCH,
-    // the MSF draft-01 §5 way, default), "subscribe", or "fetch"
+    // Catalog retrieval mode: "joining" (SUBSCRIBE plus a relative joining
+    // FETCH, or a fill in draft-22: the MSF draft-01 §5 way, default),
+    // "subscribe", or "fetch"
     const catalogMode =
       (document.getElementById("catalogMode") as HTMLSelectElement)?.value ??
       "joining";
@@ -1312,12 +1325,17 @@ export class Player {
   }
 
   /**
-   * Retrieve the catalog the MSF draft-01 §5 way: SUBSCRIBE with Filter Type
-   * Largest Object plus a relative Joining FETCH (offset 0). The FETCH
-   * delivers the latest complete catalog (object 0 of the current group)
-   * plus any deltas up to the live edge; the SUBSCRIBE then carries
-   * subsequent updates. Objects at or before the subscription's largest
-   * location are covered by the FETCH and are skipped on the subscription.
+   * Retrieve the catalog the MSF draft-01 §5 way: join the catalog track at
+   * its current Group, so the latest complete catalog (object 0 of that Group)
+   * and any deltas up to the live edge arrive first, and the subscription
+   * carries later updates.
+   *
+   * Draft-18 does this with SUBSCRIBE (Filter Type Largest Object) plus a
+   * relative Joining FETCH of offset 0. Draft-22 has no Joining FETCH: the
+   * SUBSCRIBE starts at the Next Object and asks for a fill of the current
+   * Group (Section 3.5). Either way, objects at or before the subscription's
+   * largest location are covered by the FETCH or the fill and skipped on the
+   * subscription.
    */
   private async joiningFetchCatalog(namespace: string[]): Promise<void> {
     if (!this.client) {
@@ -1325,10 +1343,12 @@ export class Player {
       return;
     }
     const client = this.client;
+    const draft22 = client.negotiatedVersion === Version.DRAFT_22;
 
     const namespaceStr = namespace.join("/");
     this.logger.info(
-      `Retrieving catalog via joining FETCH in namespace: ${namespaceStr}`,
+      `Retrieving catalog via ${draft22 ? "fill" : "joining FETCH"} in ` +
+        `namespace: ${namespaceStr}`,
     );
 
     const applyCatalogObject = (obj: MOQObject, source: string) => {
@@ -1345,15 +1365,27 @@ export class Player {
       }
     };
 
-    // Subscribe first: the joining FETCH is resolved by the publisher from
-    // this subscription, so it must be established before the FETCH is sent.
+    // Subscribe first: in draft-18 the joining FETCH is resolved by the
+    // publisher from this subscription, so it must be established before the
+    // FETCH is sent. In draft-22 the fill rides on the SUBSCRIBE itself.
+    let filled = 0;
     const sub = await client.subscribeTrackWithInfo(
       namespaceStr,
       "catalog",
       (obj: MOQObject) => applyCatalogObject(obj, "catalog subscription"),
       {
-        filterType: FilterType.LargestObject,
+        filter: nextObjectFilter(),
         skipObjectsUpToLargest: true,
+        ...(draft22 && {
+          fill: {
+            // One Group back from the Next Group: the current Group.
+            filter: relativeStartFilter(1n),
+            callback: (obj: MOQObject) => {
+              filled += 1;
+              applyCatalogObject(obj, "fill");
+            },
+          },
+        }),
       },
     );
 
@@ -1374,21 +1406,65 @@ export class Player {
       });
     };
 
-    if (!sub.largest) {
-      // Without a largest location a joining FETCH is impossible
-      // (the publisher would reject it with INVALID_RANGE). A legacy
-      // publisher replays the catalog on the subscription instead, so
+    const largest = sub.largest;
+    if (!largest) {
+      // Without a largest location there is nothing to join: a joining FETCH
+      // would be rejected with INVALID_RANGE, and a fill opens no stream. A
+      // legacy publisher replays the catalog on the subscription instead, so
       // keep the subscription and rely on that.
+      sub.fill?.cancel();
       this.logger.warn(
-        "SUBSCRIBE_OK carried no largest location; skipping joining FETCH " +
-          "and relying on the catalog subscription",
+        "SUBSCRIBE_OK carried no largest location; relying on the catalog " +
+          "subscription",
+      );
+      return;
+    }
+
+    if (sub.fill) {
+      let failure: string | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          sub.fill.done,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`none within ${CATALOG_FILL_WAIT_MS} ms`)),
+              CATALOG_FILL_WAIT_MS,
+            );
+          }),
+        ]);
+      } catch (e) {
+        failure = e instanceof Error ? e.message : String(e);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (failure === undefined && filled > 0) {
+        this.logger.info(
+          `Retrieved catalog via fill in namespace: ${namespaceStr}`,
+        );
+        return;
+      }
+
+      // A refused fill, one that never came, and one from a relay with
+      // nothing cached all leave the catalog unknown. A standalone FETCH of
+      // the current Group is what the fill would have delivered.
+      sub.fill.cancel();
+      this.logger.warn(
+        `Catalog fill ${failure ? `failed (${failure})` : "delivered nothing"}; ` +
+          `fetching group ${largest.group} instead`,
+      );
+      await client.fetchTrack(
+        namespaceStr,
+        "catalog",
+        (obj: MOQObject) => applyCatalogObject(obj, "fetch"),
+        absoluteRangeFilter({ group: largest.group, object: 0n }, largest),
       );
       return;
     }
 
     this.logger.info(
       `Catalog subscription established (requestId=${sub.requestId}, ` +
-        `largest group=${sub.largest.group}, object=${sub.largest.object}); ` +
+        `largest group=${largest.group}, object=${largest.object}); ` +
         `sending relative joining FETCH (offset 0)`,
     );
 

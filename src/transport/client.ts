@@ -21,13 +21,16 @@ import {
   SubscribeOptions,
   SubscriptionInfo,
 } from "./tracks";
-import { Version, SUPPORTED_PROTOCOLS, versionForProtocol } from "./version";
+import {
+  DraftVersion,
+  Version,
+  draftName,
+  protocolsForDraft,
+  versionForProtocol,
+} from "./version";
+import type { LocationFilter } from "./wire18";
 
-/**
- * Only draft-18 is spoken. The option is kept so the UI can show which draft is
- * in use and so a future draft can be added beside it.
- */
-export type DraftVersion = "auto" | "draft-18";
+export type { DraftVersion } from "./version";
 
 export interface ClientConfig {
   url: string;
@@ -36,7 +39,8 @@ export interface ClientConfig {
   // This is required to use self-signed certificates with Chrome
   fingerprint?: string;
 
-  // Protocol draft version. Only "auto" and "draft-18" are meaningful today.
+  // Protocol draft to offer: "auto" offers draft-22 and draft-18, and the
+  // server picks.
   draftVersion?: DraftVersion;
 }
 
@@ -97,9 +101,10 @@ export class Client {
     // From draft-17 the ALPN is the whole of version negotiation: SETUP carries
     // no version field, so a session whose subprotocol we did not offer cannot
     // be spoken at all.
-    (options as any).protocols = [...SUPPORTED_PROTOCOLS];
+    const protocols = protocolsForDraft(this.config.draftVersion);
+    (options as any).protocols = protocols;
     this.logger.info(
-      `Requesting WebTransport protocol: ${SUPPORTED_PROTOCOLS.join(", ")}`,
+      `Requesting WebTransport protocol: ${protocols.join(", ")}`,
     );
 
     this.logger.info(`Connecting to ${this.config.url}...`);
@@ -121,7 +126,9 @@ export class Client {
     const negotiatedProtocol = (wt as any).protocol as string | undefined;
     const version = versionForProtocol(negotiatedProtocol);
     this.#negotiatedVersion = version;
-    this.logger.info(`Negotiated ${negotiatedProtocol} -> draft-18`);
+    this.logger.info(
+      `Negotiated ${negotiatedProtocol} -> ${draftName(version)}`,
+    );
 
     // Accepting has to start before SETUP: object streams and the peer's own
     // control stream may arrive first, and the router buffers whatever turns
@@ -131,14 +138,14 @@ export class Client {
     // SETUP carries Setup Options and nothing else; the version is already
     // settled. We send none: every option we would set is at its default.
     const setup: Setup = { kind: CtrlType.Setup, options: [] };
-    const control = await ControlStreamPair.establish(wt, setup, () =>
+    const control = await ControlStreamPair.establish(wt, setup, version, () =>
       router.controlStream(),
     );
     this.logger.info("Control stream pair established");
 
     // Each request gets its own bidirectional stream, so the tracks manager
     // needs the connection to open them on.
-    this.#tracksManager = new TracksManager(wt, router, this);
+    this.#tracksManager = new TracksManager(wt, router, version, this);
     this.logger.info("Tracks manager created");
 
     const connection = new Connection(wt, control, this);
@@ -244,20 +251,24 @@ export class Client {
         throw new Error(`${ctrlTypeName(type)} may not open a request stream`);
       }
 
-      const msg = await readCtrlBody(reader, type, false);
+      const version = this.#negotiatedVersion;
+      const msg = await readCtrlBody(reader, type, version, false);
       if (msg.kind !== CtrlType.PublishNamespace) {
         this.logger.info(
           `Rejecting unsupported ${ctrlTypeName(type)} request stream`,
         );
         await writer.write(
-          encodeCtrlMessage({
-            kind: CtrlType.RequestError,
-            // NOT_SUPPORTED. Answering is a legitimate response, and adding a
-            // handler later changes no signature.
-            errorCode: 0x2n,
-            retryInterval: 0n,
-            errorReason: "not supported",
-          }),
+          encodeCtrlMessage(
+            {
+              kind: CtrlType.RequestError,
+              // NOT_SUPPORTED. Answering is a legitimate response, and adding
+              // a handler later changes no signature.
+              errorCode: 0x2n,
+              retryInterval: 0n,
+              errorReason: "not supported",
+            },
+            version,
+          ),
         );
         await writer.close();
         return;
@@ -269,11 +280,10 @@ export class Client {
       // REQUEST_OK goes back on the request's own stream, and carries no
       // Request ID: the stream is the identity.
       await writer.write(
-        encodeCtrlMessage({
-          kind: CtrlType.RequestOk,
-          parameters: [],
-          trackProperties: [],
-        }),
+        encodeCtrlMessage(
+          { kind: CtrlType.RequestOk, parameters: [], trackProperties: [] },
+          version,
+        ),
       );
 
       this.#notifyNamespace(namespace);
@@ -297,7 +307,12 @@ export class Client {
         return;
       }
       const type = Number(await reader.u62()) as CtrlType;
-      const msg: CtrlMessage = await readCtrlBody(reader, type, false);
+      const msg: CtrlMessage = await readCtrlBody(
+        reader,
+        type,
+        this.#negotiatedVersion,
+        false,
+      );
       this.logger.debug(`Received ${ctrlTypeName(msg.kind)} for ${label}`);
     }
   }
@@ -356,8 +371,9 @@ export class Client {
 
   /**
    * Subscribe to a track and return the subscription's request ID and the
-   * largest location from SUBSCRIBE_OK, as needed for a joining FETCH
-   * @param options Filter type and joining-fetch dedup behavior
+   * largest location from SUBSCRIBE_OK, as needed for a joining FETCH, and
+   * in draft-22 the fill asked for in `options`
+   * @param options Location filter, fill, and dedup behavior
    */
   async subscribeTrackWithInfo(
     namespace: string,
@@ -379,7 +395,8 @@ export class Client {
   }
 
   /**
-   * Send a Relative Joining FETCH tied to an existing subscription
+   * Send a Relative Joining FETCH tied to an existing subscription. Draft-18
+   * only: draft-22 replaced it with fills.
    * @param joiningRequestId The request ID of the subscription to join
    * @param joiningStart Group offset back from the largest group (0 = current group)
    * @param callback The callback for objects delivered on the FETCH stream
@@ -405,18 +422,25 @@ export class Client {
 
   /**
    * Fetch a track (one-shot retrieval instead of ongoing subscription)
+   * @param range The Objects to fetch; all of Group 0 if omitted
    */
   async fetchTrack(
     namespace: string,
     trackName: string,
     callback: ObjectCallback,
+    range?: LocationFilter,
   ): Promise<void> {
     if (!this.#tracksManager) {
       throw new Error("Cannot fetch: Tracks manager not initialized");
     }
 
     this.logger.info(`Client fetching track ${namespace}:${trackName}`);
-    return this.#tracksManager.fetchTrack(namespace, trackName, callback);
+    return this.#tracksManager.fetchTrack(
+      namespace,
+      trackName,
+      callback,
+      range,
+    );
   }
 
   /**
@@ -455,12 +479,16 @@ export class Client {
       throw new Error("Cannot subscribe to namespaces: not connected");
     }
     const label = prefix.length ? prefix.join("/") : "(all)";
-    const stream = await RequestStream.open(wt, {
-      kind: CtrlType.SubscribeNamespace,
-      requestId: this.getNextRequestId(),
-      prefix: prefix.map((f) => encoder.encode(f)),
-      parameters: [],
-    });
+    const stream = await RequestStream.open(
+      wt,
+      {
+        kind: CtrlType.SubscribeNamespace,
+        requestId: this.getNextRequestId(),
+        prefix: prefix.map((f) => encoder.encode(f)),
+        parameters: [],
+      },
+      this.#negotiatedVersion,
+    );
 
     const answer = await stream.next();
     if (answer?.kind === CtrlType.RequestError) {

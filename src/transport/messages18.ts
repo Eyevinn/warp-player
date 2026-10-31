@@ -1,5 +1,10 @@
 /**
- * draft-18 control messages and their framing.
+ * Control messages and their framing, for draft-18 and draft-22.
+ *
+ * Draft-22 keeps draft-18's messages and framing. Where it differs -- FETCH
+ * carries its range as a parameter and has no joining form, GOAWAY on the
+ * control stream lost its Request ID, PUBLISH_STATE_NOTIFY is new, and the
+ * parameter registry -- the codec takes the session's Version.
  *
  * Two things about draft-18 shape this module and are worth stating up front,
  * because both differ from draft-16:
@@ -14,6 +19,7 @@
  *    Only the seven messages that open a stream carry one.
  */
 
+import { Version, draftName } from "./version";
 import {
   ByteReader,
   ByteWriter,
@@ -55,6 +61,11 @@ export enum CtrlType {
   Namespace = 0x8,
   NamespaceDone = 0xe,
   PublishBlocked = 0xf,
+  /**
+   * Draft-22 only: the publisher reports a change to the subscription's state
+   * on its request stream, unasked and unanswered.
+   */
+  PublishStateNotify = 0x22,
 
   /**
    * draft-18's leftover codepoint for PUBLISH_OK. Section 10.5 makes PUBLISH_OK
@@ -127,18 +138,26 @@ export enum FetchType {
   AbsoluteJoining = 0x3,
 }
 
-/** Names a track and an explicit range; present for FetchType.Standalone. */
+/**
+ * Names a track, and in draft-18 an explicit range; present for
+ * FetchType.Standalone. Draft-22 has no range fields: the range is the
+ * LOCATION_FILTER parameter.
+ */
 export interface StandaloneFetch {
   namespace: Uint8Array[];
   name: Uint8Array;
-  start: Location;
-  /** The last Object plus one; an Object of 0 requests the whole group. */
-  end: Location;
+  /** Draft-18 only. */
+  start?: Location;
+  /**
+   * Draft-18 only. The last Object plus one; an Object of 0 requests the
+   * whole group.
+   */
+  end?: Location;
 }
 
 /**
  * References a subscription on the same session; present for the two joining
- * types. The publisher derives the range from that subscription, so the
+ * types, which draft-22 removed in favour of fills. The publisher derives the range from that subscription, so the
  * fetched and subscribed Objects are contiguous and do not overlap.
  */
 export interface JoiningFetch {
@@ -159,6 +178,7 @@ export interface Fetch {
 export interface FetchOk {
   kind: CtrlType.FetchOk;
   endOfTrack: boolean;
+  /** The last Object in draft-22; the last Object plus one in draft-18. */
   endLocation: Location;
   parameters: Parameter[];
   trackProperties: KeyValuePair[];
@@ -213,8 +233,14 @@ export interface GoAway {
   kind: CtrlType.GoAway;
   newSessionUri: string;
   timeout: bigint;
-  /** Present only on the control-stream form; draft-19 removes it. */
+  /** Present only on draft-18's control-stream form; draft-19 removed it. */
   requestId?: bigint;
+}
+
+/** Draft-22: the subscription parameters that changed, LARGEST_OBJECT among them. */
+export interface PublishStateNotify {
+  kind: CtrlType.PublishStateNotify;
+  parameters: Parameter[];
 }
 
 export type CtrlMessage =
@@ -230,7 +256,8 @@ export type CtrlMessage =
   | SubscribeNamespace
   | Namespace
   | NamespaceDone
-  | GoAway;
+  | GoAway
+  | PublishStateNotify;
 
 // ---------------------------------------------------------------------------
 // Encoding
@@ -239,7 +266,7 @@ export type CtrlMessage =
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-function encodeBody(m: CtrlMessage): Uint8Array {
+function encodeBody(m: CtrlMessage, version: Version): Uint8Array {
   const w = new ByteWriter(256);
   switch (m.kind) {
     case CtrlType.Setup:
@@ -248,40 +275,52 @@ function encodeBody(m: CtrlMessage): Uint8Array {
       break;
     case CtrlType.Subscribe:
       w.vi64(m.requestId).namespace(m.namespace).lengthPrefixed(m.name);
-      writeParameters(w, m.parameters);
+      writeParameters(w, m.parameters, version);
       break;
     case CtrlType.Fetch:
+      if (version === Version.DRAFT_22) {
+        // Every draft-22 FETCH is standalone, with its range in
+        // LOCATION_FILTER and no Fetch Type field.
+        if (m.fetchType !== FetchType.Standalone || !m.standalone) {
+          throw new Error("messages18: draft-22 has only standalone FETCH");
+        }
+        w.vi64(m.requestId);
+        w.namespace(m.standalone.namespace).lengthPrefixed(m.standalone.name);
+        writeParameters(w, m.parameters, version);
+        break;
+      }
       w.vi64(m.requestId).vi64(BigInt(m.fetchType));
       if (m.fetchType === FetchType.Standalone) {
-        if (!m.standalone) {
+        const { standalone } = m;
+        if (!standalone?.start || !standalone.end) {
           throw new Error("messages18: standalone FETCH without its fields");
         }
-        w.namespace(m.standalone.namespace).lengthPrefixed(m.standalone.name);
-        w.vi64(m.standalone.start.group).vi64(m.standalone.start.object);
-        w.vi64(m.standalone.end.group).vi64(m.standalone.end.object);
+        w.namespace(standalone.namespace).lengthPrefixed(standalone.name);
+        w.vi64(standalone.start.group).vi64(standalone.start.object);
+        w.vi64(standalone.end.group).vi64(standalone.end.object);
       } else {
         if (!m.joining) {
           throw new Error("messages18: joining FETCH without its fields");
         }
         w.vi64(m.joining.joiningRequestId).vi64(m.joining.joiningStart);
       }
-      writeParameters(w, m.parameters);
+      writeParameters(w, m.parameters, version);
       break;
     case CtrlType.PublishNamespace:
       w.vi64(m.requestId).namespace(m.namespace);
-      writeParameters(w, m.parameters);
+      writeParameters(w, m.parameters, version);
       break;
     case CtrlType.SubscribeNamespace:
       w.vi64(m.requestId).namespace(m.prefix);
-      writeParameters(w, m.parameters);
+      writeParameters(w, m.parameters, version);
       break;
     case CtrlType.RequestOk:
-      writeParameters(w, m.parameters);
+      writeParameters(w, m.parameters, version);
       writeKvpList(w, m.trackProperties);
       break;
     case CtrlType.GoAway:
       w.lengthPrefixed(textEncoder.encode(m.newSessionUri)).vi64(m.timeout);
-      if (m.requestId !== undefined) {
+      if (m.requestId !== undefined && version === Version.DRAFT_18) {
         w.vi64(m.requestId);
       }
       break;
@@ -301,8 +340,11 @@ function encodeBody(m: CtrlMessage): Uint8Array {
  * The length is a fixed 16-bit field, so a body that overflows it is
  * unrepresentable and has to be prevented at the source.
  */
-export function encodeCtrlMessage(m: CtrlMessage): Uint8Array {
-  const body = encodeBody(m);
+export function encodeCtrlMessage(
+  m: CtrlMessage,
+  version: Version,
+): Uint8Array {
+  const body = encodeBody(m, version);
   if (body.length > MAX_CONTROL_MESSAGE_BODY) {
     throw new Error(
       `messages18: ${ctrlTypeName(m.kind)} body is ${body.length} bytes, max ${MAX_CONTROL_MESSAGE_BODY}`,
@@ -322,12 +364,14 @@ export function encodeCtrlMessage(m: CtrlMessage): Uint8Array {
 /**
  * Decode a message body whose type and length have already been read.
  *
- * `onControlStream` selects between the two GOAWAY shapes: the control-stream
- * form carries a Request ID and the request-stream form does not.
+ * `onControlStream` selects between the two GOAWAY shapes: in draft-18 the
+ * control-stream form carries a Request ID and the request-stream form does
+ * not. In draft-22 neither does.
  */
 export function decodeCtrlBody(
   type: CtrlType,
   body: Uint8Array,
+  version: Version,
   onControlStream = false,
 ): CtrlMessage {
   const r = new ByteReader(body);
@@ -342,7 +386,7 @@ export function decodeCtrlBody(
       msg = {
         kind: CtrlType.SubscribeOk,
         trackAlias: r.vi64(),
-        parameters: readParameters(r),
+        parameters: readParameters(r, version),
         // Track Properties have no count and no length: they run to the end of
         // the body, which is what makes the 16-bit length load-bearing.
         trackProperties: readKvpList(r),
@@ -354,7 +398,7 @@ export function decodeCtrlBody(
         kind: CtrlType.FetchOk,
         endOfTrack: r.u8() !== 0,
         endLocation: { group: r.vi64(), object: r.vi64() },
-        parameters: readParameters(r),
+        parameters: readParameters(r, version),
         trackProperties: readKvpList(r),
       };
       break;
@@ -364,7 +408,7 @@ export function decodeCtrlBody(
     case CtrlType.PublishOk:
       msg = {
         kind: CtrlType.RequestOk,
-        parameters: readParameters(r),
+        parameters: readParameters(r, version),
         trackProperties: readKvpList(r),
       };
       break;
@@ -410,7 +454,7 @@ export function decodeCtrlBody(
         kind: CtrlType.PublishNamespace,
         requestId: r.vi64(),
         namespace: r.namespace(),
-        parameters: readParameters(r),
+        parameters: readParameters(r, version),
       };
       break;
 
@@ -421,10 +465,24 @@ export function decodeCtrlBody(
         kind: CtrlType.GoAway,
         newSessionUri,
         timeout,
-        ...(onControlStream ? { requestId: r.vi64() } : {}),
+        ...(onControlStream && version === Version.DRAFT_18
+          ? { requestId: r.vi64() }
+          : {}),
       };
       break;
     }
+
+    case CtrlType.PublishStateNotify:
+      if (version !== Version.DRAFT_22) {
+        throw new Error(
+          `messages18: PUBLISH_STATE_NOTIFY does not exist in ${draftName(version)}`,
+        );
+      }
+      msg = {
+        kind: CtrlType.PublishStateNotify,
+        parameters: readParameters(r, version),
+      };
+      break;
 
     default:
       throw new Error(

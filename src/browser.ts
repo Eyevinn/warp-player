@@ -209,6 +209,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   fingerprintUrlInput.value = fingerprintUrl;
   namespacePrefixesInput.value = namespacePrefixes;
 
+  // Draft: URL param (?draft=draft-22) > auto, which offers both and lets the
+  // server pick. An unknown value leaves the selector on auto.
+  const draft = urlParams.get("draft");
+  if (draft && [...draftVersionSelect.options].some((o) => o.value === draft)) {
+    draftVersionSelect.value = draft;
+  }
+
   // Hide fingerprint section if no fingerprint URL is configured, with toggle to show/hide
   if (!fingerprintUrl) {
     const fingerprintSection = document.getElementById("fingerprintSection");
@@ -734,6 +741,8 @@ async function connect() {
   // Disable connect button and enable disconnect button
   connectBtn.disabled = true;
   disconnectBtn.disabled = false;
+  // The draft is fixed for the session by the ALPN.
+  draftVersionSelect.disabled = true;
 
   // Clear previous tracks display
   tracksContainerEl.innerHTML = "";
@@ -774,6 +783,7 @@ function disconnect() {
 function resetUI() {
   connectBtn.disabled = false;
   disconnectBtn.disabled = true;
+  draftVersionSelect.disabled = false;
   startBtn.disabled = true;
   stopBtn.disabled = true;
 }

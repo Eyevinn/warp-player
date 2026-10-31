@@ -5,6 +5,7 @@ import { FetchStreamReader, EndOfRange } from "./fetchstream";
 import {
   CtrlType,
   FetchType,
+  ctrlTypeName,
   type Fetch,
   type Subscribe,
   type SubscribeOk,
@@ -12,14 +13,20 @@ import {
 import { RequestStream, UniStreamRouter } from "./session18";
 import { Reader } from "./stream";
 import { TrackAliasRegistry } from "./trackaliasregistry";
+import { Version } from "./version";
 import {
-  FilterType,
   GroupOrder,
   type Location,
+  type LocationFilter,
+  type Parameter,
   PARAM_LARGEST_OBJECT,
+  absoluteGroupEndFilter,
+  fetchRange18,
+  fillParameter,
   findParameter,
+  locationFilterParameter,
   namespaceFields,
-  subscriptionFilterParameter,
+  relativeStartFilter,
 } from "./wire18";
 
 // Unidirectional stream types (draft-18 Table 3).
@@ -114,12 +121,16 @@ export type ObjectCallback = (obj: MOQObject) => void;
 
 // Options for subscribeTrackWithInfo
 export interface SubscribeOptions {
-  // Subscription filter type; defaults to NextGroupStart (legacy behavior).
-  filterType?: FilterType;
+  // Where the subscription starts; defaults to the next Group.
+  filter?: LocationFilter;
   // Drop objects at or before the SUBSCRIBE_OK largest location before they
-  // reach the callback. Used with a joining FETCH, which already covers that
-  // range, so the combined delivery is contiguous and non-overlapping.
+  // reach the callback. Used with a joining FETCH or a fill, which already
+  // covers that range, so the combined delivery is contiguous and
+  // non-overlapping.
   skipObjectsUpToLargest?: boolean;
+  // Draft-22 only: ask for a fill fetch stream covering `filter`, whose
+  // objects go to `callback` (Section 3.4).
+  fill?: { filter: LocationFilter; callback: ObjectCallback };
 }
 
 // Result of subscribeTrackWithInfo
@@ -127,6 +138,33 @@ export interface SubscriptionInfo {
   trackAlias: bigint;
   requestId: bigint;
   largest?: Location;
+  // Present when SubscribeOptions.fill was given.
+  fill?: FetchDelivery;
+}
+
+/**
+ * The objects of a FETCH or a fill, as they arrive on its FETCH_HEADER stream.
+ */
+export interface FetchDelivery {
+  /**
+   * Resolves when the publisher finishes the stream, and rejects when it
+   * resets it, which is how a draft-22 publisher refuses a fill. It never
+   * settles if no stream opens: a fill whose range is empty opens none, and
+   * a stream reset before its header cannot be matched to its request.
+   */
+  done: Promise<void>;
+  /** Stop delivering, and ignore the stream if it has not arrived yet. */
+  cancel(): void;
+}
+
+/** Where the objects on one FETCH_HEADER stream go. */
+interface FetchReceiver {
+  callback: ObjectCallback;
+  label: string;
+  /** A refused fill is routine, so its reset is not logged as an error. */
+  fill: boolean;
+  cancelled: boolean;
+  settle: (error?: unknown) => void;
 }
 
 /** Reports whether location a lies strictly after b in (group, object) order */
@@ -143,19 +181,29 @@ const encoder = new TextEncoder();
 // Tracks manager to handle incoming data streams
 export class TracksManager {
   private wt: WebTransport;
+  private version: Version;
   private objectCallbacks: Map<string, ObjectCallback[]> = new Map();
-  private fetchCallbacks: Map<bigint, ObjectCallback> = new Map();
+  /** Keyed by the Request ID a FETCH_HEADER carries: the FETCH's, or the SUBSCRIBE's for a fill. */
+  private fetchReceivers: Map<bigint, FetchReceiver> = new Map();
   private trackRegistry: TrackAliasRegistry = new TrackAliasRegistry();
   /** Only used when no client is attached, e.g. in unit tests. */
   private fallbackRequestId: bigint = 0n;
   private client: Client | null = null;
   private logger: ILogger;
   private isClosing: boolean = false;
-  /** One request stream per subscription; closing it ends the subscription. */
+  /** One request stream per subscription; cancelling it ends the subscription. */
   private subscribeStreams: Map<bigint, RequestStream> = new Map();
+  /** Draft-22 fills still expected, by the subscription's Track Alias. */
+  private subscriptionFills: Map<bigint, FetchDelivery> = new Map();
 
-  constructor(wt: WebTransport, router: UniStreamRouter, client?: Client) {
+  constructor(
+    wt: WebTransport,
+    router: UniStreamRouter,
+    version: Version,
+    client?: Client,
+  ) {
     this.wt = wt;
+    this.version = version;
     this.client = client || null;
     this.logger = LoggerFactory.getInstance().getLogger("Tracks");
     // The router owns the accept loop because the peer's control stream
@@ -669,15 +717,15 @@ export class TracksManager {
    * @throws Error if control stream is not set
    */
   /**
-   * Handle an incoming FETCH_HEADER stream (stream type 0x05).
-   * Reads the requestId, then reads objects and dispatches to the registered callback.
+   * Handle an incoming FETCH_HEADER stream (stream type 0x05): the response to
+   * a FETCH, or in draft-22 a fill, whose Request ID is the SUBSCRIBE's.
    */
   private async handleFetchStream(reader: Reader): Promise<void> {
     const requestId = await reader.u62();
     this.logger.info(`Received FETCH_HEADER stream, requestId=${requestId}`);
 
-    const callback = this.fetchCallbacks.get(requestId);
-    if (!callback) {
+    const receiver = this.fetchReceivers.get(requestId);
+    if (!receiver) {
       this.logger.warn(
         `No callback registered for fetch requestId=${requestId}`,
       );
@@ -687,68 +735,131 @@ export class TracksManager {
     // Group Order decides which way a Group ID Delta moves, so the reader
     // cannot decode without it. This player never asks for Descending, and a
     // FETCH that omitted the parameter is Ascending either way.
-    const objects = new FetchStreamReader(reader, GroupOrder.Ascending);
-    for (;;) {
-      const obj = await objects.next();
-      if (obj === null) {
-        break;
-      }
+    const objects = new FetchStreamReader(
+      reader,
+      GroupOrder.Ascending,
+      this.version,
+    );
+    try {
+      for (;;) {
+        const obj = await objects.next();
+        if (obj === null || receiver.cancelled) {
+          break;
+        }
 
-      if (obj.endOfRange !== EndOfRange.None) {
-        // A run of Objects that were not serialized. There is nothing to
-        // deliver: they either do not exist or their status is unknown.
+        if (obj.endOfRange !== EndOfRange.None) {
+          // A run of Objects that were not serialized. There is nothing to
+          // deliver: they either do not exist or their status is unknown.
+          this.logger.debug(
+            `Fetch end-of-range 0x${obj.endOfRange.toString(16)} through ` +
+              `group=${obj.groupId} obj=${obj.objectId}`,
+          );
+          continue;
+        }
+
         this.logger.debug(
-          `Fetch end-of-range 0x${obj.endOfRange.toString(16)} through ` +
-            `group=${obj.groupId} obj=${obj.objectId}`,
+          `Fetch object: group=${obj.groupId}, subgroup=${obj.subgroupId}, ` +
+            `obj=${obj.objectId}, len=${obj.payload.length}`,
         );
-        continue;
+
+        receiver.callback({
+          trackAlias: 0n,
+          location: { group: obj.groupId, object: obj.objectId },
+          data: obj.payload,
+          ...(obj.properties !== undefined && { extensions: obj.properties }),
+        });
       }
-
-      this.logger.debug(
-        `Fetch object: group=${obj.groupId}, subgroup=${obj.subgroupId}, ` +
-          `obj=${obj.objectId}, len=${obj.payload.length}`,
-      );
-
-      callback({
-        trackAlias: 0n,
-        location: { group: obj.groupId, object: obj.objectId },
-        data: obj.payload,
-        ...(obj.properties !== undefined && { extensions: obj.properties }),
-      });
+      receiver.settle();
+    } catch (error) {
+      receiver.settle(error);
+      if (!receiver.fill) {
+        throw error;
+      }
+      // Section 3.4.1: a reset fill leaves the subscription alone.
+      this.logger.info(`Fill for ${receiver.label} ended early: ${error}`);
+    } finally {
+      this.fetchReceivers.delete(requestId);
     }
-
-    this.fetchCallbacks.delete(requestId);
   }
 
   /**
-   * Send a standalone FETCH for a whole track and register a callback for the
-   * response data.
+   * Route the FETCH_HEADER stream carrying `requestId` to `callback`. Done
+   * before the request is sent, since that stream can arrive before the
+   * request's answer does.
+   */
+  private expectFetchStream(
+    requestId: bigint,
+    callback: ObjectCallback,
+    label: string,
+    fill: boolean,
+  ): FetchDelivery {
+    let settle!: (error?: unknown) => void;
+    const done = new Promise<void>((resolve, reject) => {
+      settle = (error?: unknown) => (error ? reject(error) : resolve());
+    });
+    // Nobody has to wait for a delivery, so a rejection nobody reads is fine.
+    done.catch(() => undefined);
+    const receiver: FetchReceiver = {
+      callback,
+      label,
+      fill,
+      cancelled: false,
+      settle,
+    };
+    this.fetchReceivers.set(requestId, receiver);
+    return {
+      done,
+      cancel: () => {
+        receiver.cancelled = true;
+        if (this.fetchReceivers.get(requestId) === receiver) {
+          this.fetchReceivers.delete(requestId);
+        }
+      },
+    };
+  }
+
+  /**
+   * Send a standalone FETCH and register a callback for the response data.
+   * The range defaults to all of Group 0.
    */
   public async fetchTrack(
     namespace: string,
     trackName: string,
     callback: ObjectCallback,
+    range: LocationFilter = absoluteGroupEndFilter(
+      { group: 0n, object: 0n },
+      0n,
+    ),
   ): Promise<void> {
     this.logger.info(`Fetching track ${namespace}:${trackName}`);
 
     const requestId = this.getNextRequestId();
-    const fetch: Fetch = {
-      kind: CtrlType.Fetch,
-      requestId,
-      fetchType: FetchType.Standalone,
-      standalone: {
-        namespace: namespaceFields(namespace),
-        name: encoder.encode(trackName),
-        start: { group: 0n, object: 0n },
-        end: { group: 0n, object: 0n },
-      },
-      parameters: [],
+    const standalone = {
+      namespace: namespaceFields(namespace),
+      name: encoder.encode(trackName),
     };
+    // Draft-22 carries the range in LOCATION_FILTER; draft-18 as explicit
+    // Start and End fields.
+    const fetch: Fetch =
+      this.version === Version.DRAFT_22
+        ? {
+            kind: CtrlType.Fetch,
+            requestId,
+            fetchType: FetchType.Standalone,
+            standalone,
+            parameters: [locationFilterParameter(range)],
+          }
+        : {
+            kind: CtrlType.Fetch,
+            requestId,
+            fetchType: FetchType.Standalone,
+            standalone: { ...standalone, ...fetchRange18(range) },
+            parameters: [],
+          };
 
-    // Register before sending: the FETCH_HEADER stream can arrive before
-    // FETCH_OK does.
-    this.fetchCallbacks.set(requestId, callback);
-    await this.sendFetch(fetch, requestId, `${namespace}:${trackName}`);
+    const label = `${namespace}:${trackName}`;
+    const delivery = this.expectFetchStream(requestId, callback, label, false);
+    await this.sendFetch(fetch, delivery, label);
   }
 
   /**
@@ -764,6 +875,9 @@ export class TracksManager {
     joiningStart: bigint,
     callback: ObjectCallback,
   ): Promise<void> {
+    if (this.version !== Version.DRAFT_18) {
+      throw new Error("Joining FETCH is draft-18 only; draft-22 uses fills");
+    }
     this.logger.info(
       `Joining FETCH for subscription requestId=${joiningRequestId}, joiningStart=${joiningStart}`,
     );
@@ -777,8 +891,9 @@ export class TracksManager {
       parameters: [],
     };
 
-    this.fetchCallbacks.set(requestId, callback);
-    await this.sendFetch(fetch, requestId, `joining ${joiningRequestId}`);
+    const label = `joining ${joiningRequestId}`;
+    const delivery = this.expectFetchStream(requestId, callback, label, false);
+    await this.sendFetch(fetch, delivery, label);
   }
 
   /**
@@ -791,10 +906,16 @@ export class TracksManager {
    */
   private async sendFetch(
     fetch: Fetch,
-    requestId: bigint,
+    delivery: FetchDelivery,
     label: string,
   ): Promise<void> {
-    const stream = await RequestStream.open(this.wt, fetch);
+    let stream: RequestStream;
+    try {
+      stream = await RequestStream.open(this.wt, fetch, this.version);
+    } catch (error) {
+      delivery.cancel();
+      throw error;
+    }
     try {
       for (;;) {
         const msg = await stream.next();
@@ -813,10 +934,12 @@ export class TracksManager {
             `Fetch failed for ${label}: ${msg.errorReason} (code ${msg.errorCode})`,
           );
         }
-        this.logger.debug(`Ignoring ${msg.kind} while awaiting FETCH_OK`);
+        this.logger.debug(
+          `Ignoring ${ctrlTypeName(msg.kind)} while awaiting FETCH_OK`,
+        );
       }
     } catch (error) {
-      this.fetchCallbacks.delete(requestId);
+      delivery.cancel();
       stream.abort(error);
       throw error;
     }
@@ -831,35 +954,56 @@ export class TracksManager {
     this.logger.info(`Subscribing to track ${namespace}:${trackName}`);
 
     const requestId = this.getNextRequestId();
+    const label = `${namespace}:${trackName}`;
 
     // draft-18 moved subscriber priority, group order, forward and the filter
     // out of SUBSCRIBE's fixed fields and into Message Parameters. Only the
-    // filter is set here; the rest are left at their defaults, which is what
-    // this player wants anyway.
+    // filter, and in draft-22 the fill, are set here; the rest are left at
+    // their defaults, which is what this player wants anyway.
+    const parameters: Parameter[] = [
+      locationFilterParameter(options?.filter ?? relativeStartFilter(0n)),
+    ];
+    let fill: FetchDelivery | undefined;
+    if (options?.fill) {
+      if (this.version !== Version.DRAFT_22) {
+        throw new Error("A fill needs draft-22");
+      }
+      // The fill stream's FETCH_HEADER carries this SUBSCRIBE's Request ID,
+      // and it can arrive before SUBSCRIBE_OK, so it is routed from now on.
+      parameters.push(
+        fillParameter([locationFilterParameter(options.fill.filter)]),
+      );
+      fill = this.expectFetchStream(
+        requestId,
+        options.fill.callback,
+        `${label} fill`,
+        true,
+      );
+    }
     const subscribe: Subscribe = {
       kind: CtrlType.Subscribe,
       requestId,
       namespace: namespaceFields(namespace),
       name: encoder.encode(trackName),
-      parameters: [
-        subscriptionFilterParameter({
-          type: options?.filterType ?? FilterType.NextGroupStart,
-        }),
-      ],
+      parameters,
     };
 
     // The request's own bidirectional stream carries both the SUBSCRIBE and
     // every response to it, so there is no request-ID dispatch table and no
     // ambiguity about which subscription a response belongs to.
-    const stream = await RequestStream.open(this.wt, subscribe);
+    let stream: RequestStream;
+    try {
+      stream = await RequestStream.open(this.wt, subscribe, this.version);
+    } catch (error) {
+      fill?.cancel();
+      throw error;
+    }
 
     let subscribeOk: SubscribeOk;
     try {
-      subscribeOk = await this.awaitSubscribeOk(
-        stream,
-        `${namespace}:${trackName}`,
-      );
+      subscribeOk = await this.awaitSubscribeOk(stream, label);
     } catch (error) {
+      fill?.cancel();
       stream.abort(error);
       throw error;
     }
@@ -898,21 +1042,20 @@ export class TracksManager {
       trackAlias,
     );
     this.trackRegistry.registerCallback(trackAlias, deliverCallback);
-    // Keep the stream: closing it is how the subscription is ended.
+    // Keep the stream: cancelling it is how the subscription is ended.
     this.subscribeStreams.set(trackAlias, stream);
+    if (fill) {
+      this.subscriptionFills.set(trackAlias, fill);
+    }
 
     // PUBLISH_DONE and any later REQUEST_ERROR arrive on this same stream.
-    void this.drainSubscribeStream(
-      stream,
-      trackAlias,
-      `${namespace}:${trackName}`,
-    );
+    void this.drainSubscribeStream(stream, trackAlias, label);
 
     this.logger.info(
-      `Successfully subscribed to ${namespace}:${trackName} with trackAlias ${trackAlias}`,
+      `Successfully subscribed to ${label} with trackAlias ${trackAlias}`,
     );
 
-    return { trackAlias, requestId, largest };
+    return { trackAlias, requestId, largest, ...(fill && { fill }) };
   }
 
   /** Wait for SUBSCRIBE_OK, turning REQUEST_ERROR and silence into throws. */
@@ -959,7 +1102,9 @@ export class TracksManager {
           `Subscribe failed for ${label}: ${msg.errorReason} (code ${msg.errorCode})`,
         );
       }
-      this.logger.debug(`Ignoring ${msg.kind} while awaiting SUBSCRIBE_OK`);
+      this.logger.debug(
+        `Ignoring ${ctrlTypeName(msg.kind)} while awaiting SUBSCRIBE_OK`,
+      );
     }
   }
 
@@ -982,7 +1127,11 @@ export class TracksManager {
           );
           break;
         }
-        this.logger.debug(`Received ${msg.kind} on the ${label} subscription`);
+        // PUBLISH_STATE_NOTIFY (draft-22) reports state this player does not
+        // act on yet.
+        this.logger.debug(
+          `Received ${ctrlTypeName(msg.kind)} on the ${label} subscription`,
+        );
       }
     } catch (error) {
       if (!this.isClosing) {
@@ -990,6 +1139,7 @@ export class TracksManager {
       }
     } finally {
       this.subscribeStreams.delete(trackAlias);
+      this.subscriptionFills.delete(trackAlias);
     }
   }
 
@@ -1008,9 +1158,13 @@ export class TracksManager {
       );
     }
 
-    // draft-18 has no UNSUBSCRIBE message. Closing our side of the request
-    // stream is what ends the subscription (Section 10.7).
-    await stream.close();
+    // There is no UNSUBSCRIBE message. Ending the request stream is what ends
+    // the subscription: a FIN in draft-18 (Section 10.7), a reset in draft-22,
+    // where a FIN is not a cancellation (Section 6.4.2.2). The publisher
+    // resets any fill still running, and nothing here wants its rest.
+    this.subscriptionFills.get(trackAlias)?.cancel();
+    this.subscriptionFills.delete(trackAlias);
+    await stream.cancel();
     this.subscribeStreams.delete(trackAlias);
     this.trackRegistry.unregisterAllCallbacks(trackAlias);
 
