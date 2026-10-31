@@ -1,5 +1,7 @@
 /**
- * Reading a FETCH response stream (draft-18 Section 11.4.4).
+ * Reading a FETCH response stream (draft-18 Section 11.4.4), which draft-22
+ * also uses for fill fetch streams. The record format is the same in both;
+ * draft-22 adds one End of Range kind.
  *
  * draft-18 rewrote this completely. Every FETCH record now begins with
  * Serialization Flags that say which fields are on the wire at all, and almost
@@ -10,6 +12,7 @@
  */
 
 import { Reader } from "./stream";
+import { Version, draftName } from "./version";
 import { GroupOrder } from "./wire18";
 
 /**
@@ -43,6 +46,11 @@ export const enum EndOfRange {
   NonExistent = 0x8c,
   /** The publisher cannot determine their status. */
   Unknown = 0x10c,
+  /**
+   * A relay gave up waiting for them when the request's FILL_TIMEOUT ran out.
+   * Draft-22 only; in draft-18 it is an invalid Serialization Flags value.
+   */
+  TimedOut = 0x20c,
 }
 
 /** One record on a FETCH stream: an Object, or an End of Range indicator. */
@@ -69,6 +77,7 @@ export interface FetchObject {
 export class FetchStreamReader {
   #r: Reader;
   #groupOrder: GroupOrder;
+  #version: Version;
 
   #priorGroupId = 0n;
   #priorObjectId = 0n;
@@ -78,9 +87,14 @@ export class FetchStreamReader {
   #priorPriority = 0;
   #havePriorObject = false;
 
-  constructor(r: Reader, groupOrder: GroupOrder = GroupOrder.Ascending) {
+  constructor(
+    r: Reader,
+    groupOrder: GroupOrder = GroupOrder.Ascending,
+    version: Version = Version.DRAFT_18,
+  ) {
     this.#r = r;
     this.#groupOrder = groupOrder;
+    this.#version = version;
   }
 
   /** Read the next record, or null when the stream ends cleanly between records. */
@@ -211,9 +225,13 @@ export class FetchStreamReader {
    *   here desynchronises against every one of them.
    */
   async #readEndOfRange(kind: EndOfRange): Promise<FetchObject> {
-    if (kind !== EndOfRange.NonExistent && kind !== EndOfRange.Unknown) {
+    const valid =
+      kind === EndOfRange.NonExistent ||
+      kind === EndOfRange.Unknown ||
+      (kind === EndOfRange.TimedOut && this.#version === Version.DRAFT_22);
+    if (!valid) {
       throw new Error(
-        `FETCH: invalid serialization flags 0x${kind.toString(16)}`,
+        `FETCH: invalid serialization flags 0x${kind.toString(16)} in ${draftName(this.#version)}`,
       );
     }
     const groupId = await this.#r.u62();

@@ -1,6 +1,8 @@
 /**
- * draft-18 wire primitives: Key-Value-Pairs, Message Parameters, Subscription
- * Filters and control-message framing.
+ * Wire primitives: Key-Value-Pairs, Message Parameters, location filters and
+ * control-message framing, for draft-18 and draft-22. The two drafts share
+ * all of it except the parameter registry and the location filter's encoding,
+ * so those take the session's Version.
  *
  * These operate on plain byte buffers rather than the stream Reader/Writer,
  * because draft-18 frames every control message with an explicit length
@@ -10,6 +12,7 @@
  * back-patched, since vi64 lengths depend on the values.
  */
 
+import { Version, draftName } from "./version";
 import { VI64_MAX_LEN, encodeVi64, readVi64 } from "./vi64";
 
 /** Largest control-message body. Message Length is a fixed 16-bit field. */
@@ -210,7 +213,7 @@ export function readKvpListWithLength(r: ByteReader): KeyValuePair[] {
 }
 
 // ---------------------------------------------------------------------------
-// Message Parameters (Section 10.2)
+// Message Parameters (draft-18 Section 10.2, draft-22 Section 9.20)
 // ---------------------------------------------------------------------------
 
 export const PARAM_OBJECT_DELIVERY_TIMEOUT = 0x02n;
@@ -222,10 +225,22 @@ export const PARAM_LARGEST_OBJECT = 0x09n;
 export const PARAM_FILL_TIMEOUT = 0x0an;
 export const PARAM_FORWARD = 0x10n;
 export const PARAM_SUBSCRIBER_PRIORITY = 0x20n;
-export const PARAM_SUBSCRIPTION_FILTER = 0x21n;
+/**
+ * LOCATION_FILTER in draft-22 and SUBSCRIPTION_FILTER in draft-18: the same
+ * codepoint and purpose, encoded differently. See {@link LocationFilter}.
+ */
+export const PARAM_LOCATION_FILTER = 0x21n;
 export const PARAM_GROUP_ORDER = 0x22n;
+/** Draft-22 only. Asks the publisher for a fill fetch stream (Section 3.4). */
+export const PARAM_FILL_PARAMETERS = 0x23n;
+export const PARAM_SUBGROUP_FILTER = 0x25n;
+export const PARAM_OBJECT_ID_FILTER = 0x26n;
+export const PARAM_PRIORITY_FILTER = 0x27n;
+export const PARAM_OBJECT_PROPERTY_FILTER = 0x28n;
+export const PARAM_TRACK_PROPERTY_FILTER = 0x29n;
 export const PARAM_NEW_GROUP_REQUEST = 0x32n;
 export const PARAM_TRACK_NAMESPACE_PREFIX = 0x34n;
+export const PARAM_INCLUDE_PROPERTIES = 0x35n;
 
 /**
  * How a Message Parameter's value is encoded.
@@ -241,104 +256,135 @@ export const enum ParamEncoding {
   Location,
   Bytes,
   Namespace,
+  /** A location filter, whose wire form is per draft; see LocationFilter. */
+  LocationFilter,
+  /**
+   * A vi64 length, then a count-prefixed parameter block with a registry of
+   * its own. FILL_PARAMETERS is the one parameter that uses it.
+   */
+  Parameters,
 }
 
 interface ParamDef {
   name: string;
   encoding: ParamEncoding;
   repeatable: boolean;
+  /** The registry inside a ParamEncoding.Parameters value. */
+  nested?: ParamRegistry;
 }
 
-const PARAM_REGISTRY = new Map<bigint, ParamDef>([
+type ParamRegistry = Map<bigint, ParamDef>;
+
+function param(
+  name: string,
+  encoding: ParamEncoding,
+  repeatable = false,
+  nested?: ParamRegistry,
+): ParamDef {
+  return { name, encoding, repeatable, nested };
+}
+
+/**
+ * draft-18's table. SUBSCRIPTION_FILTER is a byte string whose content is the
+ * filter; LocationFilter's codec reads and writes it.
+ */
+const PARAMS_18: ParamRegistry = new Map([
   [
     PARAM_OBJECT_DELIVERY_TIMEOUT,
-    {
-      name: "OBJECT_DELIVERY_TIMEOUT",
-      encoding: ParamEncoding.Varint,
-      repeatable: false,
-    },
+    param("OBJECT_DELIVERY_TIMEOUT", ParamEncoding.Varint),
   ],
   [
     PARAM_AUTHORIZATION_TOKEN,
-    {
-      name: "AUTHORIZATION_TOKEN",
-      encoding: ParamEncoding.Bytes,
-      repeatable: true,
-    },
+    param("AUTHORIZATION_TOKEN", ParamEncoding.Bytes, true),
   ],
-  [
-    PARAM_RENDEZVOUS_TIMEOUT,
-    {
-      name: "RENDEZVOUS_TIMEOUT",
-      encoding: ParamEncoding.Varint,
-      repeatable: false,
-    },
-  ],
+  [PARAM_RENDEZVOUS_TIMEOUT, param("RENDEZVOUS_TIMEOUT", ParamEncoding.Varint)],
   [
     PARAM_SUBGROUP_DELIVERY_TIMEOUT,
-    {
-      name: "SUBGROUP_DELIVERY_TIMEOUT",
-      encoding: ParamEncoding.Varint,
-      repeatable: false,
-    },
+    param("SUBGROUP_DELIVERY_TIMEOUT", ParamEncoding.Varint),
   ],
-  [
-    PARAM_EXPIRES,
-    { name: "EXPIRES", encoding: ParamEncoding.Varint, repeatable: false },
-  ],
-  [
-    PARAM_LARGEST_OBJECT,
-    {
-      name: "LARGEST_OBJECT",
-      encoding: ParamEncoding.Location,
-      repeatable: false,
-    },
-  ],
-  [
-    PARAM_FILL_TIMEOUT,
-    { name: "FILL_TIMEOUT", encoding: ParamEncoding.Varint, repeatable: false },
-  ],
-  [
-    PARAM_FORWARD,
-    { name: "FORWARD", encoding: ParamEncoding.Uint8, repeatable: false },
-  ],
+  [PARAM_EXPIRES, param("EXPIRES", ParamEncoding.Varint)],
+  [PARAM_LARGEST_OBJECT, param("LARGEST_OBJECT", ParamEncoding.Location)],
+  [PARAM_FILL_TIMEOUT, param("FILL_TIMEOUT", ParamEncoding.Varint)],
+  [PARAM_FORWARD, param("FORWARD", ParamEncoding.Uint8)],
   [
     PARAM_SUBSCRIBER_PRIORITY,
-    {
-      name: "SUBSCRIBER_PRIORITY",
-      encoding: ParamEncoding.Uint8,
-      repeatable: false,
-    },
+    param("SUBSCRIBER_PRIORITY", ParamEncoding.Uint8),
   ],
   [
-    PARAM_SUBSCRIPTION_FILTER,
-    {
-      name: "SUBSCRIPTION_FILTER",
-      encoding: ParamEncoding.Bytes,
-      repeatable: false,
-    },
+    PARAM_LOCATION_FILTER,
+    param("SUBSCRIPTION_FILTER", ParamEncoding.LocationFilter),
   ],
-  [
-    PARAM_GROUP_ORDER,
-    { name: "GROUP_ORDER", encoding: ParamEncoding.Uint8, repeatable: false },
-  ],
-  [
-    PARAM_NEW_GROUP_REQUEST,
-    {
-      name: "NEW_GROUP_REQUEST",
-      encoding: ParamEncoding.Varint,
-      repeatable: false,
-    },
-  ],
+  [PARAM_GROUP_ORDER, param("GROUP_ORDER", ParamEncoding.Uint8)],
+  [PARAM_NEW_GROUP_REQUEST, param("NEW_GROUP_REQUEST", ParamEncoding.Varint)],
   [
     PARAM_TRACK_NAMESPACE_PREFIX,
-    {
-      name: "TRACK_NAMESPACE_PREFIX",
-      encoding: ParamEncoding.Namespace,
-      repeatable: false,
-    },
+    param("TRACK_NAMESPACE_PREFIX", ParamEncoding.Namespace),
   ],
 ]);
+
+/**
+ * The registry inside FILL_PARAMETERS (draft-22 Table 7). It is a scope of its
+ * own: anything not listed is a PROTOCOL_VIOLATION there, even a parameter the
+ * enclosing message could carry.
+ */
+const FILL_PARAMS_22: ParamRegistry = new Map([
+  [PARAM_FILL_TIMEOUT, param("FILL_TIMEOUT", ParamEncoding.Varint)],
+  [
+    PARAM_SUBSCRIBER_PRIORITY,
+    param("SUBSCRIBER_PRIORITY", ParamEncoding.Uint8),
+  ],
+  [
+    PARAM_LOCATION_FILTER,
+    param("LOCATION_FILTER", ParamEncoding.LocationFilter),
+  ],
+  [PARAM_GROUP_ORDER, param("GROUP_ORDER", ParamEncoding.Uint8)],
+  [PARAM_SUBGROUP_FILTER, param("SUBGROUP_FILTER", ParamEncoding.Bytes, true)],
+  [PARAM_OBJECT_ID_FILTER, param("OBJECTID_FILTER", ParamEncoding.Bytes, true)],
+  [PARAM_PRIORITY_FILTER, param("PRIORITY_FILTER", ParamEncoding.Bytes, true)],
+  [
+    PARAM_OBJECT_PROPERTY_FILTER,
+    param("OBJECT_PROPERTY_FILTER", ParamEncoding.Bytes, true),
+  ],
+]);
+
+/**
+ * draft-22's table: draft-18's, with the filter renamed and re-encoded, plus
+ * the fill, the range filters and INCLUDE_PROPERTIES.
+ *
+ * LOCATION_FILTER carries no Length although its type is odd: Section 9.20
+ * gives each parameter its own encoding instead of the Key-Value-Pair parity
+ * rule. FILL_PARAMETERS is length-prefixed and its value starts with a count.
+ * Both readings are what moq-dev, Meta's relay and moqtail converged on in WG
+ * issue #1991. The range filters are kept as their raw bytes; this player
+ * never sends one.
+ */
+const PARAMS_22: ParamRegistry = new Map([
+  ...PARAMS_18,
+  [
+    PARAM_LOCATION_FILTER,
+    param("LOCATION_FILTER", ParamEncoding.LocationFilter),
+  ],
+  [
+    PARAM_FILL_PARAMETERS,
+    param("FILL_PARAMETERS", ParamEncoding.Parameters, false, FILL_PARAMS_22),
+  ],
+  [PARAM_SUBGROUP_FILTER, param("SUBGROUP_FILTER", ParamEncoding.Bytes, true)],
+  [PARAM_OBJECT_ID_FILTER, param("OBJECTID_FILTER", ParamEncoding.Bytes, true)],
+  [PARAM_PRIORITY_FILTER, param("PRIORITY_FILTER", ParamEncoding.Bytes, true)],
+  [
+    PARAM_OBJECT_PROPERTY_FILTER,
+    param("OBJECT_PROPERTY_FILTER", ParamEncoding.Bytes, true),
+  ],
+  [
+    PARAM_TRACK_PROPERTY_FILTER,
+    param("TRACK_PROPERTY_FILTER", ParamEncoding.Bytes, true),
+  ],
+  [PARAM_INCLUDE_PROPERTIES, param("INCLUDE_PROPERTIES", ParamEncoding.Uint8)],
+]);
+
+function registryFor(version: Version): ParamRegistry {
+  return version === Version.DRAFT_22 ? PARAMS_22 : PARAMS_18;
+}
 
 /** A Location: a Group and an Object (Section 1.4.2). */
 export interface Location {
@@ -353,22 +399,39 @@ export interface Parameter {
   location?: Location;
   bytes?: Uint8Array;
   namespace?: Uint8Array[];
+  filter?: LocationFilter;
+  /** The nested block of FILL_PARAMETERS. */
+  parameters?: Parameter[];
 }
 
+/** The parameter's name, as draft-22 has it. */
 export function parameterName(type: bigint): string {
-  return PARAM_REGISTRY.get(type)?.name ?? `UNKNOWN(0x${type.toString(16)})`;
+  return PARAMS_22.get(type)?.name ?? `UNKNOWN(0x${type.toString(16)})`;
 }
 
 /** Write a count-prefixed Message Parameter block, types delta-encoded. */
-export function writeParameters(w: ByteWriter, params: Parameter[]): void {
+export function writeParameters(
+  w: ByteWriter,
+  params: Parameter[],
+  version: Version,
+): void {
+  writeParameterBlock(w, params, version, registryFor(version));
+}
+
+function writeParameterBlock(
+  w: ByteWriter,
+  params: Parameter[],
+  version: Version,
+  registry: ParamRegistry,
+): void {
   const sorted = [...params].sort((a, b) => (a.type < b.type ? -1 : 1));
   w.vi64(BigInt(sorted.length));
   let prev = 0n;
   for (const p of sorted) {
-    const def = PARAM_REGISTRY.get(p.type);
+    const def = registry.get(p.type);
     if (!def) {
       throw new Error(
-        `wire18: cannot encode unknown parameter 0x${p.type.toString(16)}`,
+        `wire18: parameter 0x${p.type.toString(16)} cannot be sent here in ${draftName(version)}`,
       );
     }
     w.vi64(p.type - prev);
@@ -396,12 +459,38 @@ export function writeParameters(w: ByteWriter, params: Parameter[]): void {
       case ParamEncoding.Namespace:
         w.namespace(p.namespace ?? []);
         break;
+      case ParamEncoding.LocationFilter:
+        writeLocationFilter(
+          w,
+          p.filter ?? { type: LocationFilterType.None },
+          version,
+        );
+        break;
+      case ParamEncoding.Parameters: {
+        const inner = new ByteWriter(64);
+        writeParameterBlock(
+          inner,
+          p.parameters ?? [],
+          version,
+          def.nested ?? new Map(),
+        );
+        w.lengthPrefixed(inner.take());
+        break;
+      }
     }
   }
 }
 
 /** Read a count-prefixed Message Parameter block. */
-export function readParameters(r: ByteReader): Parameter[] {
+export function readParameters(r: ByteReader, version: Version): Parameter[] {
+  return readParameterBlock(r, version, registryFor(version));
+}
+
+function readParameterBlock(
+  r: ByteReader,
+  version: Version,
+  registry: ParamRegistry,
+): Parameter[] {
   const count = Number(r.vi64());
   const params: Parameter[] = [];
   const seen = new Set<bigint>();
@@ -409,12 +498,12 @@ export function readParameters(r: ByteReader): Parameter[] {
   for (let i = 0; i < count; i += 1) {
     const type = prev + r.vi64();
     prev = type;
-    const def = PARAM_REGISTRY.get(type);
+    const def = registry.get(type);
     if (!def) {
       // Without the registry the value's length is unknown, so the rest of the
-      // block cannot be found. Section 10.2 makes this a PROTOCOL_VIOLATION.
+      // block cannot be found. The draft makes this a PROTOCOL_VIOLATION.
       throw new Error(
-        `wire18: unknown message parameter 0x${type.toString(16)}`,
+        `wire18: unknown message parameter 0x${type.toString(16)} in ${draftName(version)}`,
       );
     }
     if (seen.has(type) && !def.repeatable) {
@@ -438,6 +527,22 @@ export function readParameters(r: ByteReader): Parameter[] {
       case ParamEncoding.Namespace:
         params.push({ type, namespace: r.namespace() });
         break;
+      case ParamEncoding.LocationFilter:
+        params.push({ type, filter: readLocationFilter(r, version) });
+        break;
+      case ParamEncoding.Parameters: {
+        const inner = new ByteReader(r.lengthPrefixed());
+        const nested = readParameterBlock(
+          inner,
+          version,
+          def.nested ?? new Map(),
+        );
+        if (!inner.done) {
+          throw new Error(`wire18: trailing bytes in ${def.name}`);
+        }
+        params.push({ type, parameters: nested });
+        break;
+      }
     }
   }
   return params;
@@ -451,71 +556,287 @@ export function findParameter(
 }
 
 // ---------------------------------------------------------------------------
-// Subscription Filter (Section 5.1.2)
+// Location filters (draft-22 Section 9.20.9, draft-18 Section 5.1.2)
 // ---------------------------------------------------------------------------
 
-export enum FilterType {
-  /** Start at {Largest Object.Group + 1, 0}, open ended. */
+/**
+ * Which Locations a filter admits, and which of its fields are on the wire.
+ *
+ * The values are draft-22's. Draft-18's SUBSCRIPTION_FILTER has a Filter Type
+ * of its own, numbered 1-4; the codec maps between the two, so the rest of the
+ * player speaks only these.
+ */
+export enum LocationFilterType {
+  /** Every Location. What an absent filter means. */
+  None = 0x0,
+  /**
+   * Starts `start.group` Groups before the Next Group and is open ended: 0 is
+   * the Next Group, 1 the current one.
+   */
+  RelativeStart = 0x1,
+  /** Starts at `start` and is open ended. */
+  AbsoluteStart = 0x2,
+  /** Starts at `start` and ends with the last Object of Group start.group + endGroupDelta. */
+  AbsoluteGroupEnd = 0x3,
+  /** Starts at `start` and ends at {start.group + endGroupDelta, endObject}, inclusive. */
+  AbsoluteRange = 0x4,
+  /** Starts at the Next Object, {Largest.group, Largest.object + 1}, and is open ended. */
+  NextObject = 0x5,
+}
+
+/**
+ * The value of LOCATION_FILTER (draft-22), or of draft-18's SUBSCRIPTION_FILTER.
+ *
+ * `start` is the first Location for the three absolute types. RelativeStart
+ * uses only `start.group`, which counts Groups back from the Next Group rather
+ * than naming one.
+ */
+export interface LocationFilter {
+  type: LocationFilterType;
+  start?: Location;
+  endGroupDelta?: bigint;
+  endObject?: bigint;
+}
+
+/** Join at the Next Object, which can be in the middle of a Group. */
+export function nextObjectFilter(): LocationFilter {
+  return { type: LocationFilterType.NextObject };
+}
+
+/** Start `groupsBack` Groups before the Next Group: 0 waits for it, 1 is the current Group. */
+export function relativeStartFilter(groupsBack: bigint): LocationFilter {
+  return {
+    type: LocationFilterType.RelativeStart,
+    start: { group: groupsBack, object: 0n },
+  };
+}
+
+/** Every Object from `start` through the end of Group `endGroup`. */
+export function absoluteGroupEndFilter(
+  start: Location,
+  endGroup: bigint,
+): LocationFilter {
+  if (endGroup < start.group) {
+    throw new Error("wire18: filter ends before it starts");
+  }
+  return {
+    type: LocationFilterType.AbsoluteGroupEnd,
+    start,
+    endGroupDelta: endGroup - start.group,
+  };
+}
+
+/** Every Object from `start` through `end`, both inclusive. */
+export function absoluteRangeFilter(
+  start: Location,
+  end: Location,
+): LocationFilter {
+  if (
+    end.group < start.group ||
+    (end.group === start.group && end.object < start.object)
+  ) {
+    throw new Error("wire18: filter ends before it starts");
+  }
+  return {
+    type: LocationFilterType.AbsoluteRange,
+    start,
+    endGroupDelta: end.group - start.group,
+    endObject: end.object,
+  };
+}
+
+/** Build the LOCATION_FILTER (draft-18: SUBSCRIPTION_FILTER) parameter. */
+export function locationFilterParameter(filter: LocationFilter): Parameter {
+  return { type: PARAM_LOCATION_FILTER, filter };
+}
+
+/** Build FILL_PARAMETERS, which asks a draft-22 publisher for a fill. */
+export function fillParameter(inner: Parameter[]): Parameter {
+  return { type: PARAM_FILL_PARAMETERS, parameters: inner };
+}
+
+/** Draft-18's SUBSCRIPTION_FILTER Filter Types (draft-18 Section 5.1.2). */
+const enum FilterType18 {
   NextGroupStart = 0x1,
-  /** Start at {Largest Object.Group, Largest Object.Object + 1}, open ended. */
   LargestObject = 0x2,
-  /** Start at an explicit Location, open ended. */
   AbsoluteStart = 0x3,
-  /** Start at an explicit Location, end at a Group derived from it. */
   AbsoluteRange = 0x4,
 }
 
-export interface SubscriptionFilter {
-  type: FilterType;
-  /** Present for AbsoluteStart and AbsoluteRange. */
-  start?: Location;
-  /** Present only for AbsoluteRange; the last Group is start.group + this. */
-  endGroupDelta?: bigint;
-}
-
-function filterHasStart(t: FilterType): boolean {
-  return t === FilterType.AbsoluteStart || t === FilterType.AbsoluteRange;
-}
-
-/** Encode a filter as the SUBSCRIPTION_FILTER parameter's value. */
-export function encodeSubscriptionFilter(f: SubscriptionFilter): Uint8Array {
-  const w = new ByteWriter(32);
-  w.vi64(BigInt(f.type));
-  if (filterHasStart(f.type)) {
-    w.vi64(f.start?.group ?? 0n).vi64(f.start?.object ?? 0n);
+function writeLocationFilter(
+  w: ByteWriter,
+  f: LocationFilter,
+  version: Version,
+): void {
+  if (version === Version.DRAFT_18) {
+    w.lengthPrefixed(encodeFilter18(f));
+    return;
   }
-  if (f.type === FilterType.AbsoluteRange) {
-    w.vi64(f.endGroupDelta ?? 0n);
+  // Draft-22: no Length. The Location Filter Type says which fields follow.
+  const start = f.start ?? { group: 0n, object: 0n };
+  w.vi64(BigInt(f.type));
+  switch (f.type) {
+    case LocationFilterType.RelativeStart:
+      w.vi64(start.group);
+      break;
+    case LocationFilterType.AbsoluteStart:
+      w.vi64(start.group).vi64(start.object);
+      break;
+    case LocationFilterType.AbsoluteGroupEnd:
+      w.vi64(start.group)
+        .vi64(start.object)
+        .vi64(f.endGroupDelta ?? 0n);
+      break;
+    case LocationFilterType.AbsoluteRange:
+      w.vi64(start.group)
+        .vi64(start.object)
+        .vi64(f.endGroupDelta ?? 0n);
+      w.vi64(f.endObject ?? 0n);
+      break;
+  }
+}
+
+/**
+ * Write draft-18's SUBSCRIPTION_FILTER body. Every draft-18 type is one of
+ * draft-22's under another number: Next Group Start is a relative start of 0
+ * Groups, Largest Object is the Next Object, and Absolute Range ends with a
+ * whole Group. There is no "no filter", but an Absolute Start at {0, 0} admits
+ * the same. A relative start further back, or an end inside a Group, cannot be
+ * said at all, so those throw rather than ask for something else.
+ */
+function encodeFilter18(f: LocationFilter): Uint8Array {
+  const w = new ByteWriter(32);
+  const start = f.start ?? { group: 0n, object: 0n };
+  switch (f.type) {
+    case LocationFilterType.None:
+      w.vi64(BigInt(FilterType18.AbsoluteStart)).vi64(0n).vi64(0n);
+      break;
+    case LocationFilterType.RelativeStart:
+      if (start.group !== 0n) {
+        throw new Error(
+          "wire18: draft-18 has no filter starting before the Next Group",
+        );
+      }
+      w.vi64(BigInt(FilterType18.NextGroupStart));
+      break;
+    case LocationFilterType.NextObject:
+      w.vi64(BigInt(FilterType18.LargestObject));
+      break;
+    case LocationFilterType.AbsoluteStart:
+      w.vi64(BigInt(FilterType18.AbsoluteStart));
+      w.vi64(start.group).vi64(start.object);
+      break;
+    case LocationFilterType.AbsoluteGroupEnd:
+      w.vi64(BigInt(FilterType18.AbsoluteRange));
+      w.vi64(start.group)
+        .vi64(start.object)
+        .vi64(f.endGroupDelta ?? 0n);
+      break;
+    default:
+      throw new Error(
+        `wire18: draft-18 cannot express a ${LocationFilterType[f.type]} filter`,
+      );
   }
   return w.take();
 }
 
-/** Decode a SUBSCRIPTION_FILTER parameter value. */
-export function decodeSubscriptionFilter(data: Uint8Array): SubscriptionFilter {
-  const r = new ByteReader(data);
-  const type = Number(r.vi64()) as FilterType;
-  if (!(type in FilterType)) {
-    throw new Error(`wire18: invalid subscription filter type ${type}`);
+function readLocationFilter(r: ByteReader, version: Version): LocationFilter {
+  if (version === Version.DRAFT_18) {
+    const inner = new ByteReader(r.lengthPrefixed());
+    const f = decodeFilter18(inner);
+    if (!inner.done) {
+      throw new Error("wire18: trailing bytes in subscription filter");
+    }
+    return f;
   }
-  const f: SubscriptionFilter = { type };
-  if (filterHasStart(type)) {
-    f.start = { group: r.vi64(), object: r.vi64() };
+  const type = Number(r.vi64()) as LocationFilterType;
+  if (!(type in LocationFilterType)) {
+    throw new Error(`wire18: invalid location filter type ${type}`);
   }
-  if (type === FilterType.AbsoluteRange) {
-    f.endGroupDelta = r.vi64();
-  }
-  if (!r.done) {
-    throw new Error("wire18: trailing bytes in subscription filter");
+  const f: LocationFilter = { type };
+  switch (type) {
+    case LocationFilterType.RelativeStart:
+      f.start = { group: r.vi64(), object: 0n };
+      break;
+    case LocationFilterType.AbsoluteStart:
+      f.start = { group: r.vi64(), object: r.vi64() };
+      break;
+    case LocationFilterType.AbsoluteGroupEnd:
+      f.start = { group: r.vi64(), object: r.vi64() };
+      f.endGroupDelta = r.vi64();
+      break;
+    case LocationFilterType.AbsoluteRange:
+      f.start = { group: r.vi64(), object: r.vi64() };
+      f.endGroupDelta = r.vi64();
+      f.endObject = r.vi64();
+      break;
   }
   return f;
 }
 
-/** Build the SUBSCRIPTION_FILTER parameter. */
-export function subscriptionFilterParameter(f: SubscriptionFilter): Parameter {
-  return {
-    type: PARAM_SUBSCRIPTION_FILTER,
-    bytes: encodeSubscriptionFilter(f),
-  };
+function decodeFilter18(r: ByteReader): LocationFilter {
+  const type = Number(r.vi64());
+  switch (type) {
+    case FilterType18.NextGroupStart:
+      return relativeStartFilter(0n);
+    case FilterType18.LargestObject:
+      return nextObjectFilter();
+    case FilterType18.AbsoluteStart:
+      return {
+        type: LocationFilterType.AbsoluteStart,
+        start: { group: r.vi64(), object: r.vi64() },
+      };
+    case FilterType18.AbsoluteRange:
+      return {
+        type: LocationFilterType.AbsoluteGroupEnd,
+        start: { group: r.vi64(), object: r.vi64() },
+        endGroupDelta: r.vi64(),
+      };
+  }
+  throw new Error(`wire18: invalid subscription filter type ${type}`);
+}
+
+/** The largest Group ID, 2^64-1. */
+const MAX_GROUP = (1n << 64n) - 1n;
+
+/**
+ * Turn a filter into draft-18's explicit FETCH Start and End Locations, the
+ * End being the last Object plus one, or Object 0 for the whole Group
+ * (draft-18 Section 10.12.1). Draft-18 FETCH has no relative form and no way
+ * to say "up to whatever is largest", so an open end becomes the whole of the
+ * last possible Group, which the publisher clamps to Largest Object.
+ */
+export function fetchRange18(f: LocationFilter): {
+  start: Location;
+  end: Location;
+} {
+  const start = f.start ?? { group: 0n, object: 0n };
+  const lastGroup = start.group + (f.endGroupDelta ?? 0n);
+  switch (f.type) {
+    case LocationFilterType.None:
+      return {
+        start: { group: 0n, object: 0n },
+        end: { group: MAX_GROUP, object: 0n },
+      };
+    case LocationFilterType.AbsoluteStart:
+      return { start, end: { group: MAX_GROUP, object: 0n } };
+    case LocationFilterType.AbsoluteGroupEnd:
+      return { start, end: { group: lastGroup, object: 0n } };
+    case LocationFilterType.AbsoluteRange: {
+      // An End of Object 2^64-1 is the whole Group, and +1 would not fit.
+      const endObject = f.endObject ?? 0n;
+      return {
+        start,
+        end: {
+          group: lastGroup,
+          object: endObject === MAX_GROUP ? 0n : endObject + 1n,
+        },
+      };
+    }
+  }
+  throw new Error(
+    `wire18: draft-18 FETCH cannot express a ${LocationFilterType[f.type]} range`,
+  );
 }
 
 /** Group delivery order (Section 5.1.1). */

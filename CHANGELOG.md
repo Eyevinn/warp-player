@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MOQ Transport draft-22 alongside draft-18: the player offers `moqt-22` and
+  `moqt-18`, and a **Protocol Version** selector or `?draft=` pins one.
+- On draft-22 the catalog is joined with a fill of its current group, with a
+  FETCH of that group when no fill arrives.
+
 ### Fixed
 
 - A request abandoned after an error now resets its stream. The reset used to

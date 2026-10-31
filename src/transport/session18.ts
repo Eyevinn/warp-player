@@ -1,6 +1,6 @@
 /**
- * The draft-18 session shape: a pair of unidirectional control streams, and one
- * bidirectional stream per request.
+ * The session shape draft-18 introduced and draft-22 keeps: a pair of
+ * unidirectional control streams, and one bidirectional stream per request.
  *
  * draft-16 put everything on a single bidirectional control stream and matched
  * responses to requests by Request ID. draft-18 replaces both halves of that:
@@ -16,6 +16,8 @@
  * - **Each request owns a bidirectional stream.** The stream *is* the request's
  *   identity, so responses carry no Request ID and there is no dispatch table
  *   to keep. Closing the stream is how a request ends.
+ *
+ * Every message is encoded for the session's Version, which the ALPN fixed.
  */
 
 import { ILogger, LoggerFactory } from "../logger";
@@ -29,6 +31,7 @@ import {
   StreamType,
 } from "./messages18";
 import { Reader, Writer } from "./stream";
+import { Version } from "./version";
 
 /**
  * Read one length-framed control message from `r`.
@@ -38,13 +41,14 @@ import { Reader, Writer } from "./stream";
  */
 async function readCtrlMessage(
   r: Reader,
+  version: Version,
   onControlStream: boolean,
 ): Promise<CtrlMessage | null> {
   if (await r.done()) {
     return null;
   }
   const type = Number(await r.u62()) as CtrlType;
-  return readCtrlBody(r, type, onControlStream);
+  return readCtrlBody(r, type, version, onControlStream);
 }
 
 /**
@@ -58,13 +62,14 @@ async function readCtrlMessage(
 export async function readCtrlBody(
   r: Reader,
   type: CtrlType,
+  version: Version,
   onControlStream: boolean,
 ): Promise<CtrlMessage> {
   const hi = await r.u8();
   const lo = await r.u8();
   const length = (hi << 8) | lo;
   const body = length > 0 ? await r.read(length) : new Uint8Array();
-  return decodeCtrlBody(type, body, onControlStream);
+  return decodeCtrlBody(type, body, version, onControlStream);
 }
 
 /**
@@ -75,11 +80,13 @@ export async function readCtrlBody(
  */
 export class ControlStreamPair {
   #writer: Writer;
+  #version: Version;
   #logger: ILogger;
   #peerSetup: CtrlMessage | null = null;
 
-  private constructor(writer: Writer, logger: ILogger) {
+  private constructor(writer: Writer, version: Version, logger: ILogger) {
     this.#writer = writer;
+    this.#version = version;
     this.#logger = logger;
   }
 
@@ -93,6 +100,7 @@ export class ControlStreamPair {
   static async establish(
     wt: WebTransport,
     setup: CtrlMessage,
+    version: Version,
     acceptControlStream: () => Promise<Reader>,
   ): Promise<ControlStreamPair> {
     const logger = LoggerFactory.getInstance().getLogger("ControlStream");
@@ -101,7 +109,7 @@ export class ControlStreamPair {
     const writer = new Writer(stream);
     // encodeCtrlMessage writes SETUP's type varint 0x2F00 first, which is also
     // the unidirectional stream type. One write serves both.
-    await writer.write(encodeCtrlMessage(setup));
+    await writer.write(encodeCtrlMessage(setup, version));
     logger.info("Sent SETUP on our control stream");
 
     let resolveReady!: () => void;
@@ -111,14 +119,19 @@ export class ControlStreamPair {
       rejectReady = reject;
     });
 
-    const pair = new ControlStreamPair(writer, logger);
+    const pair = new ControlStreamPair(writer, version, logger);
 
     void (async () => {
       try {
         const reader = await acceptControlStream();
         // The stream type varint has already been consumed by the sniffing
         // accept loop, and it is SETUP's type, so read the body directly.
-        const peerSetup = await readCtrlBody(reader, CtrlType.Setup, true);
+        const peerSetup = await readCtrlBody(
+          reader,
+          CtrlType.Setup,
+          version,
+          true,
+        );
         pair.#peerSetup = peerSetup;
         logger.info("Received peer SETUP");
         resolveReady();
@@ -137,7 +150,7 @@ export class ControlStreamPair {
   }
 
   async send(msg: CtrlMessage): Promise<void> {
-    await this.#writer.write(encodeCtrlMessage(msg));
+    await this.#writer.write(encodeCtrlMessage(msg, this.#version));
   }
 
   /**
@@ -148,7 +161,7 @@ export class ControlStreamPair {
    */
   async #readLoop(reader: Reader): Promise<void> {
     for (;;) {
-      const msg = await readCtrlMessage(reader, true);
+      const msg = await readCtrlMessage(reader, this.#version, true);
       if (msg === null) {
         return;
       }
@@ -175,12 +188,19 @@ export class ControlStreamPair {
 export class RequestStream {
   #reader: Reader;
   #writer: Writer;
+  #version: Version;
   #logger: ILogger;
   #closed = false;
 
-  private constructor(reader: Reader, writer: Writer, logger: ILogger) {
+  private constructor(
+    reader: Reader,
+    writer: Writer,
+    version: Version,
+    logger: ILogger,
+  ) {
     this.#reader = reader;
     this.#writer = writer;
+    this.#version = version;
     this.#logger = logger;
   }
 
@@ -188,14 +208,18 @@ export class RequestStream {
   static async open(
     wt: WebTransport,
     open: CtrlMessage,
+    version: Version,
   ): Promise<RequestStream> {
     const logger = LoggerFactory.getInstance().getLogger("RequestStream");
+    // Encode before opening, so a message this draft cannot carry fails
+    // without leaving a stream behind.
+    const encoded = encodeCtrlMessage(open, version);
     const stream = await wt.createBidirectionalStream();
     const writer = new Writer(stream.writable);
     const reader = new Reader(new Uint8Array(), stream.readable);
-    await writer.write(encodeCtrlMessage(open));
+    await writer.write(encoded);
     logger.debug(`Opened request stream with ${ctrlTypeName(open.kind)}`);
-    return new RequestStream(reader, writer, logger);
+    return new RequestStream(reader, writer, version, logger);
   }
 
   /**
@@ -206,19 +230,21 @@ export class RequestStream {
     if (this.#closed) {
       return null;
     }
-    return readCtrlMessage(this.#reader, false);
+    return readCtrlMessage(this.#reader, this.#version, false);
   }
 
   /** Send a follow-up message, such as REQUEST_UPDATE. */
   async send(msg: CtrlMessage): Promise<void> {
-    await this.#writer.write(encodeCtrlMessage(msg));
+    await this.#writer.write(encodeCtrlMessage(msg, this.#version));
   }
 
   /**
-   * End the request.
+   * Finish our direction of the stream with a FIN.
    *
-   * Closing our side of a request stream is draft-18's replacement for
-   * UNSUBSCRIBE and UNANNOUNCE: there is no separate message for either.
+   * In draft-18 this ends the request: it is the replacement for UNSUBSCRIBE
+   * and UNANNOUNCE, for which there is no separate message. In draft-22 a FIN
+   * only says we have nothing more to send (Section 6.4.2.2); ending a request
+   * there is {@link cancel}.
    */
   async close(): Promise<void> {
     if (this.#closed) {
@@ -230,6 +256,19 @@ export class RequestStream {
     } catch (e) {
       this.#logger.debug(`Closing request stream writer: ${e}`);
     }
+  }
+
+  /**
+   * End the request the way the session's draft says to: a FIN in draft-18,
+   * and in draft-22 RESET_STREAM on our direction plus STOP_SENDING on the
+   * peer's (Section 6.4.2.3), with the CANCELLED error code.
+   */
+  async cancel(): Promise<void> {
+    if (this.#version === Version.DRAFT_18) {
+      await this.close();
+      return;
+    }
+    this.abort(cancelledError());
   }
 
   /**
@@ -248,6 +287,43 @@ export class RequestStream {
     this.#reader.cancel(reason).catch((e) => {
       this.#logger.debug(`Stopping request stream: ${e}`);
     });
+  }
+}
+
+/** The stream error code CANCELLED (draft-22 Section 12.5). */
+const STREAM_ERROR_CANCELLED = 0x1;
+
+/**
+ * A reason that makes a browser reset a stream with CANCELLED rather than 0.
+ * WebTransport takes the code from a WebTransportError's streamErrorCode.
+ *
+ * The constructor has two shapes in the wild: the spec's (message, options),
+ * and Chromium's older single init dictionary, which throws a TypeError when
+ * handed a string. Where neither works, or there is no class at all (node, in
+ * tests), the reset goes out with code 0, which still cancels the request.
+ */
+function cancelledError(): unknown {
+  if (typeof WebTransportError === "undefined") {
+    return "cancelled";
+  }
+  try {
+    return new WebTransportError("cancelled", {
+      streamErrorCode: STREAM_ERROR_CANCELLED,
+    });
+  } catch {
+    // Chromium's shape.
+  }
+  try {
+    const LegacyWebTransportError = WebTransportError as unknown as new (init: {
+      message: string;
+      streamErrorCode: number;
+    }) => WebTransportError;
+    return new LegacyWebTransportError({
+      message: "cancelled",
+      streamErrorCode: STREAM_ERROR_CANCELLED,
+    });
+  } catch {
+    return "cancelled";
   }
 }
 
