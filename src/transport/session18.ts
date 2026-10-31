@@ -175,17 +175,10 @@ export class ControlStreamPair {
 export class RequestStream {
   #reader: Reader;
   #writer: Writer;
-  #stream: WebTransportBidirectionalStream;
   #logger: ILogger;
   #closed = false;
 
-  private constructor(
-    stream: WebTransportBidirectionalStream,
-    reader: Reader,
-    writer: Writer,
-    logger: ILogger,
-  ) {
-    this.#stream = stream;
+  private constructor(reader: Reader, writer: Writer, logger: ILogger) {
     this.#reader = reader;
     this.#writer = writer;
     this.#logger = logger;
@@ -202,7 +195,7 @@ export class RequestStream {
     const reader = new Reader(new Uint8Array(), stream.readable);
     await writer.write(encodeCtrlMessage(open));
     logger.debug(`Opened request stream with ${ctrlTypeName(open.kind)}`);
-    return new RequestStream(stream, reader, writer, logger);
+    return new RequestStream(reader, writer, logger);
   }
 
   /**
@@ -239,18 +232,22 @@ export class RequestStream {
     }
   }
 
-  /** Abandon the request, which is a reset rather than a graceful close. */
+  /**
+   * Abandon the request: RESET_STREAM on our direction and STOP_SENDING on
+   * the peer's. Both go through the Writer and Reader, which hold the
+   * streams' locks; the streams themselves refuse to abort while locked.
+   */
   abort(reason?: unknown): void {
     if (this.#closed) {
       return;
     }
     this.#closed = true;
-    try {
-      this.#stream.writable.abort(reason);
-      void this.#stream.readable.cancel(reason);
-    } catch (e) {
-      this.#logger.debug(`Aborting request stream: ${e}`);
-    }
+    this.#writer.abort(reason).catch((e) => {
+      this.#logger.debug(`Resetting request stream: ${e}`);
+    });
+    this.#reader.cancel(reason).catch((e) => {
+      this.#logger.debug(`Stopping request stream: ${e}`);
+    });
   }
 }
 
