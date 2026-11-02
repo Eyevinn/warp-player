@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-02
+
+The player speaks MOQ Transport draft-22 alongside draft-18. Pair this release
+with moqlivemock v0.18.0, whose mlmpub and mlmrel serve the catalog fill that
+the draft-22 join asks for; from a server that sends none, the player fetches
+the catalog instead.
+
 ### Added
 
 - MOQ Transport draft-22 alongside draft-18: the player offers `moqt-22` and
@@ -527,7 +534,8 @@ Full [MOQ Transport draft-14][moqt-d14] compliance release.
 - Support for video and audio track selection
 - Real-time playback metrics (buffer levels, latency, playback rate)
 
-[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/Eyevinn/warp-player/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/Eyevinn/warp-player/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Eyevinn/warp-player/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Eyevinn/warp-player/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Eyevinn/warp-player/compare/v0.13.1...v0.14.0
