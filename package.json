@@ -35,11 +35,11 @@
     "@commitlint/config-conventional": "^21.0.2",
     "@eslint/js": "^10.0.1",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.72.1",
     "copy-webpack-plugin": "^14.0.0",
-    "eslint": "^10.13.0",
+    "eslint": "^10.14.0",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import-x": "^4.17.1",
     "globals": "^17.13.0",
@@ -54,7 +54,7 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1",
     "webpack": "^5.112.2",
-    "webpack-cli": "^7.2.2",
+    "webpack-cli": "^7.3.0",
     "webpack-dev-server": "^6.1.0"
   },
   "dependencies": {
