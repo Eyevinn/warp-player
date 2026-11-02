@@ -62,6 +62,6 @@
     "@svta/cml-608": "^1.1.1",
     "@svta/cml-iso-bmff": "^1.0.7",
     "codem-isoboxer": "^0.3.10",
-    "imsc": "^1.1.5"
+    "imsc": "^2.0.0"
   }
 }
