@@ -10,8 +10,9 @@
  * job, which is what lets a paint-model receiver keep a document's
  * presentation across no-change samples without parsing again.
  */
-import imscDoc from "imsc/src/main/js/doc.js";
-import imscIsd from "imsc/src/main/js/isd.js";
+import { fromParser } from "imsc/doc.js";
+import { createSAXParserFromDOMParser } from "imsc/dom_to_parser.js";
+import { generateISD } from "imsc/isd.js";
 
 /** A presentation state and the interval it is shown over, in media ms. */
 export interface TtmlInterval {
@@ -32,7 +33,7 @@ export function parseTtml(text: string): TtmlInterval[] {
       errors.push(msg);
     },
   };
-  const doc = imscDoc.fromXML(text, handler);
+  const doc = fromParser(text, handler, null, createSAXParserFromDOMParser());
   if (!doc) {
     throw new Error(
       `not a TTML document${errors.length ? `: ${errors[0]}` : ""}`,
@@ -41,7 +42,7 @@ export function parseTtml(text: string): TtmlInterval[] {
   const events = doc.getMediaTimeEvents();
   const intervals: TtmlInterval[] = [];
   for (let i = 0; i < events.length; i++) {
-    const isd = imscIsd.generateISD(doc, events[i], handler);
+    const isd = generateISD(doc, events[i], handler);
     if (!isdHasText(isd)) {
       continue;
     }

@@ -3,6 +3,10 @@
  * subtitle path uses. The modules are imported one by one: `main.js` also
  * loads `html.js`, which reads `window` when it loads and so cannot be
  * imported outside a browser.
+ *
+ * imscJS 2 ships declarations generated from its JSDoc, but they are stricter
+ * than the code: they make `renderHTML`'s optional arguments required and
+ * every error-handler method mandatory. These declare what the code accepts.
  */
 
 /** An imscJS error handler; returning true from a method turns it into a throw. */
@@ -34,41 +38,44 @@ interface ImscIsd {
   [key: string]: unknown;
 }
 
-declare module "imsc/src/main/js/doc.js" {
-  const imscDoc: {
-    fromXML(
-      xmlstring: string,
-      errorHandler?: ImscErrorHandler,
-      metadataHandler?: unknown,
-    ): ImscDocument | null;
-  };
-  export default imscDoc;
+/** The XML parser imscJS reads a document through (its `parser.js` contract). */
+interface ImscXmlParser {
+  write(xml: string): ImscXmlParser;
+  close(): ImscXmlParser;
 }
 
-declare module "imsc/src/main/js/isd.js" {
-  const imscIsd: {
-    generateISD(
-      tt: ImscDocument,
-      offset: number,
-      errorHandler?: ImscErrorHandler,
-    ): ImscIsd;
-  };
-  export default imscIsd;
+declare module "imsc/doc.js" {
+  export function fromParser(
+    xmlstring: string,
+    errorHandler: ImscErrorHandler | null,
+    metadataHandler: unknown,
+    parser: ImscXmlParser,
+  ): ImscDocument | null;
 }
 
-declare module "imsc/src/main/js/html.js" {
-  const imscHtml: {
-    render(
-      isd: ImscIsd,
-      element: HTMLElement,
-      imgResolver: ((src: string) => string) | null,
-      eheight: number,
-      ewidth: number,
-      displayForcedOnlyMode?: boolean,
-      errorHandler?: ImscErrorHandler | null,
-      previousISDState?: unknown,
-      enableRollUp?: boolean,
-    ): unknown;
-  };
-  export default imscHtml;
+declare module "imsc/dom_to_parser.js" {
+  /** A parser over the browser's DOMParser. */
+  export function createSAXParserFromDOMParser(): ImscXmlParser;
+}
+
+declare module "imsc/isd.js" {
+  export function generateISD(
+    tt: ImscDocument,
+    offset: number,
+    errorHandler?: ImscErrorHandler,
+  ): ImscIsd;
+}
+
+declare module "imsc/html.js" {
+  export function renderHTML(
+    isd: ImscIsd,
+    element: HTMLElement,
+    imgResolver: ((src: string) => string) | null,
+    eheight: number,
+    ewidth: number,
+    displayForcedOnlyMode?: boolean,
+    errorHandler?: ImscErrorHandler | null,
+    previousISDState?: unknown,
+    enableRollUp?: boolean,
+  ): unknown;
 }

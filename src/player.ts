@@ -3,7 +3,7 @@ import {
   isPlayreadySupported,
   isFairplaySupported,
 } from "@eyevinn/is-drm-supported";
-import imscHtml from "imsc/src/main/js/html.js";
+import { renderHTML } from "imsc/html.js";
 
 import { MediaBuffer, MediaSegmentBuffer, MediaTrackInfo } from "./buffer";
 import { extractCta608FromFragment } from "./buffer/cta608Fragment";
@@ -428,7 +428,7 @@ export class Player {
     this.subtitleChannel = this.overlay.attach<SubtitleCue>(
       "subtitles",
       new SubtitleRenderer((isd, element, height, width) => {
-        imscHtml.render(isd, element, null, height, width, false, null);
+        renderHTML(isd, element, null, height, width, false, null);
       }),
       "cues",
     );

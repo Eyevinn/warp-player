@@ -409,12 +409,14 @@ directly with WebCodecs:
   objects through the v0.3 decoder's effective values — and feeds cues to a
   "cues" channel of the overlay seam, rendered by
   `src/overlay/renderers/subtitles.ts`.
-- TTML goes through imscJS (npm `imsc`, as in dash.js): `fromXML` +
+- TTML goes through imscJS 2 (npm `imsc`, as in dash.js): `fromParser` +
   `generateISD` per document, `renderHTML` to paint. Import its modules one
-  by one (`imsc/src/main/js/doc.js`, `isd.js`, `html.js`): `html.js` reads
-  `window` when it loads, so only `player.ts` may import it, and the tests
-  run in node. sax, inside imscJS, asks for Node's `stream` module; the
-  webpack config resolves it to `src/shims/stream.ts`.
+  by one (`imsc/doc.js`, `isd.js`, `html.js`, `dom_to_parser.js`): `html.js`
+  reads `window` when it loads, so only `player.ts` may import it, and the
+  tests run in node. `src/types/imsc.d.ts` declares them, since imscJS's own
+  generated declarations are stricter than its code. imscJS reads the XML
+  through the browser's `DOMParser`; `jest.environment.mjs` lends the tests
+  jsdom's.
 - The paint-model formats `stpc` and `wvtc`
   (github.com/Eyevinn/paint-model-subtitles) are gated on the `stsd` sample
   entry, never the codecs string. `ttmn`/`vttn` are whole-sample 8-byte

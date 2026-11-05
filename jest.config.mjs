@@ -1,6 +1,6 @@
 export default {
   preset: "ts-jest",
-  testEnvironment: "node",
+  testEnvironment: "<rootDir>/jest.environment.mjs",
   moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json", "node"],
   extensionsToTreatAsEsm: [".ts"],
   transform: {

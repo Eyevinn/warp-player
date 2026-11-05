@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- imscJS 2 renders TTML subtitles: XML is now read with the browser's
+  `DOMParser`, and the bundle no longer carries sax.
+
 ## [0.17.0] - 2026-11-02
 
 The player speaks MOQ Transport draft-22 alongside draft-18. Pair this release
