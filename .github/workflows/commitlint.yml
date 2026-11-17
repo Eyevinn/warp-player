@@ -18,6 +18,11 @@ jobs:
           node-version: "22.x"
           cache: "npm"
 
+      # Dependabot writes lockfiles with npm 11, which omits unused optional
+      # peer entries that the npm 10 bundled with Node 22 then demands.
+      - name: Use npm 11
+        run: npm install -g npm@11
+
       - name: Install dependencies
         run: npm ci
 
